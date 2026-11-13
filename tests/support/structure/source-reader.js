@@ -111,6 +111,7 @@ export class SourceDeclarationHeader {
 }
 
 export class SourceDeclaration {
+  #returnBindings = null;
   constructor(name, tokens, prefix = []) {
     if (!name || !Array.isArray(tokens) || tokens.length === 0) throw new TypeError("invalid source declaration");
     this.name = name;
@@ -136,6 +137,11 @@ export class SourceDeclaration {
     if (!["const", "let"].includes(this.tokens[0].value) || this.tokens[2]?.value !== "=") return null;
     const initializer = unwrapCondition(this.tokens.slice(3, -1));
     return initializer.length === 1 && initializer[0].kind === "identifier" ? initializer[0].value : null;
+  }
+  get lexicalThis() { return topLevelArrow(this.tokens) >= 0; }
+  expressionBodyTokens() {
+    const arrow = topLevelArrow(this.tokens);
+    return arrow >= 0 && this.tokens[arrow + 1]?.value !== "{" ? this.tokens.slice(arrow + 1) : null;
   }
   bodyTokens() {
     const arrow = topLevelArrow(this.tokens);
@@ -187,15 +193,25 @@ export class SourceDeclaration {
     const body = this.bodyTokens();
     return body !== null && sourceContainsSequence(body, source);
   }
+  ownsBodyToken(token) {
+    const body = this.bodyTokens();
+    if (body === null || body.length === 0) return false;
+    if (this.#returnBindings === null) this.#returnBindings = readLexicalBindings(this.tokens, [], this.name);
+    return this.#returnBindings.ownsToken(body, token);
+  }
   returns() {
     const body = this.bodyTokens();
     if (body === null) return [];
+    if (this.#returnBindings === null) this.#returnBindings = readLexicalBindings(this.tokens, [], this.name);
+    const owned = new Set(this.#returnBindings.returnTokens(body));
     const result = [];
     for (let index = 0; index < body.length; index++) {
-      if (body[index].value !== "return") continue;
+      if (!owned.has(body[index]) || body[index].kind !== "identifier" || body[index].value !== "return"
+        || body[index - 1]?.value === "." || body[index + 1]?.value === ":") continue;
       let depth = 0;
       let end = index + 1;
       for (; end < body.length; end++) {
+        if (body[end].kind !== "punctuation") continue;
         if (["(", "[", "{"].includes(body[end].value)) depth++;
         if ([")", "]", "}"].includes(body[end].value)) depth--;
         if (depth === 0 && body[end].value === ";") break;
@@ -681,6 +697,12 @@ export class SourceMemberAccess {
   isCallTo(methods) { return this.called && this.name !== null && methods.has(this.name); }
 }
 
+/** The tokenizer retains the two punctuation tokens of optional access. */
+export function optionalAccessEnd(tokens, index) {
+  return tokens[index]?.value === "?" && tokens[index + 1]?.value === "."
+    && tokens[index + 1].offset === tokens[index].offset + 1 ? index + 2 : index;
+}
+
 /** Normalize ordinary/optional member and call syntax before applying any policy.
  * Computed members deliberately remain unresolved, even for literal keys.
  * Parentheses wrapping the receiver are transparent, unlike a surrounding call.
@@ -702,17 +724,33 @@ export function readMemberAccess(tokens, receiverIndex, receiverStart = receiver
     start--;
     cursor++;
   }
-  const skipOptional = (index) => tokens[index]?.value === "?" && tokens[index + 1]?.value === "."
-    ? index + 2 : index;
-  const optionalEnd = skipOptional(cursor);
+  const optionalEnd = optionalAccessEnd(tokens, cursor);
   if (optionalEnd !== cursor) cursor = optionalEnd;
   else if (tokens[cursor]?.value === ".") cursor++;
   else if (!["[", "("].includes(tokens[cursor]?.value)) return null;
   const token = tokens[cursor];
   if (!token) return new SourceMemberAccess(tokens[receiverIndex], null, false);
   if (token.kind !== "identifier") return new SourceMemberAccess(token, null, false);
-  const call = skipOptional(cursor + 1);
+  const call = optionalAccessEnd(tokens, cursor + 1);
   return new SourceMemberAccess(token, token.value, tokens[call]?.value === "(");
+}
+
+/** Read the lvalue independently: an arrow-valued RHS cannot hide its receiver. */
+export function readAssignmentTarget(tokens, index) {
+  if (tokens[index]?.kind !== "punctuation" || tokens[index].value !== "="
+    || ["=", "!", "<", ">"].includes(tokens[index - 1]?.value) || ["=", ">"].includes(tokens[index + 1]?.value)) return null;
+  let end = index;
+  while (["+", "-", "*", "/", "%", "&", "|", "^", "?"].includes(tokens[end - 1]?.value)) end--;
+  let start = end, depth = 0;
+  for (let cursor = end - 1; cursor >= 0; cursor--) {
+    const token = tokens[cursor];
+    if (depth === 0 && [";", "{", "}", "(", "[", "=", ",", ":", "?", "return", "throw", "yield"].includes(token.value)
+      && !(token.value === "}" && cursor === end - 1)) break;
+    if (token.kind === "punctuation" && [")", "]", "}"].includes(token.value)) depth++;
+    else if (token.kind === "punctuation" && ["(", "[", "{"].includes(token.value)) depth--;
+    start = cursor;
+  }
+  return start === end ? null : new SourceInitializer(tokens[start], start, tokens.slice(start, end));
 }
 
 /** Read one statically named object property or method, rejecting duplicate slots. */
@@ -750,6 +788,33 @@ export function readObjectProperty(tokens, name) {
     }
   }
   return matches.length === 1 ? matches[0] : null;
+}
+
+/** An object spread carries expressions; it is not computed member access. */
+export class SourceObjectSpread extends SourceInitializer {}
+
+/** Ordered statically named data/method slots; accessors and computed keys stay opaque. */
+export class SourceObjectMembers {
+  constructor(tokens) {
+    this.entries = [];
+    this.complete = true;
+    const open = tokens.findIndex((token) => token.kind === "punctuation" && token.value === "{");
+    if (open < 0) { this.complete = false; return; }
+    const names = new Set();
+    for (const part of readCommaSeparated(tokens, open + 1, matching(tokens, open))) {
+      if (part.length > 3 && part.slice(0, 3).every((token) => token.kind === "punctuation" && token.value === ".")) {
+        this.entries.push(new SourceObjectSpread(part[0], tokens.indexOf(part[0]), part.slice(3)));
+        continue;
+      }
+      const key = part[0]?.value === "async" && part[1]?.kind === "identifier" ? part[1] : part[0];
+      const name = key?.value;
+      const property = key && ["identifier", "string"].includes(key.kind) && name !== "__proto__"
+        ? readObjectProperty(tokens, name) : null;
+      if (property === null || names.has(name)) { this.complete = false; continue; }
+      names.add(name);
+      this.entries.push(property);
+    }
+  }
 }
 
 /** Read named calls without executing the composition module. */
@@ -825,12 +890,15 @@ export class SourceClassMembers {
     if (!(declaration instanceof SourceDeclaration) || declaration.token.value !== "class") throw new TypeError("class declaration required");
     this.instanceMembers = new Map();
     this.staticMembers = new Map();
+    this.memberNameTokens = [];
     this.instanceInitializers = [];
     this.moduleInitializers = [];
     this.unresolvedInstanceMembers = [];
     this.unresolvedStaticMembers = [];
     const tokens = declaration.tokens;
-    const open = tokens.findIndex((token) => token.kind === "punctuation" && token.value === "{");
+    const primary = SourceBodyPrimary.read(tokens);
+    if (primary === null) throw new SourceReadError(declaration.name, declaration.token.offset, "class body required");
+    const open = primary.bodyIndex;
     let index = open + 1;
     while (index < tokens.length - 1) {
       if (tokens[index].value === ";") { index++; continue; }
@@ -847,6 +915,7 @@ export class SourceClassMembers {
         && (tokens[index + 1]?.kind === "identifier" || ["*", "["].includes(tokens[index + 1]?.value))) index++;
       if (tokens[index]?.value === "*") index++;
       const start = index;
+      if (tokens[index]?.kind === "identifier") this.memberNameTokens.push(tokens[index]);
       let name = tokens[index]?.value;
       if (name === "[") {
         const end = matching(tokens, index, "[", "]");
@@ -951,15 +1020,19 @@ class SourceLexicalBinding {
   }
 }
 
+/** Runtime inputs are supplied by a caller or a caught exception, not an initializer. */
+export class SourceInputBinding extends SourceLexicalBinding {}
+
 class SourceLexicalScope {
   constructor(parent, start, end) {
     this.parent = parent;
     this.start = start;
     this.end = end;
     this.bindings = new Map();
+    this.callable = false;
   }
-  bind(name) {
-    if (!this.bindings.has(name)) this.bindings.set(name, new SourceLexicalBinding(name));
+  bind(name, Binding = SourceLexicalBinding) {
+    if (!this.bindings.has(name)) this.bindings.set(name, new Binding(name));
     return this.bindings.get(name);
   }
   resolve(name) { return this.bindings.get(name) ?? this.parent?.resolve(name) ?? null; }
@@ -980,20 +1053,47 @@ class SourceLexicalBindings {
   constructor(root, tokens, scopes, declarationBindings, references, globalReferences, exports) {
     this.root = root;
     this.tokens = tokens;
+    this.scopes = scopes;
+    this.returnOwners = new Map(tokens.flatMap((token, index) => token.value === "return" ? [[token, this.#returnScope(index)]] : []));
     this.declarations = declarationBindings;
     this.references = new Map();
     for (const index of references) this.references.set(tokens[index].offset, scopes[index].resolve(tokens[index].value));
     this.exports = exports;
     this.globalReferences = globalReferences;
     this.writes = null;
+    this.writesByBinding = null;
+  }
+  #returnScope(index) {
+    let scope = this.scopes[index];
+    while (scope?.parent && !scope.callable) scope = scope.parent;
+    return scope ?? this.root;
+  }
+  returnTokens(body) {
+    if (body.length === 0) return [];
+    const owner = this.#returnScope(this.tokens.indexOf(body[0]));
+    return body.filter(token => this.returnOwners.get(token) === owner);
+  }
+  ownsToken(body, token) {
+    const index = this.tokens.indexOf(token);
+    return index >= 0 && body.includes(token)
+      && this.#returnScope(index) === this.#returnScope(this.tokens.indexOf(body[0]));
   }
   moduleBinding(name) { return this.root.bindings.get(name) ?? null; }
   bindingAt(token) {
     return this.declarations.get(token.offset) ?? this.references.get(token.offset) ?? this.exports.get(token.offset) ?? null;
   }
-  bindingWrites(names) {
-    if (this.writes === null) this.writes = this.#readWrites();
-    const selected = new Set([...names].map((name) => this.moduleBinding(name)).filter(Boolean));
+  bindingWrites(selectors) {
+    if (this.writes === null) {
+      this.writes = this.#readWrites();
+      this.writesByBinding = new Map();
+      for (const write of this.writes) {
+        if (!this.writesByBinding.has(write.binding)) this.writesByBinding.set(write.binding, []);
+        this.writesByBinding.get(write.binding).push(write);
+      }
+    }
+    const selected = new Set([...selectors].map((selector) => selector instanceof SourceLexicalBinding
+      ? selector : this.moduleBinding(selector)).filter(Boolean));
+    if (selected.size === 1) return [...(this.writesByBinding.get([...selected][0]) ?? [])];
     return this.writes.filter((write) => selected.has(write.binding));
   }
   #readWrites() {
@@ -1132,6 +1232,7 @@ function readLexicalBindings(tokens, references, file) {
     for (const local of reference.bindings.keys()) root.bind(local);
   }
   const declarations = new Set();
+  const memberNames = new Set();
   const declarationBindings = new Map();
   const bindingIndexes = (start, end) => {
     const indexes = [];
@@ -1150,9 +1251,25 @@ function readLexicalBindings(tokens, references, file) {
     }
     return indexes;
   };
-  const bindParameters = (open, close, scope) => {
+  const parameterScopes = new Map();
+  const bindParameters = (open, close, scope, callable = true) => {
+    scope.callable = callable;
+    // Defaults can reference formal inputs but cannot see body declarations.
+    // Keep nested initializer scopes, linking them through this same header.
+    let parameters = parameterScopes.get(open);
+    if (!parameters) {
+      const parent = scope.parent;
+      parameters = new SourceLexicalScope(parent, open + 1, close);
+      parameterScopes.set(open, parameters);
+      for (let cursor = open + 1; cursor < close; cursor++) {
+        if (scopes[cursor] === parent) scopes[cursor] = parameters;
+        const nested = braceScopes.get(cursor);
+        if (nested?.parent === parent) nested.parent = parameters;
+      }
+      scope.parent = parameters;
+    }
     for (const j of bindingIndexes(open + 1, close)) {
-      declarationBindings.set(tokens[j].offset, scope.bind(tokens[j].value));
+      declarationBindings.set(tokens[j].offset, parameters.bind(tokens[j].value, SourceInputBinding));
       declarations.add(j);
     }
   };
@@ -1187,19 +1304,24 @@ function readLexicalBindings(tokens, references, file) {
         cursor++;
       }
     }
-    if (token.kind === "identifier" && token.value === "class" && tokens[i + 1]?.kind === "identifier") {
-      const name = tokens[i + 1].value;
-      declarations.add(i + 1);
-      let body = i + 2;
-      while (body < tokens.length && tokens[body].value !== "{" && tokens[body].value !== ";") body++;
-      const local = braceScopes.get(body)?.bind(name);
-      const binding = !["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value) ? scopes[i].bind(name) : local;
-      declarationBindings.set(tokens[i + 1].offset, binding);
+    if (token.kind === "identifier" && token.value === "class" && tokens[i - 1]?.value !== "."
+      && (tokens[i + 1]?.kind === "identifier" || tokens[i + 1]?.value === "{")) {
+      const primary = SourceBodyPrimary.read(tokens, i);
+      if (primary !== null) {
+        for (const member of new SourceClassMembers(primary.declaration).memberNameTokens) memberNames.add(member.offset);
+        if (tokens[i + 1]?.kind === "identifier" && tokens[i + 1].value !== "extends") {
+          const name = tokens[i + 1].value;
+          declarations.add(i + 1);
+          const local = braceScopes.get(primary.bodyIndex)?.bind(name);
+          const binding = !["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value) ? scopes[i].bind(name) : local;
+          declarationBindings.set(tokens[i + 1].offset, binding);
+        }
+      }
     }
     if (token.value === "catch" && tokens[i + 1]?.value === "(") {
       const close = matching(tokens, i + 1, "(", ")");
       const body = braceScopes.get(close + 1);
-      if (body) bindParameters(i + 1, close, body);
+      if (body) bindParameters(i + 1, close, body, false);
     }
     if (token.kind === "identifier" && token.value === "function") {
       let open = i + 1;
@@ -1273,7 +1395,7 @@ function readLexicalBindings(tokens, references, file) {
       }
     }
     if (i <= declarationEnd) continue;
-    if (token.kind !== "identifier" || declarations.has(i)) continue;
+    if (token.kind !== "identifier" || declarations.has(i) || memberNames.has(token.offset)) continue;
     const previous = tokens[i - 1]?.value;
     const spread = previous === "." && tokens[i - 2]?.value === "." && tokens[i - 3]?.value === ".";
     if (previous === "." && !spread || previous === "#") continue;
@@ -1284,7 +1406,7 @@ function readLexicalBindings(tokens, references, file) {
     referenceIndexes.push(i);
     // Preserve the existing global-read contract; module binding accounting
     // additionally recognizes the reference in a conditional's middle arm.
-    if (!beforeColon && !spread) globalReferences.add(token.offset);
+    if (!beforeColon) globalReferences.add(token.offset);
   }
   return new SourceLexicalBindings(root, tokens, scopes, declarationBindings, referenceIndexes, globalReferences, exportedBindings);
 }
@@ -1363,7 +1485,7 @@ export class SourceModule {
     const binding = typeof name === "string" ? this.moduleBinding(name) : name;
     return binding === null ? [] : this.tokens.filter((token) => this.#bindings().references.get(token.offset) === binding);
   }
-  bindingWrites(names) { return this.#bindings().bindingWrites(names); }
+  bindingWrites(selectors) { return this.#bindings().bindingWrites(selectors); }
 
   originUsage(origins, { moduleBindings = false, ...options } = {}) {
     return new SourceOriginUsage(new SourceDeclaration(this.file, this.tokens), origins,
@@ -1545,5 +1667,43 @@ export class SourceModule {
     }
     this.#readCommonJs();
     if (!lexicalOnly) this.globals = this.#bindings().unbound(watchedGlobals);
+  }
+}
+
+
+/** One function/class primary's lexical extent, separate from its postfix uses. */
+export class SourceBodyPrimary {
+  constructor(declaration, startIndex, endIndex, bodyIndex) {
+    if (!(declaration instanceof SourceDeclaration) || !Number.isInteger(startIndex) || endIndex < startIndex
+      || !Number.isInteger(bodyIndex) || bodyIndex <= startIndex || bodyIndex >= endIndex) {
+      throw new TypeError("source body primary required");
+    }
+    Object.assign(this, { declaration, startIndex, endIndex, bodyIndex });
+    Object.freeze(this);
+  }
+  static read(tokens, start = 0) {
+    const first = tokens[start];
+    if (first?.kind !== "identifier") return null;
+    const head = first.value === "async" && tokens[start + 1]?.value === "function" ? start + 1 : start;
+    const token = tokens[head];
+    if (!["function", "class"].includes(token.value)) return null;
+    let body = head + 1;
+    if (token.value === "function") {
+      if (tokens[body]?.value === "*") body++;
+      if (tokens[body]?.kind === "identifier") body++;
+      if (tokens[body]?.value !== "(") return null;
+      body = matching(tokens, body, "(", ")") + 1;
+    } else {
+      while (body < tokens.length && tokens[body].value !== "{") {
+        if (["(", "["].includes(tokens[body].value)) body = matching(tokens, body, tokens[body].value, tokens[body].value === "(" ? ")" : "]");
+        body++;
+      }
+    }
+    if (tokens[body]?.value !== "{") return null;
+    const end = matching(tokens, body);
+    const previous = tokens[head - 1];
+    const prefix = token.value === "function" && previous?.kind === "identifier" && previous.value === "async" ? [previous] : [];
+    const named = tokens[head + 1]?.kind === "identifier" ? tokens[head + 1].value : `<${token.value}:${token.offset}>`;
+    return new this(new SourceDeclaration(named, tokens.slice(head, end + 1), prefix), start, end, body);
   }
 }

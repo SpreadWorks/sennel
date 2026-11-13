@@ -169,11 +169,10 @@ test("direct child rejects corrupted delivered bytes and consumes no ambient run
     const child = new RuntimeChildExecution();
     const options = child.options({encoding:'utf8'});
     const configuration = JSON.parse(Buffer.from(options.env.NODE_OPTIONS.split('#').at(-1), 'base64url'));
-    const original = fs.readFileSync(configuration.file, 'utf8');
-    const payload = JSON.parse(original);
-    const entry = payload.resources.find(entry => entry[0] === 'src/runtime-probe.js');
-    entry[1] = (entry[1][0] === 'A' ? 'B' : 'A') + entry[1].slice(1);
-    fs.writeFileSync(configuration.file, JSON.stringify(payload));
+    const original = fs.readFileSync(configuration.file);
+    const changed = Buffer.from(original);
+    changed[Math.floor(changed.length / 2)] ^= 1;
+    fs.writeFileSync(configuration.file, changed);
     const rejected = await new Promise((resolve, reject) => {
       const process = child.spawnNode('--input-type=module', ['-e', 'console.log("semantic execution")'], options);
       let stdout = '', stderr = '';
@@ -213,6 +212,28 @@ test("an inherited child reuses its completed bootstrap and can deliver the same
   assert.equal(child.value, "captured");
   assert.equal(child.status, 0, child.error);
   assert.equal(child.grandchild, result.parent);
+});
+
+test("owned runtime child delivery preserves packages larger than the RPC decoded frame bound", (t) => {
+  const root = fixture(t);
+  fs.writeFileSync(path.join(root, "src/runtime-large-resource.txt"), Buffer.alloc(14 * 1024 * 1024, 120));
+  const result = run(root, `
+    import fs from 'node:fs';
+    import { spawnSync } from 'node:child_process';
+    import { RuntimeChildExecution, currentRuntimePackage } from './src/lib/runtime-package.js';
+    const child = new RuntimeChildExecution();
+    const options = child.options({encoding:'utf8'});
+    const configuration = JSON.parse(Buffer.from(options.env.NODE_OPTIONS.split('#').at(-1), 'base64url'));
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', "import {currentRuntimePackage} from './src/lib/runtime-package.js';console.log(currentRuntimePackage().revision)"], options);
+    child.close();
+    console.log(JSON.stringify({status:result.status, stdout:result.stdout.trim(), stderr:result.stderr,
+      revision:currentRuntimePackage().revision, decodedByteLength:configuration.decodedByteLength,
+      retained:fs.existsSync(configuration.file)}));
+  `);
+  assert.ok(result.decodedByteLength > 32 * 1024 * 1024);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, result.revision);
+  assert.equal(result.retained, false);
 });
 
 test("runtime child delivery refuses an external scratch root and preserves its sentinel", (t) => {

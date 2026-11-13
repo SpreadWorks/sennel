@@ -1,6 +1,35 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SourceModule, SourceDeclaration, readTokens, readParameters, readInvocations, readCommaSeparated, SourceReadError, SourceTemplateToken, sourceContainsSequence } from "../support/structure/source-reader.js";
+import { SourceModule, SourceDeclaration, readTokens, readParameters, readInvocations, readCommaSeparated, readAssignmentTarget, SourceReadError, SourceTemplateToken, sourceContainsSequence } from "../support/structure/source-reader.js";
+
+for (const source of ["({process} = input);", "let retained; ({retained, process} = input);", "({process = fallback} = input);"]) {
+  test("object assignment patterns retain the complete lvalue: " + source, () => {
+    const module = new SourceModule("object-target.mjs", source);
+    const index = module.tokens.findLastIndex(token => token.value === "=");
+    assert.deepEqual(readAssignmentTarget(module.tokens, index).tokens.map(token => token.value),
+      module.tokens.slice(module.tokens.findIndex(token => token.value === "{"), index).map(token => token.value));
+  });
+}
+
+for (const source of [
+  "const copy = { ...process.env };",
+  "const copy = [ ...process.argv ];",
+  "consume(...process.argv);",
+]) test("spread operands retain their unbound global reference: " + source, () => {
+  const module = new SourceModule("spread.mjs", source);
+  const token = module.tokens.find(entry => entry.value === "process");
+  assert.equal(module.bindingAt(token), null);
+  assert.equal(module.isUnbound("process", token), true);
+  assert.ok(module.globals.includes(token));
+});
+
+test("spread operands retain lexical shadowing and member names stay bound to their receiver", () => {
+  const module = new SourceModule("spread.mjs", "function copy(process) { return {...process.env}; } const value = {...foreign.process};");
+  const references = module.tokens.filter(token => token.value === "process");
+  assert.notEqual(module.bindingAt(references[0]), null);
+  assert.equal(module.bindingAt(references[1]), module.bindingAt(references[0]));
+  for (const token of references) assert.equal(module.isUnbound("process", token), false);
+});
 
 test("template chunks preserve cooked text, interpolation tokens, and exact nested locations", () => {
   const source = 'const path = `a\\n${prefix + `b${name}`}c`;';
@@ -95,4 +124,27 @@ test("truncated retained template spans fail rather than looping or splitting an
   const close = tokens.indexOf(tokens[0].endToken);
   assert.throws(() => readCommaSeparated(tokens.slice(0, close), 0, close), SourceReadError);
   assert.throws(() => readCommaSeparated(tokens, 0, close), SourceReadError);
+});
+
+for (const [source, target] of [
+  ["Hint.prototype.matches = () => true;", "Hint.prototype.matches"],
+  ["Hint['prototype'].matches = () => true;", "Hint['prototype'].matches"],
+  ["Namespace.Hint.prototype.matches = () => true;", "Namespace.Hint.prototype.matches"],
+  ["factory().prototype.matches = () => true;", "factory().prototype.matches"],
+  ["{ (Hint.prototype).matches = () => true; }", "(Hint.prototype).matches"],
+  ["enabled && (Hint.prototype.matches = () => true);", "Hint.prototype.matches"],
+  ["const result = Hint.prototype.matches = () => true;", "Hint.prototype.matches"],
+  ["Hint.prototype.matches ||= () => true;", "Hint.prototype.matches"],
+]) test(`assignment target grammar retains ${target}`, () => {
+  const tokens = readTokens(source);
+  const index = tokens.findLastIndex(token => token.value === "=");
+  assert.equal(readAssignmentTarget(tokens, index)?.matches(target), true);
+});
+
+test("comparisons and literal equals text are not assignment targets", () => {
+  for (const source of ["a === b", "a != b", "a <= b", "a >= b", '"="']) {
+    const tokens = readTokens(source);
+    const index = tokens.findIndex(token => token.value === "=");
+    assert.equal(readAssignmentTarget(tokens, index), null);
+  }
 });

@@ -15,6 +15,14 @@ export class ManagedStopOperation extends ManagedStopOperationValue {
     return new ManagedStopOperation({ requestId: crypto.randomUUID(), reason, graceMs, startedAt: now,
       deadline: now + Math.min(14000, graceMs * 2 + 2000), clockSessionId });
   }
+  get escalationAt() { return this.startedAt + this.graceMs; }
+  signalAt(now = managedMonotonicNow(), clockSessionId = MANAGED_CLOCK_SESSION_ID) {
+    this.remainingMs(now, clockSessionId);
+    return now < this.escalationAt ? "SIGTERM" : "SIGKILL";
+  }
+  nextSignalTransitionAt(now = managedMonotonicNow(), clockSessionId = MANAGED_CLOCK_SESSION_ID) {
+    return this.signalAt(now, clockSessionId) === "SIGTERM" ? this.escalationAt : Infinity;
+  }
   remainingMs(now = managedMonotonicNow(), clockSessionId = MANAGED_CLOCK_SESSION_ID) {
     return super.remainingMs(now, clockSessionId);
   }

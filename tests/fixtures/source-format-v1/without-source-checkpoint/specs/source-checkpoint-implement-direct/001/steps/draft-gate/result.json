@@ -1,0 +1,19 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fixture producer result"
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "fixture": "canonical-producer-result",
+          "nodeId": "draft-gate"
+        }
+      }
+    }
+  ]
+}

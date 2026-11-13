@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "producerScenario": "SourceCheckpointScenario.stageSealed(implement), followed by recoverPending and disk readback",
+  "node": "v22.22.0",
+  "platform": "linux",
+  "schemaRevision": 4,
+  "sourcePaths": {
+    "src/flow/lib/worker-artifact-handoff.js": "69b71df2ac801622fa26e81127c797d4441c3e60262813c8722d3b7bc156e413",
+    "src/flow/lib/repair-state-identity.js": "2ee490635a920048e5ad53a5356b3d70c4d1fb74b6abfc5c777362b70ca46b6b",
+    "src/lib/flow-schema-revision.js": "13e1b4af243d4028d3cd345e8ce4be7090129a272c696e029ba4fd3879c88ba7",
+    "tests/integration/flow/source-handoff-checkpoint.test.js": "ed98ff9bee5646c07e9d6153c3b1493468b86231201d15fa353147b46471dd67"
+  },
+  "checkpointDigest": "7ef7e481ad2b9335690665a3c43a3f8ff6723ffce8937278befb2fc723603792",
+  "settlementDigest": "11d30a94afaf14ed67b178e7f5611bdc0a5d125c9245a03ed7ba369c859dff87"
+}

@@ -1,0 +1,206 @@
+{
+  "contractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+  "sequence": 3,
+  "previousDigest": "a161e054225ac105bc6cf45d13f58c35e4c615ffeea59954cd127ac9a13597a9",
+  "eventId": "e0e0300751667d9551b8d380b5e778a0bda356e66487587dcd9140a8638f97b6",
+  "digest": "481c8bb6726e581007c4dca6895eba5f83a36cde1092d447366db1a6e6b5bd94",
+  "record": {
+    "scope": {
+      "stage": "artifact-worker",
+      "round": 0
+    },
+    "event": "reservation-reconciled",
+    "snapshot": {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "8d2f83960e4ab1cc3029e83296d3beb82b06be7d0f0c35c3d5ca9e95bac93ad2",
+        "collectionDigest": "b5fd12a59db863809f2a3e81db08bafb3d770a8d9af2a75dba629b69e6b6a79b",
+        "batches": [
+          {
+            "digest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+                "start": 0,
+                "end": 35,
+                "sourceLength": 35,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 1,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 1,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 1
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+          "batchCalls": 1,
+          "transportOrdinal": 1,
+          "claim": {
+            "responseCallIndex": 0,
+            "transportOrdinal": 1,
+            "attempt": 1,
+            "maxAttempts": 1,
+            "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+            "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "providerKey": "test",
+            "profileKey": "original",
+            "processIdentity": {
+              "scope": {
+                "stage": "artifact-worker",
+                "round": 0
+              },
+              "batchDigest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "test",
+              "profileKey": "original",
+              "logicalInvocationId": "original-logical-first",
+              "providerAttemptId": "original-provider-first"
+            }
+          },
+          "responses": [],
+          "transportFailures": [],
+          "completion": null,
+          "reservationContinuation": {
+            "authorizationId": "f6b64c3d63264554d27b578dec761ee41d7ccd06f836f2391032eef2c96f81eb",
+            "executionContractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+            "previousClaim": {
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "test",
+              "profileKey": "original",
+              "processIdentity": {
+                "scope": {
+                  "stage": "artifact-worker",
+                  "round": 0
+                },
+                "batchDigest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+                "responseCallIndex": 0,
+                "transportOrdinal": 1,
+                "attempt": 1,
+                "maxAttempts": 1,
+                "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+                "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "providerKey": "test",
+                "profileKey": "original",
+                "logicalInvocationId": "original-logical-first",
+                "providerAttemptId": "original-provider-first"
+              }
+            },
+            "physicalEvidence": {
+              "schemaVersion": 3,
+              "checkoutIdentity": {
+                "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r194-previous-ancestor-producer/package/.tmp/tests/r194-previous-ancestor-producer/26.12.1/artifact-worker-recovery-wOeKdY",
+                "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r194-previous-ancestor-producer/package/.tmp/tests/r194-previous-ancestor-producer/26.12.1/artifact-worker-recovery-wOeKdY",
+                "mainDevice": 2049,
+                "mainInode": 18504322,
+                "checkoutDevice": 2049,
+                "checkoutInode": 18504322
+              },
+              "binding": {
+                "runId": "artifact-worker-recovery-run",
+                "specId": "artifact-worker-recovery",
+                "nodeId": "draft-gate-repair",
+                "taskId": null,
+                "attemptId": "attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+                "attemptSequence": 2,
+                "executionContractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+                "executionGeneration": 0
+              },
+              "invocation": {
+                "providerAttemptId": "original-provider-first",
+                "logicalInvocationId": "original-logical-first"
+              },
+              "inventoryDigest": "ce1fa7d3274219d99b1fb6c87684a307206b63f9c3e47f8901a4b63bd50ebe46",
+              "ownerEpoch": 3,
+              "calls": [],
+              "nonExecution": {
+                "schemaVersion": 1,
+                "checkoutIdentity": {
+                  "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r194-previous-ancestor-producer/package/.tmp/tests/r194-previous-ancestor-producer/26.12.1/artifact-worker-recovery-wOeKdY",
+                  "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r194-previous-ancestor-producer/package/.tmp/tests/r194-previous-ancestor-producer/26.12.1/artifact-worker-recovery-wOeKdY",
+                  "mainDevice": 2049,
+                  "mainInode": 18504322,
+                  "checkoutDevice": 2049,
+                  "checkoutInode": 18504322
+                },
+                "binding": {
+                  "runId": "artifact-worker-recovery-run",
+                  "specId": "artifact-worker-recovery",
+                  "nodeId": "draft-gate-repair",
+                  "taskId": null,
+                  "attemptId": "attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+                  "attemptSequence": 2,
+                  "executionContractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+                  "executionGeneration": 0
+                },
+                "invocation": {
+                  "providerAttemptId": "original-provider-first",
+                  "logicalInvocationId": "original-logical-first"
+                },
+                "inventoryDigest": "ce1fa7d3274219d99b1fb6c87684a307206b63f9c3e47f8901a4b63bd50ebe46",
+                "ownerEpoch": 3,
+                "executions": [
+                  {
+                    "executionId": "f48c3966-4579-4172-8158-2000dfcd90a7",
+                    "ownerEpoch": 1,
+                    "authorityState": "closed"
+                  },
+                  {
+                    "executionId": "7e00861a-9c68-4a2c-aa22-7c6a97192124",
+                    "ownerEpoch": 2,
+                    "authorityState": "closed"
+                  },
+                  {
+                    "executionId": "1bd7f6b5-ea4b-410e-8677-96f4e3e19094",
+                    "ownerEpoch": 3,
+                    "authorityState": "exclusive"
+                  }
+                ],
+                "reservationBeforeSpawn": true
+              },
+              "id": "89e5db708608d9f9b8093ce836c9838087016a3e964f039ad455987cb2695236",
+              "digest": "89e5db708608d9f9b8093ce836c9838087016a3e964f039ad455987cb2695236"
+            },
+            "calls": [],
+            "consumedClaim": null,
+            "history": []
+          }
+        }
+      ]
+    }
+  }
+}

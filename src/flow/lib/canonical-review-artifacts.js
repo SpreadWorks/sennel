@@ -431,10 +431,10 @@ export function assertCanonicalReviewProcessStop({ processStop, executionContrac
 export class CanonicalDraftReviewObservation {
   #artifact;
 
-  constructor({ payload, state, route } = {}) {
+  constructor({ payload, state, route, processEvidence = null } = {}) {
     const source = jsonObject(payload, "canonical Draft Review payload");
     const { workerOutput, canonicalEvidence, canonicalTarget, processStop = null, ...body } = source;
-    this.processStop = processStop === null ? null : FlowProcessStopEvidence.fromStored(processStop);
+    this.processStop = processStop === null ? null : FlowProcessStopEvidence.fromStored(processStop, { processEvidence });
     this.processStop?.assertIdentity({ runId: state.runId, specId: state.specId, nodeId: route.reviewStepId });
     if (!isDeepStrictEqual(Object.keys(body).sort(), ["version", "phase", "sourceDraft", "sourceDraftRevision",
       "generatedAt", "verdict", "summary", "blockingFindings", "advisoryFindings", "repairTargets"].sort())) {
@@ -835,6 +835,13 @@ export class CanonicalReviewWorkUnit {
       bytes: Buffer.from(current.bytes),
     };
     if (current.descriptor !== null) this.#rememberInput(current.descriptor);
+    const processEvidence = current.review.processEvidence;
+    if (processEvidence !== null) {
+      const proof = { logicalKey: "process.stop.artifact.encoding", logicalPath: "review-process-evidence.json",
+        mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(processEvidence.toJSON())}\n`) };
+      if (write) this.workUnit.writeInput(proof);
+      else this.workUnit.declareInput(proof);
+    }
     this.specReviewSource = Object.freeze({
       revision: current.revision,
       descriptor: current.descriptor,
@@ -1234,7 +1241,7 @@ export class CanonicalReviewPromotion {
     const { sealed, artifact, evidence } = this.sealedArtifact();
     const gateEvidence = this.requirementTestReviewSource?.gateEvidence ?? null;
     if (gateEvidence !== null && (evidence === null
-      || !evidence.blockingFindings.some((finding) => finding.fingerprint === gateEvidence.finding.fingerprint))) {
+      || !evidence.disposition.blockingFindings.some((finding) => finding.fingerprint === gateEvidence.finding.fingerprint))) {
       throw new Error("Requirement test review reopening a Gate mismatch must retain its exact canonical Gate finding");
     }
     const logicalKey = logicalKeyFor({ phase: this.phase, taskId: this.taskId });

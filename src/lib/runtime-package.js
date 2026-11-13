@@ -61,11 +61,15 @@ export function currentRuntimeDelivery() {
   return JSON.parse(capturedRuntimeDeliveryJSON());
 }
 
-/** Only the runtime-snapshot RPC uses this immutable wire representation. */
-export function currentRuntimeWireDelivery() {
+function capturedRuntimeWireDelivery() {
   const runtime = currentRuntimePackage();
   childWireDelivery ??= new RuntimePackageWireDelivery(capturedRuntimeDeliveryJSON(), runtime.revision);
-  return childWireDelivery.toJSON();
+  return childWireDelivery;
+}
+
+/** RPC keeps its existing frame bound; owned files share the same compressed capture. */
+export function currentRuntimeWireDelivery() {
+  return capturedRuntimeWireDelivery().toJSON();
 }
 
 /** Only package-owned resources are pinned; target project inputs stay live. */
@@ -127,11 +131,12 @@ export class RuntimeChildExecution {
     if (nodeOptionsKey !== undefined) delete inheritedEnvironment[nodeOptionsKey];
     this.#revision = runtime.revision;
     if (storagePolicy !== null && !(storagePolicy instanceof ReadOnlyProcessRuntimeStorage)) throw new TypeError("Runtime child storage must be a minted read-only policy");
+    const delivery = capturedRuntimeWireDelivery();
     const temporaryPaths = storagePolicy ?? new TemporaryPaths(root);
     this.#directory = temporaryPaths.createOwnedDirectory(temporaryRoot ?? temporaryPaths.runtime("runtime-delivery"), "child-");
-    const file = path.join(this.#directory.path, "delivery.json");
+    const file = path.join(this.#directory.path, "delivery.json.gz");
     try {
-      this.#snapshot = new AtomicFile(file, { directoryAuthority: this.#directory.authority }).write(capturedRuntimeDeliveryJSON(), { exclusive: true }).snapshot;
+      this.#snapshot = new AtomicFile(file, { directoryAuthority: this.#directory.authority }).write(delivery.compressedBytes(), { exclusive: true }).snapshot;
     } catch (cause) {
       if (cause.cleanupFailed) throw cause;
       try { this.#directory.cleanup(); }
@@ -140,7 +145,7 @@ export class RuntimeChildExecution {
     }
     const bootstrap = resources.get("src/lib/runtime-child-bootstrap.js");
     const configuration = Buffer.from(JSON.stringify({ file, digest: this.#snapshot.digest,
-      byteLength: this.#snapshot.byteLength, revision: runtime.revision,
+      byteLength: this.#snapshot.byteLength, decodedByteLength: delivery.decodedByteLength, revision: runtime.revision,
       identity: { dev: String(this.#snapshot.identity.dev), ino: String(this.#snapshot.identity.ino) },
       directoryIdentity: { dev: String(this.#directory.authority.identity.dev), ino: String(this.#directory.authority.identity.ino) },
     })).toString("base64url");

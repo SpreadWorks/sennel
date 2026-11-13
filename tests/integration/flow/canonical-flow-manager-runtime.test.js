@@ -1,3 +1,4 @@
+import { RetainedTaskReviewWorkUnit } from "../../support/builders/task-review-scenario.js";
 import { offlineGitHubScript } from "../../support/fakes/github.js";
 import { completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
@@ -85,7 +86,6 @@ import RunFinalRegressionCommand from "../../../src/flow/lib/run-final-regressio
 import RunReportCommand from "../../../src/flow/lib/run-report.js";
 import RunReviewCommand, {
   TaskReviewCanonicalObservationBoundary,
-  taskReviewRecoveryIgnoredDirectories,
 } from "../../../src/flow/lib/run-review.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import FlowReviewCommand from "../../../src/flow/commands/review.js";
@@ -142,7 +142,6 @@ import {
   WorkerArtifactHandoffRequest,
   WorkerArtifactPublicationJournal,
   WorkerArtifactSemanticInputRevision,
-  SourceMutationBaseline,
   WORKER_ARTIFACT_HANDOFF_REQUEST_ENV,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
@@ -8502,48 +8501,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
         },
       });
       manager.retryCurrentAttempt({ specId });
-      const state = manager.load(specId);
+      manager.load(specId);
       assert.notEqual(manager.canonicalState(specId).attempt.id, previousAttempt.id);
 
-      const stale = new ReviewWorkUnit({
-        executionRoot: repository,
-        runId: state.runId,
-        specId,
-        phase: "impl",
-        taskId: "T-1",
-        nodeId: "T-1-review",
-        attemptId: previousAttempt.id,
-        target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
-        output: ReviewWorkUnitOutput.forReview({ phase: "impl", taskId: "T-1" }),
-      });
-      const taskSource = captureCurrentTaskSource({
-        root: repository,
-        flowManager: manager,
-        state,
-        taskId: "T-1",
-      });
-      const recoveryBaseline = SourceMutationBaseline.capture({
-        root: repository,
-        attempt: previousAttempt,
-        ignoredDirectories: taskReviewRecoveryIgnoredDirectories(repository, {
-          workUnit: stale,
-          flowManager: manager,
-          state,
-        }),
-      });
-      stale.writeInput({
-        logicalKey: "task.source",
-        logicalPath: "task-source.json",
-        bytes: Buffer.from(`${JSON.stringify(taskSource.toJSON(), null, 2)}\n`, "utf8"),
-        mediaType: "application/json",
-      });
-      stale.writeInput({
-        logicalKey: "task.source-effect-baseline",
-        logicalPath: "task-source-effect-baseline.json",
-        bytes: Buffer.from(`${JSON.stringify(recoveryBaseline.toJSON(), null, 2)}\n`, "utf8"),
-        mediaType: "application/json",
-      });
-      stale.finalize();
+      const stale = new RetainedTaskReviewWorkUnit({
+        root: repository, flowManager: manager, specId, taskId: "T-1", attempt: previousAttempt,
+      }).create();
       const ctx = {
         root: repository,
         mainRoot: repository,

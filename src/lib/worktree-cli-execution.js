@@ -44,8 +44,8 @@ class WorktreeCliInvocation {
   }
 }
 
-function gitWorktreeRoot(cwd) {
-  const result = runBootstrapGitProbe("repository-root", { cwd });
+function gitWorktreeRoot(cwd, repositoryRoot, discoveryCeiling) {
+  const result = runBootstrapGitProbe("repository-root", { cwd, repositoryRoot, discoveryCeiling });
   if (!result.ok) return null;
   const root = String(result.stdout || "").trim();
   if (root === "") return null;
@@ -75,8 +75,8 @@ function isFile(filePath) {
   }
 }
 
-function resolveWorktreeCli(executionPath, cwd) {
-  const worktreeRoot = gitWorktreeRoot(cwd);
+function resolveWorktreeCli(executionPath, cwd, repositoryRoot, discoveryCeiling) {
+  const worktreeRoot = gitWorktreeRoot(cwd, repositoryRoot, discoveryCeiling);
   if (worktreeRoot == null) return null;
 
   const localPackagePath = path.join(worktreeRoot, "package.json");
@@ -93,9 +93,9 @@ function resolveWorktreeCli(executionPath, cwd) {
 }
 
 /** Resolve only: selected source is captured and evaluated by the existing loader. */
-export function resolveWorktreeLocalCli({ executionPath, argv = [], cwd = process.cwd() } = {}) {
+export function resolveWorktreeLocalCli({ executionPath, argv = [], cwd = process.cwd(), repositoryRoot = null, discoveryCeiling = null } = {}) {
   new WorktreeCliInvocation(argv);
-  const target = resolveWorktreeCli(executionPath, cwd);
+  const target = resolveWorktreeCli(executionPath, cwd, repositoryRoot, discoveryCeiling);
   return target === null || target.usesLocalSource ? null : target;
 }
 

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "plan": {
+    "specRevision": {
+      "specId": "source-checkpoint-implement-direct",
+      "revision": 2,
+      "digest": "64c1845fd32a306527539054eabce2e6a48a1696acb737bf37ad132db349a0ab",
+      "byteLength": 914
+    },
+    "workItems": []
+  }
+}

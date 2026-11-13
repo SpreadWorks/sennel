@@ -1,5 +1,7 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
+import path from "node:path";
 import { RuntimeChildExecution } from "./runtime-package.js";
 import { immutableCommandEnvironment } from "./command-invocation.js";
 import { ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "./process-execution-values.js";
@@ -12,7 +14,7 @@ class SynchronousExecutionBridge {
   constructor(root, storage = null) {
     // This workspace owns only bootstrap payload delivery, never the worker's
     // managed runtime or its native lifetime. No storage grant is sent to workerData.
-    this.deliveryWorkspace = storage === null ? ReadOnlyInvocationWorkspace.create() : null;
+    this.deliveryWorkspace = storage === null ? ReadOnlyInvocationWorkspace.create({ outsideRoots: [root] }) : null;
     const storagePolicy = this.deliveryWorkspace === null
       ? ReadOnlyProcessRuntimeStorage.fromGrant(storage) : this.deliveryWorkspace.processRuntimeStorage();
     this.delivery = new RuntimeChildExecution({ root, storagePolicy });
@@ -141,22 +143,75 @@ export function runManagedControlSync(grant, operation, data) {
   return currentBridge(grant.mainRoot, grant.storage ?? null).request("control", { grant, operation, data }, 15000);
 }
 
+function synchronousCommandData(invocation, options) {
+  const { cwd: _cwd, env: _env, stdio: _stdio, signal: _signal, ...executionOptions } = options;
+  // Capture caller inheritance separately for each invocation before hopping.
+  const inheritedEnvironment = invocation.env === null ? immutableCommandEnvironment(process.env) : null;
+  return { invocation: invocation.toJSON(), inheritedEnvironment, options: executionOptions };
+}
+
+export class SynchronousCommandOutcome {
+  #value;
+  #failure;
+  #failed = false;
+  constructor(frame, bridge) {
+    if (frame === null || typeof frame !== "object" || Object.hasOwn(frame, "result") === Object.hasOwn(frame, "error")) {
+      throw new ProcessExecutionControlFailure("bridge-response-invalid", "Command group has an incomplete result frame");
+    }
+    try { this.#value = bridge.result(frame); }
+    catch (error) { this.#failed = true; this.#failure = error; }
+    Object.freeze(this);
+  }
+  unwrap() { if (this.#failed) throw this.#failure; return this.#value; }
+}
+
 export function runCommandInSynchronousBridge(invocation, options, grant = null) {
   const timeoutMs = (options.timeout ?? 300000) + 30000;
-  const { cwd: _cwd, env: _env, stdio: _stdio, signal: _signal, ...executionOptions } = options;
-  // The persistent worker's process.env belongs to its creation time. Keep
-  // inheritance as invocation provenance, but capture this call before hopping.
-  const inheritedEnvironment = invocation.env === null ? immutableCommandEnvironment(process.env) : null;
   return currentBridge(grant?.mainRoot ?? options.repositoryRoot ?? invocation.cwd ?? process.cwd(), grant?.storage ?? null)
-    .request("execute", { invocation: invocation.toJSON(), inheritedEnvironment, options: executionOptions, grant }, timeoutMs);
+    .request("execute", { ...synchronousCommandData(invocation, options), grant,
+      temporaryParent: grant === null ? path.resolve(os.tmpdir()) : null }, timeoutMs);
+}
+
+/** Independent invocations; every result or refusal is settled before return. */
+export function runCommandsInSynchronousBridge(executions, grant) {
+  if (grant === null || grant === undefined) throw new TypeError("Concurrent bridge commands require shared scoped authority");
+  const first = executions[0];
+  const bridge = currentBridge(grant?.mainRoot ?? first.options.repositoryRoot ?? first.invocation.cwd ?? process.cwd(), grant?.storage ?? null);
+  const commands = executions.map((execution) => synchronousCommandData(execution.invocation, execution.options));
+  // No member's original execution timeout is increased. Keep the original
+  // communication allowance after the maximum concurrent execution timeout.
+  const timeouts = executions.map((execution) => execution.options.timeout ?? 300000);
+  const timeoutMs = Math.max(...timeouts) + 30000;
+  const frames = bridge.request("execute-many", { commands, grant }, timeoutMs);
+  if (!Array.isArray(frames) || frames.length !== executions.length) {
+    throw new ProcessExecutionControlFailure("bridge-response-invalid", "Command group did not return every original invocation result");
+  }
+  return frames.map((frame) => new SynchronousCommandOutcome(frame, bridge));
+}
+
+export function acquireStandaloneExecutionGrantSync(root) {
+  return currentBridge(root).request("scope", { root, temporaryParent: path.resolve(os.tmpdir()) }, 30000);
+}
+
+export function releaseStandaloneExecutionGrantSync(root) {
+  return currentBridge(root).request("release-scope", { root }, 30000);
 }
 
 export function ensureStandaloneExecutionGrant(root = process.cwd()) {
-  return currentBridge(root).requestAsync("scope", { root }, 30000);
+  return currentBridge(root).requestAsync("scope", { root, temporaryParent: path.resolve(os.tmpdir()) }, 30000);
 }
 
 export function releaseStandaloneExecutionGrant(root) {
   return currentBridge(root).requestAsync("release-scope", { root }, 30000);
+}
+
+export function acquireReadOnlyExecutionGrantSync(options) {
+  return currentBridge(options.mainRoot).request("read-only-scope", { ...options, temporaryParent: path.resolve(os.tmpdir()) }, 30000);
+}
+
+export function releaseReadOnlyExecutionGrantSync(grant, { successful }) {
+  return currentBridge(grant.mainRoot, grant.storage ?? null)
+    .request("release-read-only-scope", { grant, successful }, 30000);
 }
 
 export function closeSynchronousExecutionBridge() {

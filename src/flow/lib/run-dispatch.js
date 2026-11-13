@@ -1471,6 +1471,7 @@ export default class RunDispatchCommand extends FlowCommand {
         canonicalRevision,
       );
     } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
       throw new FlowDispatchRepositoryFingerprintError({
         cause,
         nextAction,

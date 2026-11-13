@@ -11,20 +11,23 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { ProcessExecutionRuntime, ProcessExecutionCall, ProcessExecutionControlFailure, ProcessExecutionBindingSelection, ProcessExecutionReservationRevocation } from "../../../src/lib/process-execution-runtime.js";
-import { ProcessExecutorIdentity, ChildExitObservation, ProcessOutputState, ProcessExecutionInvocationDisclosure, executionValueDigest } from "../../../src/lib/process-execution-values.js";
-import { managedRequest, ManagedProcessMessage } from "../../../src/lib/managed-process-protocol.js";
+import { ProcessExecutorIdentity, ChildExitObservation, ProcessOutputState, ProcessExecutionControlObservation, ProcessExecutionInvocationDisclosure, executionValueDigest } from "../../../src/lib/process-execution-values.js";
+import { managedRequest, ManagedProcessMessage, ManagedRequestTransportCohort } from "../../../src/lib/managed-process-protocol.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { runCmd } from "../../../src/lib/process.js";
 import { currentRuntimePackage, RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
 import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 import { ManagedStopOperationStore } from "../../../src/lib/managed-stop-store.js";
 import { ManagedControlPolicy } from "../../../src/lib/managed-control-policy.js";
 import { ManagedAdmissionPublicationGate } from "../../support/infrastructure/managed-admission-publication-gate.js";
+import { ManagedRuntimeStartupReadGate } from "../../support/infrastructure/managed-runtime-startup-read-gate.js";
+import { waitForRuntimeHostClosure } from "../../support/infrastructure/runtime-host-closure.js";
 import { testTemporaryRoot } from "../../test-environment.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-function replyLossEnvironment(operation) {
+function replyLossEnvironment(operation, { failSocket = false } = {}) {
   const source = `import net from 'node:net';
     const end = net.Socket.prototype.end;
     let dropped = false;
@@ -32,7 +35,10 @@ function replyLossEnvironment(operation) {
       if (!dropped && typeof chunk === 'string' && chunk.startsWith('{')) {
         const response = JSON.parse(chunk);
         if (response.operation === ${JSON.stringify(operation)} && response.payload.ok === true) {
-          dropped = true; return end.call(this, undefined, ...args);
+          dropped = true;
+          ${failSocket
+            ? "return this.destroy(Object.assign(new Error('Lost TCP acknowledgement'), { code: 'ECONNRESET' }));"
+            : "return end.call(this, undefined, ...args);"}
         }
       }
       return end.call(this, chunk, ...args);
@@ -53,13 +59,14 @@ async function fixture(t, options = {}) {
 function executorIdentity() {
   return new ProcessExecutorIdentity({ executorId: randomUUID(), executorSession: randomUUID(), launchClaim: randomUUID() });
 }
-async function observeActualChild(runtime, call, executor) {
+async function observeActualChild(runtime, call, executor, { beforeExitPublication = null } = {}) {
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
   const completion = once(child, "exit");
   await once(child, "spawn");
   await runtime.observeCall(call, { type: "started", executor: executor.toJSON(), startedAt: new Date().toISOString() });
   const [code, signal] = await completion;
   const observation = new ChildExitObservation({ executor, kind: "exited", code, signal, observedAt: new Date().toISOString() });
+  await beforeExitPublication?.(observation);
   await runtime.observeCall(call, { type: "exit", observation: observation.toJSON() });
   return observation;
 }
@@ -119,7 +126,8 @@ test("a committed coordinator response reaches its TCP caller before the next qu
   assert.equal(secondResponse.value.record.executionId, runtime.executionId);
   assert.deepEqual(gate.observation(), { requestId: secondId, links: 2 });
   for (const requestId of [firstId, secondId]) {
-    const saved = JSON.parse(runtime.store.requestFile(runtime.executionId, requestId).read()).payload;
+    const envelope = JSON.parse(runtime.store.requestFile(runtime.executionId, requestId).read());
+    const saved = RuntimeStandaloneRequestDocument.fromEnvelope(runtime.executionId, requestId, envelope).requestRecord();
     assert.equal(saved.requestId, requestId);
     assert.equal(saved.operation, "authenticate");
     assert.equal(saved.response.ok, true);
@@ -143,7 +151,7 @@ test("real registered execution persists exact exit/output receipts, durable out
     });
     assert.equal(result.stdout, "literal output");
     const receipt = result.processExecutionStopReceipt;
-    assert.equal(receipt.schemaVersion, 3);
+    assert.equal(receipt.schemaVersion, 4);
     assert.equal(receipt.scope, "registered-executions");
     assert.equal(receipt.observation.kind, "exited");
     assert.equal(receipt.observation.code, 0);
@@ -178,9 +186,17 @@ test("real registered execution persists exact exit/output receipts, durable out
   const archive = new AtomicFile(archivePath, { directoryAuthority: runtime.store.archivesAuthority });
   const committed = archive.read();
   const changed = JSON.parse(committed);
-  changed.payload.execution.calls[0].invocation.launch.env.SENNEL_TEST_PRIVATE_VALUE = "replaced-private-input";
+  const archivedCall = changed.payload.execution.calls[0];
+  // A literal invocation remains the current alternative to its original
+  // reservation reference. Prove that representation before corrupting it.
+  archivedCall.invocation = JSON.parse(JSON.stringify(privateCall.invocation));
+  delete archivedCall.invocationRequest;
   changed.digest = executionValueDigest(changed.payload);
   try {
+    archive.write(JSON.stringify(changed));
+    assert.deepEqual(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0].calls[0].invocation, privateCall.invocation);
+    archivedCall.invocation.launch.env.SENNEL_TEST_PRIVATE_VALUE = "replaced-private-input";
+    changed.digest = executionValueDigest(changed.payload);
     archive.write(JSON.stringify(changed));
     assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), { code: "PROCESS_EXECUTION_REGISTRY_FAILED" });
   } finally { archive.write(committed); }
@@ -556,25 +572,10 @@ test("live coordinator closes after host loss only from complete retained child 
   const savedBefore = ProcessExecutionRuntime.inspect({ mainRoot: root });
   assert.equal(savedBefore.executions[0].status, "active");
   assert.deepEqual(savedBefore.executions[0].calls[0].receipt, published.receipt);
-  const authority = path.dirname(published.ownerLock);
-  let watcher;
-  let timer;
-  const closed = new Promise((resolve, reject) => {
-    const check = () => {
-      try {
-        const inventory = ProcessExecutionRuntime.inspect({ mainRoot: root });
-        if (inventory.slot === null && !fs.existsSync(published.ownerLock)) resolve(inventory);
-      } catch (cause) { reject(cause); }
-    };
-    watcher = fs.watch(authority, check);
-    timer = setTimeout(() => reject(new Error(`Complete receipt host-loss closure was not saved: ${stderr}`)), 10000);
-    check();
-  });
+  const closed = waitForRuntimeHostClosure({ mainRoot: root,
+    executionId: published.executionId, ownerLock: published.ownerLock });
   host.kill();
-  await terminal;
-  let savedAfter;
-  try { savedAfter = await closed; }
-  finally { watcher.close(); clearTimeout(timer); }
+  const [, savedAfter] = await Promise.all([terminal, closed]);
   assert.equal(savedAfter.executions[0].status, "closed");
   assert.equal(savedAfter.executions[0].closure.recovery, true);
   assert.deepEqual(savedAfter.executions[0].calls[0].receipt, published.receipt);
@@ -622,6 +623,46 @@ test("independent coordinator fences timeout admission without an executor poll 
   assert.deepEqual(receipt.toJSON().stopOperation, saved.stopOperation);
 });
 
+
+test("a failed TCP delivery preserves its committed response before any mailbox fallback request exists", async (t) => {
+  const { runtime, root } = await fixture(t, { environment: replyLossEnvironment("revoke-reservation", { failSocket: true }) });
+  const call = await runtime.reserveCall();
+  const grant = runtime.remoteGrant();
+  assert.notEqual(grant.endpoint.port, null);
+  const message = new ManagedProcessMessage(grant, "revoke-reservation", { grant,
+    data: { call: call.controlTarget(), reason: "unused-before-launch" } });
+  const socket = net.createConnection({ host: grant.endpoint.host, port: grant.endpoint.port });
+  const closed = new Promise(resolve => socket.once("close", resolve));
+  let received = "", socketError = null;
+  socket.on("error", cause => { socketError = cause; });
+  socket.on("data", bytes => { received += bytes; });
+  await once(socket, "connect");
+  socket.write(`${JSON.stringify(message)}\n`);
+  await closed;
+  // A subsequent ordinary request crosses the coordinator's event loop. No
+  // fallback has published the original request or re-entered its handler.
+  const events = await managedRequest(grant, "events", { grant, data: {} });
+  assert.equal(events.ok, true);
+  const responseFile = path.join(grant.endpoint.mailbox.responses, `${message.requestId}.json`);
+  const published = fs.existsSync(responseFile) ? fs.readFileSync(responseFile) : null;
+  const requestAbsent = !fs.existsSync(path.join(grant.endpoint.mailbox.requests, `${message.requestId}.json`));
+  await runtime.close();
+  assert.equal(runtime.control.child.exitCode, 0);
+  assert.equal(runtime.store.ownerLock.inspect(), null);
+  const historical = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions.find(e => e.executionId === runtime.executionId);
+  assert.equal(historical.status, "closed");
+  assert.equal(historical.calls[0].status, "revoked");
+  assert.equal(historical.calls[0].executor, null);
+  assert.equal(historical.requests.filter(r => r.requestId === message.requestId).length, 1);
+  assert.equal(received, "");
+  if (socketError !== null) assert.ok(socketError instanceof Error);
+  assert.equal(requestAbsent, true);
+  assert.notEqual(published, null, "Failed TCP delivery must retain the exact committed response before fallback");
+  const response = ManagedProcessMessage.from(JSON.parse(published));
+  assert.equal(response.respondsTo(message), true);
+  assert.deepEqual(response.payload.value, historical.calls[0].revocation);
+  assert.deepEqual(fs.readFileSync(responseFile), published);
+});
 
 test("lost terminating TCP reply replays from the authenticated mailbox after actual coordinator exit", { timeout: 45000 }, async (t) => {
   const root = createTmpDir("coordinator-terminating-reply-");
@@ -732,11 +773,12 @@ test("unclaimed revocation replays lost acknowledgement, refuses late launch and
 
 test("unacknowledged startup returns finite original failure and retains a live owned reader payload until its actual exit", { timeout: 80000 }, async (t) => {
   const root = createTmpDir("coordinator-startup-noack-");
-  const ready = path.join(root, "preload-ready"), terminated = path.join(root, "ignored-term");
   const original = RuntimeChildExecution.prototype.spawnNode;
   let child = null, delivery = null, file = null, before = null, successor = null, verified = false;
+  let gate = null;
   t.after(async () => {
     RuntimeChildExecution.prototype.spawnNode = original;
+    gate?.close();
     await successor?.close();
     if (child !== null && child.exitCode === null && child.signalCode === null) {
       child.ref(); const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
@@ -744,31 +786,31 @@ test("unacknowledged startup returns finite original failure and retains a live 
     if (delivery !== null) assert.equal(delivery.closeAfterExecution(), true);
     if (verified) removeTmpDir(root); else testTemporaryRoot().retainOnUnconfirmedExecution();
   });
+  gate = new ManagedRuntimeStartupReadGate(root);
   RuntimeChildExecution.prototype.spawnNode = function (...args) {
     delivery = this;
     const flag = this.environment.NODE_OPTIONS.split(/\s+/).find((value) => value.startsWith("--import=data:") && value.includes("#"));
     const configuration = JSON.parse(Buffer.from(flag.slice(flag.lastIndexOf("#") + 1), "base64url"));
     file = configuration.file; before = fs.readFileSync(file);
     child = original.apply(this, args);
+    gate.observe(child);
     return child;
   };
-  const preload = `import fs from 'node:fs';process.on('SIGTERM',()=>fs.appendFileSync(${JSON.stringify(terminated)},'ignored'));fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);await new Promise(()=>{});`;
   const started = performance.now();
   try {
-    await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root, environment: { ...process.env,
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript;base64,${Buffer.from(preload).toString("base64")}`.trim() } }),
+    await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root, environment: gate.coordinatorEnvironment() }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_ADMISSION_FAILED"
       && error.primaryCause.code === "PROCESS_EXECUTION_ADMISSION_FAILED" && error.processExecutionStopReceipt === undefined);
   } finally { RuntimeChildExecution.prototype.spawnNode = original; }
   const elapsed = performance.now() - started;
   assert.ok(elapsed >= 30000 && elapsed < 60000, "the existing startup and control windows must return a finite refusal");
-  assert.equal(fs.readFileSync(ready, "utf8"), "ready");
+  assert.equal(gate.readAttempt(), file);
   assert.equal(ProcessExecutionRuntime.inspect({ mainRoot: root }), null);
   // Windows Node terminates SIGTERM targets unconditionally; POSIX handlers
   // can retain the actual reader. Cleanup follows observed lifetime in both.
   if (process.platform !== "win32") {
     assert.equal(child.exitCode, null); assert.equal(child.signalCode, null);
-    assert.equal(fs.readFileSync(terminated, "utf8"), "ignored");
+    assert.deepEqual(gate.stopRequest(), { signal: "SIGTERM", accepted: true });
     assert.ok(elapsed >= 44000);
   }
   const readerAlive = child.exitCode === null && child.signalCode === null;
@@ -888,6 +930,46 @@ async function mutableRegistryFixture(t) {
   return { root, runtime, call, receipt, barrier, confirm };
 }
 
+test("publication preparation preserves bound control failure codes before any physical mutation", async (t) => {
+  const { root, runtime } = await fixture(t);
+  const call = await runtime.reserveCall();
+  let failure, revocation;
+  try {
+    failure = await runtime.recordCallControlFailure(call,
+      new ProcessExecutionControlFailure("endpoint-unavailable", "Control channel failed before launch"));
+    assert.equal(failure.executionId, runtime.executionId);
+    assert.equal(failure.callId, call.callId);
+    await runtime.store.exclusive(store => {
+      const before = store.file.readSnapshot();
+      assert.equal(store.transition.read(), null);
+      for (const identity of ["callId", "executionId"]) {
+        const invalid = store.read();
+        const execution = invalid.executions.find(entry => entry.executionId === runtime.executionId);
+        const savedCall = execution.calls.find(entry => entry.callId === call.callId);
+        assert.deepEqual(savedCall.controlFailure.toJSON(), failure.toJSON());
+        if (identity === "callId") savedCall.callId = randomUUID();
+        else execution.executionId = randomUUID();
+        assert.throws(() => store.save(invalid), {
+          name: "ProcessExecutionControlFailure", code: "PROCESS_EXECUTION_FAILURE_EVIDENCE_INVALID",
+        });
+        const after = store.file.readSnapshot();
+        assert.deepEqual(after.bytes, before.bytes);
+        assert.deepEqual(after.identity, before.identity);
+        assert.equal(store.transition.read(), null);
+      }
+    });
+  } finally {
+    revocation = await runtime.revokeCall(call);
+    await runtime.close();
+    assert.equal(runtime.control.child.exitCode, 0);
+    assert.equal(runtime.control.child.signalCode, null);
+  }
+  const closed = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions.find(entry => entry.executionId === runtime.executionId);
+  assert.equal(closed.status, "closed");
+  assert.deepEqual(closed.calls.find(entry => entry.callId === call.callId).controlFailure, failure.toJSON());
+  assert.deepEqual(closed.calls.find(entry => entry.callId === call.callId).revocation, revocation.toJSON());
+});
+
 test("unstored mutable registry changes and rejected publication preparation preserve exact receipts and finalization replay", { timeout: 60000 }, async (t) => {
   const { root, runtime, call, receipt, barrier, confirm } = await mutableRegistryFixture(t);
   const requestId = randomUUID();
@@ -982,4 +1064,159 @@ test("warmed mutating requests reject same-inode schema corruption and deleted r
   const historical = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions.find(entry => entry.executionId === runtime.executionId);
   assert.equal(historical.status, "closed");
   assert.deepEqual(historical.calls.find(entry => entry.callId === call.callId).receipt, receipt.toJSON());
+});
+
+
+for (const transport of ["tcp", "mailbox"]) {
+  test(`bounded ${transport} control observation releases admission, refuses changed bytes and wakes on actual exit publication`, { timeout: 45000 }, async t => {
+    const { root, runtime } = await fixture(t);
+    const call = await runtime.reserveCall();
+    const executor = executorIdentity();
+    await runtime.claimLaunch(call, { executor });
+    const observe = after => observeControlVia(runtime, call, executor, transport, after);
+    let pending, previous;
+    const observation = await observeActualChild(runtime, call, executor, { beforeExitPublication: async () => {
+      const first = await observe(null);
+      assert.equal(first.control.status, "running");
+      const started = performance.now();
+      previous = await observe(first);
+      assert.ok(performance.now() - started < new ManagedControlPolicy().budgetMs);
+      assert.equal(previous.publicationDigest, first.publicationDigest);
+      assert.deepEqual(previous.control, first.control);
+      let settled = false;
+      const refused = observe(previous); refused.then(() => { settled = true; }, () => { settled = true; });
+      await runtime.readCallControl(call, { executor });
+      assert.equal(settled, false, "the independent authenticated query must pass the released admission while the monitor waits");
+      const original = fs.readFileSync(runtime.store.file.filePath);
+      try {
+        await runtime.store.admission.runExclusiveAsync(() => fs.writeFileSync(runtime.store.file.filePath, "{"));
+        await assert.rejects(runtime.readCallControl(call, { executor }), { code: "PROCESS_EXECUTION_REGISTRY_FAILED" });
+        await assert.rejects(refused, { code: "PROCESS_EXECUTION_REGISTRY_FAILED" });
+        assert.equal(fs.readFileSync(runtime.store.file.filePath, "utf8"), "{");
+      } finally {
+        await runtime.store.admission.runExclusiveAsync(() => fs.writeFileSync(runtime.store.file.filePath, original));
+      }
+      previous = await observe(null);
+      pending = observe(previous);
+      settled = false; pending.then(() => { settled = true; }, () => { settled = true; });
+      assert.equal((await runtime.readCallControl(call, { executor })).status, "running");
+      assert.equal(settled, false);
+    } });
+    const current = await pending;
+    assert.equal(current.control.status, "exited");
+    assert.notEqual(current.publicationDigest, previous.publicationDigest);
+    const receipt = await finishObservedCall(runtime, call, { observation });
+    assert.equal(receipt.observation.kind, "exited");
+    assert.equal(receipt.observation.code, 0);
+    await runtime.close();
+    const stored = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions.find(entry => entry.executionId === runtime.executionId);
+    assert.deepEqual(stored.calls.find(entry => entry.callId === call.callId).receipt, receipt.toJSON());
+  });
+}
+
+
+function observeControlVia(runtime, call, executor, transport, after = null) {
+  if (transport === "tcp") return runtime.observeCallControl(call, { executor, after });
+  const grant = { ...runtime.remoteGrant(), transport };
+  return managedRequest(grant, "read-control", { grant,
+    data: { call: call.controlTarget(), executor: executor.toJSON(), afterControlObservation: after?.publicationDigest ?? null } })
+    .then(response => ProcessExecutionControlObservation.fromStored(runtime.decodeResponse(response)));
+}
+
+for (const transport of ["tcp", "mailbox"]) {
+  test(`${transport} control observation retains its cursor through unrelated reservations and revocations`, { timeout: 45000 }, async t => {
+    const { root, runtime } = await fixture(t);
+    const call = await runtime.reserveCall();
+    const executor = executorIdentity();
+    await runtime.claimLaunch(call, { executor });
+    const observe = () => observeControlVia(runtime, call, executor, transport);
+    let before, reserved, revoked;
+    const observation = await observeActualChild(runtime, call, executor, { beforeExitPublication: async () => {
+      before = await observe();
+      const unrelated = await runtime.reserveCall();
+      try { reserved = await observe(); }
+      finally { await runtime.revokeCall(unrelated); }
+      revoked = await observe();
+    } });
+    const receipt = await finishObservedCall(runtime, call, { observation });
+    assert.equal(before.control.status, "running");
+    assert.deepEqual(reserved.control, before.control);
+    assert.deepEqual(revoked.control, before.control);
+    assert.equal(reserved.publicationDigest, before.publicationDigest);
+    assert.equal(revoked.publicationDigest, before.publicationDigest);
+    assert.notEqual((await observe()).publicationDigest, before.publicationDigest);
+    await runtime.close();
+    const stored = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions.find(entry => entry.executionId === runtime.executionId);
+    assert.deepEqual(stored.calls.find(entry => entry.callId === call.callId).receipt, receipt.toJSON());
+  });
+}
+
+
+test("a committed replay in one TCP carrier arrives before a later serial acceptance is released", { timeout: 45000 }, async (t) => {
+  const root = createTmpDir("coordinator-carrier-response-");
+  const firstId = randomUUID(), secondId = randomUUID();
+  const gate = new ManagedAdmissionPublicationGate(root, firstId, secondId, { operation: "observe" });
+  const executions = [], jobs = [];
+  let runtime;
+  t.after(async () => {
+    gate.close();
+    await Promise.allSettled(jobs);
+    await Promise.allSettled(executions.map((entry) => entry.exited));
+    try { if (runtime && !runtime.closed) await runtime.close(); }
+    catch (cause) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw cause; }
+    removeTmpDir(root);
+  });
+  try {
+    runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, environment: gate.coordinatorEnvironment() });
+    const grant = runtime.remoteGrant();
+    assert.notEqual(grant.endpoint.port, null, "this case must exercise the actual TCP carrier");
+    for (let index = 0; index < 2; index++) {
+      const call = await runtime.reserveCall(), executor = executorIdentity();
+      await runtime.claimLaunch(call, { executor });
+      const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+      const exited = once(child, "exit");
+      const execution = { call, executor, exited };
+      executions.push(execution);
+      await once(child, "spawn");
+      execution.startedAt = new Date().toISOString();
+    }
+    const messages = executions.map(({ call, executor, startedAt }, index) => new ManagedProcessMessage(grant, "observe", { grant,
+      data: { call: call.controlTarget(), type: "started", executor: executor.toJSON(), startedAt },
+    }, { requestId: index === 0 ? firstId : secondId }));
+    const original = await managedRequest(grant, "observe", messages[0].payload, { requestId: firstId });
+    assert.equal(original.ok, true);
+    const policy = new ManagedControlPolicy(), transport = new ManagedRequestTransportCohort();
+    let firstSlotDeadline = null;
+    const first = managedRequest(grant, "observe", messages[0].payload, { requestId: firstId, policy,
+      request: transport.createRequest(), onWait(deadline) {
+        firstSlotDeadline ??= deadline - policy.budgetMs + policy.responseDeadlineMs(1);
+        if (performance.now() >= firstSlotDeadline && gate.blocked) gate.release();
+      } });
+    jobs.push(first); first.catch(() => {});
+    const second = managedRequest(grant, "observe", messages[1].payload, { requestId: secondId, policy,
+      request: transport.createRequest() });
+    jobs.push(second); second.catch(() => {});
+    let response, beforeRelease;
+    try { response = await first; beforeRelease = !gate.released; }
+    finally { gate.release(); }
+    const secondResponse = await second;
+    assert.deepEqual(response, original); assert.equal(secondResponse.ok, true);
+    assert.deepEqual(gate.sharedFrameRequestIds(), [firstId, secondId]);
+    assert.deepEqual(gate.observation(), { requestId: secondId, links: 2 });
+    const receipts = [];
+    for (const { call, executor, exited } of executions) {
+      const [code, signal] = await exited;
+      assert.equal(code, 0); assert.equal(signal, null);
+      const observation = new ChildExitObservation({ executor, kind: "exited", code, signal, observedAt: new Date().toISOString() });
+      await runtime.observeCall(call, { type: "exit", observation: observation.toJSON() });
+      receipts.push(await finishObservedCall(runtime, call, { observation }));
+    }
+    await runtime.close();
+    const historical = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root }).executions[0];
+    assert.equal(historical.status, "closed");
+    for (const [index, { call }] of executions.entries()) {
+      assert.deepEqual(historical.calls.find((entry) => entry.callId === call.callId).receipt, receipts[index].toJSON());
+    }
+    assert.equal(beforeRelease, true, "one TCP carrier must publish an already committed member before a later independent write blocks it");
+  } catch (cause) { testTemporaryRoot().retainOnUnconfirmedExecution(cause); throw cause; }
 });

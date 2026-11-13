@@ -13,6 +13,7 @@ import { ProcessExecutionControlFailure } from "../../lib/process-execution-valu
 import { FlowDispatchLease } from "./flow-dispatch-lease.js";
 import { FlowDispatchSession, FlowDispatchTarget } from "./dispatch-invocation.js";
 import { FlowProcessPhysicalAuthority } from "./flow-process-physical-authority.js";
+import { withRuntimeRecordMigrationPreview } from "../../lib/process-runtime-migration-guidance.js";
 
 const admissions = new AsyncLocalStorage();
 
@@ -68,16 +69,17 @@ function processOwnedFlow(ctx) {
       || process.env[PROCESS_EXECUTION_SCOPE_ENV] != null);
 }
 
-export function flowProcessRuntimeRequired({ ctx, envelopeType, envelopeKey, input }) {
-  if (envelopeType === "get" || envelopeKey === "resume" || input?.dryRun === true) return false;
+export function flowProcessRuntimeRequired({ ctx, envelopeType, envelopeKey, input, readOnly }) {
+  if ((envelopeType === "get" && readOnly !== false) || envelopeKey === "resume" || input?.dryRun === true) return false;
   return processOwnedFlow(ctx)
     || ctx?.flowManager != null && ctx?.root != null
       && ["init", "prepare-spec"].includes(envelopeKey);
 }
 
 async function assertRetainedPhysicalAuthority(ctx, authority, factory) {
-  ProcessExecutionRuntime.inspectRetainedClosedCheckout({ mainRoot: authority.mainRoot,
-    executionRoot: authority.sourceRoot, runId: authority.runId, specId: authority.specId });
+  withRuntimeRecordMigrationPreview({ mainRoot: authority.mainRoot, executionRoot: authority.sourceRoot }, () =>
+    ProcessExecutionRuntime.inspectRetainedClosedCheckout({ mainRoot: authority.mainRoot,
+      executionRoot: authority.sourceRoot, runId: authority.runId, specId: authority.specId }));
   const fresh = await factory(ctx);
   if (!authority.matches(fresh)) throw new ProcessExecutionControlFailure("binding-changed",
     "Cleanup physical authority changed after retained checkout proof");
@@ -134,8 +136,9 @@ class FlowProcessRuntimeAdmission {
       if (!authority.matches(current)) {
         throw new ProcessExecutionControlFailure("binding-changed", "Selected physical execution authority changed while stopping the source checkout");
       }
-      this.runtime = await ProcessExecutionRuntime.acquire({ mainRoot: authority.mainRoot,
-        executionRoot: authority.executionRoot, runId: authority.runId, specId: authority.specId, binding: null });
+      this.runtime = await withRuntimeRecordMigrationPreview({ mainRoot: authority.mainRoot, executionRoot: authority.executionRoot }, () =>
+        ProcessExecutionRuntime.acquire({ mainRoot: authority.mainRoot,
+          executionRoot: authority.executionRoot, runId: authority.runId, specId: authority.specId, binding: null }));
     }
     const binding = this.runtime.borrowed ? this.runtime.binding : captureFlowProcessExecutionBinding(ctx, bindingOptions);
     const callAdmission = new ProcessExecutionCallAdmission({ admit: ({ binding: requested }) => {
@@ -145,8 +148,9 @@ class FlowProcessRuntimeAdmission {
           "Managed execution requires its exact saved observation source");
       }
     } });
-    const writer = new FlowProcessEventWriter(ctx.flowManager);
-    if (binding.value?.flowVersionId != null) {
+    // Borrowed calls retain their binding; only the owner publishes process events.
+    const writer = this.runtime.borrowed ? null : new FlowProcessEventWriter(ctx.flowManager);
+    if (writer !== null && binding.value?.flowVersionId != null) {
       this.runtime.drainEventsSync(writer, new ProcessExecutionBindingSelection({
         runId: binding.value.runId, specId: binding.value.specId, flowVersionId: binding.value.flowVersionId,
       }));
@@ -224,13 +228,16 @@ export async function withFlowProcessRuntime(ctx, callback, {
     if (authority?.sourceRemoval) {
       await assertRetainedPhysicalAuthority(ctx, authority, physicalAuthority);
     }
-    runtime = current ?? await ProcessExecutionRuntime.acquire({
+    const runtimeRoots = {
       ...contextRoots,
       ...(authority === null ? {} : { executionRoot: authority.sourceRemoval ? authority.executionRoot : authority.sourceRoot }),
+    };
+    runtime = current ?? await withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.acquire({
+      ...runtimeRoots,
       runId: ctx.flowState?.runId ?? ctx.preparingFlowState?.runId ?? null,
       specId: ctx.specId ?? ctx.flowState?.specId ?? null,
       binding: null,
-    });
+    }));
     let admission = null;
     try {
       admission = new FlowProcessRuntimeAdmission({ runtime, contextRoots, dispatchLease, authority, ownsRuntime: !borrowed });
@@ -264,17 +271,16 @@ export function preparedFlowDispatchLease() { return admissions.getStore()?.disp
 /** Synchronous persistence/recovery APIs never implicitly kill a process. */
 export function assertFlowProcessRuntimeQuiescent(ctx) {
   if (!ctx?.root || !ctx?.flowManager) return;
-  ProcessExecutionRuntime.assertQuiescent({ ...roots(ctx),
+  const selected = roots(ctx);
+  withRuntimeRecordMigrationPreview(selected, () => ProcessExecutionRuntime.assertQuiescent({ ...selected,
     runId: ctx.flowState?.runId ?? ctx.preparingFlowState?.runId,
     specId: ctx.specId ?? ctx.flowState?.specId,
-  });
+  }));
 }
 
-/** Obtain runtime facts outside Services; consumers recheck the semantic binding. */
+/** Read the requested canonical namespace, independently of an ambient inspection scope. */
 export function readFlowProcessStops({ mainRoot, executionRoot }) {
-  const current = ProcessExecutionRuntime.current();
-  if (current !== null) return current.stopReceipts().map((receipt) => new FlowProcessStopEvidence(receipt));
-  const registry = ProcessExecutionRuntime.inspect({ mainRoot, executionRoot });
-  return (registry?.executions ?? []).filter((execution) => execution.status === "closed")
+  const registry = withRuntimeRecordMigrationPreview({ mainRoot, executionRoot }, () => ProcessExecutionRuntime.inspect({ mainRoot, executionRoot }));
+  return (registry?.executions ?? [])
     .flatMap((execution) => execution.calls.filter((call) => call.receipt !== null).map((call) => FlowProcessStopEvidence.fromStored(call.receipt)));
 }

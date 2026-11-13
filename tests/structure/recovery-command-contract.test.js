@@ -143,6 +143,16 @@ test("an unhandled ExecuteCommandDirective cannot fall through to the normal Ste
     "if (dispatcherOwnedRecovery != null) {", "R03");
 });
 
+for (const [name, before, after] of [
+  ["discarded continuation", "return continueDispatch();\n        }\n\n        let dispatcherOwnedCommand;", "continueDispatch();\n        }\n\n        let dispatcherOwnedCommand;"],
+  ["unrelated continuation", "return continueDispatch();\n        }\n\n        let dispatcherOwnedCommand;", "return unrelatedContinuation();\n        }\n\n        let dispatcherOwnedCommand;"],
+  ["continuation outside the runtime admission", "const continueDispatch = () => withFlowProcessRuntime(ctx, async () => {", "const continueDispatch = () => anotherRuntime(ctx, async () => {"],
+  ["shadowed continuation", "if (action.directive instanceof ExecuteCommandDirective) {\n          dispatchCount += 1;", "if (action.directive instanceof ExecuteCommandDirective) {\n          const continueDispatch = () => null;\n          dispatchCount += 1;"],
+  ["terminal copied into an unrelated branch", "return continueDispatch();\n        }\n\n        let dispatcherOwnedCommand;", "if (ctx.unrelated) { if (progressed.failure) return progressed.failure; stalledDispatches = progressed.stalledDispatches; current = progressed.current; return continueDispatch(); }\n        }\n\n        let dispatcherOwnedCommand;"],
+]) test(`recovery branch rejects ${name} before normal Step execution`, () => {
+  rejectedMutation("src/flow/lib/run-dispatch.js", before, after, "R03");
+});
+
 test("target binding cannot append its guards a second time", () => {
   const file = "src/flow/lib/flow-execution-command.js";
   const module = new SourceModule(file, original.get(file));

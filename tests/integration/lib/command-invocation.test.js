@@ -116,6 +116,16 @@ test('invocation rejects shell legacy, unknown codec fields, mutable overrides a
   assert.equal(policy.environment({ git_index_file: 'evil' }).GIT_INDEX_FILE, path.resolve('owned-index'));
 });
 
+test('restoration isolates system attributes without altering ordinary archive policy', () => {
+  const restore = new GitOwnedStagePolicy({ repositoryRoot: process.cwd(),
+    attributesFile: path.resolve('owned-attributes'), restore: true });
+  const archive = new GitOwnedStagePolicy({ repositoryRoot: process.cwd(), attributesFile: path.resolve('archive-attributes') });
+  assert.equal(restore.environment({ git_attr_nosystem: '0' }).GIT_ATTR_NOSYSTEM, '1');
+  assert.equal(restore.environment({}).GIT_CONFIG_NOSYSTEM, '1');
+  assert.equal(archive.environment({ GIT_ATTR_NOSYSTEM: '1' }).GIT_ATTR_NOSYSTEM, undefined);
+  assert.deepEqual(archive.arguments(['archive', 'HEAD']), ['-c', `core.attributesFile=${path.resolve('archive-attributes')}`, 'archive', 'HEAD']);
+});
+
 
 test('configured hook expands placeholders inside literal argv and returns captured child output', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sennel-hook-invocation-'));

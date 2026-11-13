@@ -1,0 +1,38 @@
+{
+  "schemaRevision": 1,
+  "activityId": "attempt-confirmed-c62757ba-47b1-4e01-8c73-06905199c8d0",
+  "owner": {
+    "nodeId": "spec-review",
+    "nodeKey": "plan.spec-review"
+  },
+  "observedAt": "2026-10-25T08:49:03.867Z",
+  "source": {
+    "path": "revisions/002/review.json",
+    "pointer": "",
+    "hash": "08191a0827cb47ad774f5e46a4fa011b44fb4a824842cafb88e95ab773103aa5"
+  },
+  "note": "Canonical Spec Review publication.",
+  "review": {
+    "audit": [
+      {
+        "acceptedOperations": [],
+        "appliedFindings": [],
+        "discardedOperations": [],
+        "inputDigest": "97474d768538fd5cc1b7c090c353398c850d0ccab6e9c3e95422180ede707777",
+        "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+        "outcome": "no-op",
+        "relation": "revision-scoped-canonical-review",
+        "stage": "spec-review"
+      }
+    ],
+    "findings": [],
+    "generation": 1,
+    "identity": {
+      "byteLength": 914,
+      "digest": "64c1845fd32a306527539054eabce2e6a48a1696acb737bf37ad132db349a0ab",
+      "revision": 2,
+      "specId": "source-checkpoint-implement-direct"
+    },
+    "version": 2
+  }
+}

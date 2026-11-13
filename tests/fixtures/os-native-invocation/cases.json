@@ -1,0 +1,56 @@
+[
+  {
+    "name": "actual native constructor and inherited processOptions prove same-instance literal argv launch",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });",
+    "expectation": "typed-launch",
+    "purpose": "Causal new-feature positive: real source API shape, not the toy PortableInvocation. No actual child is launched."
+  },
+  {
+    "name": "renamed import preserves the same actual native API authority",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation as Native } from './command-invocation.js';\nconst invocation = new Native({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });",
+    "expectation": "typed-launch",
+    "purpose": "Lexical import identity, not local class spelling, must own the proof."
+  },
+  {
+    "name": "plain object processOptions method cannot confer native authority",
+    "source": "import { spawn } from 'node:child_process'; const invocation = { executable: process.execPath, args: ['worker.js'], processOptions() { return {}; } };\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });",
+    "expectation": "unproven-launch",
+    "purpose": "Matching field/method names are not a validated invocation instance."
+  },
+  {
+    "name": "native-named foreign class cannot confer native authority",
+    "source": "import { spawn } from 'node:child_process'; class NativeExecutableInvocation { constructor(input) { Object.assign(this, input); } processOptions() { return {}; } }\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });",
+    "expectation": "unproven-launch",
+    "purpose": "A local class name is not a constructor/parent contract."
+  },
+  {
+    "name": "overridden foreign processOptions method cannot inherit native authority",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nclass Foreign extends NativeExecutableInvocation { processOptions() { return { shell: true }; } }\nconst invocation = new Foreign({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });",
+    "expectation": "unproven-launch",
+    "purpose": "A subtype may not replace the validated option producer."
+  },
+  {
+    "name": "options from a different native instance do not match the executable and argv instance",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nconst other = new NativeExecutableInvocation({ executable: process.execPath, args: ['other.js'], env: { EXAMPLE: 'different' } });\nspawn(invocation.executable, invocation.args, { ...other.processOptions(), shell: false });",
+    "expectation": "unproven-launch",
+    "purpose": "Executable, argv and option producer must share the same lexical validated instance."
+  },
+  {
+    "name": "foreign options spread stays unresolved even beside a real invocation",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...foreignOptions, shell: false });",
+    "expectation": "unproven-launch",
+    "purpose": "No blanket spread exception."
+  },
+  {
+    "name": "shell true remains a launch violation",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: true });",
+    "expectation": "shell-violation",
+    "purpose": "Known constructor does not authorize a shell override."
+  },
+  {
+    "name": "uid injection remains a platform authority violation",
+    "source": "import { spawn } from 'node:child_process'; import { NativeExecutableInvocation } from './command-invocation.js';\nconst invocation = new NativeExecutableInvocation({ executable: process.execPath, args: ['worker.js'], cwd: null, env: null, stdio: 'ignore' });\nspawn(invocation.executable, invocation.args, { ...invocation.processOptions(), uid: 123, shell: false });",
+    "expectation": "authority-violation",
+    "purpose": "Safe processOptions does not erase additional launch authority."
+  }
+]

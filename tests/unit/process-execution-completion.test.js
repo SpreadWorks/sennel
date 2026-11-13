@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic, ProcessExecutionCommunicationDiagnostic } from "../../src/lib/process-execution-values.js";
-import { completeManagedOperation, processExecutionPublicationFailure } from "../../src/lib/process-execution-completion.js";
+import { completeManagedOperation, completeManagedOperationSync, processExecutionPublicationFailure } from "../../src/lib/process-execution-completion.js";
 
 test("typed completion refusal remains visible after a generic operation failure", async () => {
   const primary = new Error("operation failed before completion");
@@ -11,6 +11,55 @@ test("typed completion refusal remains visible after a generic operation failure
     assert.equal(error.code, closure.code);
     assert.ok(error.cause instanceof AggregateError);
     assert.deepEqual(error.cause.errors, [primary, closure]);
+    return true;
+  });
+});
+
+test("synchronous operation returns its exact value after successful mandatory completion", () => {
+  const result = { value: "observed" }; const order = [];
+  assert.equal(completeManagedOperationSync(() => { order.push("body"); return result; }, (successful) => {
+    assert.equal(successful, true); order.push("completion");
+  }), result);
+  assert.deepEqual(order, ["body", "completion"]);
+});
+
+test("synchronous completion retains typed closure failure after the original body failure", () => {
+  const primary = new Error("original synchronous operation failure");
+  const closure = new ProcessExecutionControlFailure("stop-unconfirmed", "Actual closure is unconfirmed");
+  assert.throws(() => completeManagedOperationSync(() => { throw primary; }, (successful) => {
+    assert.equal(successful, false); throw closure;
+  }), (error) => {
+    assert.equal(error.code, closure.code);
+    assert.deepEqual(error.cause.errors, [primary, closure]);
+    return true;
+  });
+});
+
+test("synchronous thenable refusal still performs failed-operation completion", () => {
+  let completed = false;
+  assert.throws(() => completeManagedOperationSync(() => Promise.resolve("asynchronous"), (successful) => {
+    assert.equal(successful, false); completed = true;
+  }), TypeError);
+  assert.equal(completed, true);
+});
+
+test("synchronous completion accepts an ordinary data field named then", () => {
+  const result = { then: "stored data" };
+  let completed = false;
+  assert.equal(completeManagedOperationSync(() => result, successful => {
+    assert.equal(successful, true);
+    completed = true;
+  }), result);
+  assert.equal(completed, true);
+});
+
+test("asynchronous disposal is refused without masking the synchronous body failure", () => {
+  const primary = new Error("body failed first");
+  assert.throws(() => completeManagedOperationSync(() => { throw primary; }, () => Promise.resolve()), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.cause, primary);
+    assert.equal(error.errors[0], primary);
+    assert.ok(error.errors[1] instanceof TypeError);
     return true;
   });
 });

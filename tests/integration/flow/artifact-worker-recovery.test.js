@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime, ProcessExecutionBinding } from "../../../src/lib/process-execution-runtime.js";
 import { FlowProcessExecutionBinding } from "../../../src/flow/lib/flow-process-execution-binding.js";
@@ -312,6 +313,37 @@ async function consumeCoverage(t, value, expectedGoal) {
   assert.equal(value.reload().canonicalState(value.specId).nextAction().nodeId, "draft-gate",
     "the clean Coverage review skips empty triage and repair work through Definition");
 }
+
+
+test("a reloaded dispatch binding refuses an identical-byte index replacement without changing canonical authority", (t) => {
+  const value = conditionalFixture(t);
+  try {
+    const manager = value.reload();
+    const request = new WorkerArtifactHandoffCoordinator().storedArtifactExecutionRequest({
+      ctx: value.context(manager), state: manager.loadReadOnly(value.specId),
+      executionContract: value.request.executionContract,
+    });
+    const binding = request.dispatchRepositoryBinding;
+    assert.equal(binding.assertCurrent({ flowManager: manager, request }), binding.repositoryFingerprint);
+    const canonicalBefore = bytesUnder(request.canonicalDirectory);
+    const indexPath = path.join(value.root, ".git", "index");
+    const indexBytes = fs.readFileSync(indexPath);
+    const generation = FileIdentity.capture(fs.lstatSync(indexPath, { bigint: true }));
+    const replacement = path.join(value.root, ".git", "replacement-index");
+    fs.writeFileSync(replacement, indexBytes);
+    fs.renameSync(replacement, indexPath);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBytes);
+    assert.equal(FileIdentity.capture(fs.lstatSync(indexPath, { bigint: true })).equals(generation), false);
+
+    assert.throws(() => binding.assertCurrent({ flowManager: manager, request }),
+      (error) => error instanceof FlowExecutionContractRefusal && error.code === "FLOW_EXECUTION_CONTRACT_MISMATCH");
+    assert.deepEqual(bytesUnder(request.canonicalDirectory), canonicalBefore);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBytes);
+  } catch (error) {
+    if (testTemporaryRoot().retainOnUnconfirmedExecution(error)) retainedRecoveryRoots.add(value.root);
+    throw error;
+  }
+});
 
 for (const boundary of ["before-reservation", "before-permit"]) {
   test(`an original ${boundary} reservation resumes through the guarded command without a new generation or budget`, async (t) => {

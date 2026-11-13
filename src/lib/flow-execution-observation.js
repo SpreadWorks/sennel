@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ProcessExecutionCheckoutIdentity, executionValueDigest } from "./process-execution-values.js";
+import { ProcessCheckoutEvidenceEncoding } from "./process-checkout-evidence-encoding.js";
 
 function text(value, field) {
   if (typeof value !== "string" || !value.trim()) throw new TypeError(`${field} is required`);
@@ -89,14 +90,16 @@ export function executionProducerCoverage({ recorded = false, managedRuntime = f
 
 /** An immutable source registration. New checkouts append another registration. */
 export class FlowExecutionSourceManifest {
-  constructor({ schemaRevision = 1, id, flowVersionId, runId, specId, recordingStartedAt,
+  #checkoutEncoding;
+  constructor({ schemaRevision = 2, id, flowVersionId, runId, specId, recordingStartedAt,
     runtimeSourceId = null, checkoutIdentity = null, checkoutNamespace = null,
     retention = "permanent", producerCoverage, boundary }) {
-    if (schemaRevision !== 1 || retention !== "permanent") throw new TypeError("Execution source manifest format is invalid");
+    if (schemaRevision !== 2 || retention !== "permanent") throw new TypeError("Execution source manifest requires explicit evidence-format migration");
+    this.#checkoutEncoding = checkoutIdentity === null ? null : new ProcessCheckoutEvidenceEncoding(checkoutIdentity);
     Object.assign(this, { schemaRevision, id: text(id, "Execution source ID"), flowVersionId: text(flowVersionId, "flowVersionId"),
       runId: text(runId, "runId"), specId: text(specId, "specId"), recordingStartedAt: timestamp(recordingStartedAt),
       runtimeSourceId: runtimeSourceId === null ? null : text(runtimeSourceId, "Runtime source ID"),
-      checkoutIdentity: checkoutIdentity === null ? null : json(new ProcessExecutionCheckoutIdentity(checkoutIdentity).toJSON()),
+      checkoutIdentity: checkoutIdentity === null ? null : json(new ProcessExecutionCheckoutIdentity(this.#checkoutEncoding.decimals).toJSON()),
       checkoutNamespace: checkoutNamespace === null ? null : text(checkoutNamespace, "Checkout namespace"), retention });
     if ((runtimeSourceId === null) !== (checkoutIdentity === null) || (runtimeSourceId === null) !== (checkoutNamespace === null)) {
       throw new TypeError("Execution runtime source identity must be complete");
@@ -112,7 +115,8 @@ export class FlowExecutionSourceManifest {
       activityCount: integer(boundary?.activityCount, "Source Activity boundary") });
     Object.freeze(this);
   }
-  toJSON() { return { ...this, producerCoverage: this.producerCoverage.map((entry) => entry.toJSON()) }; }
+  toJSON() { return { ...this, checkoutIdentity: this.#checkoutEncoding?.toJSON() ?? null,
+    producerCoverage: this.producerCoverage.map((entry) => entry.toJSON()) }; }
   static fromJSON(value) { const manifest = new this(value); exact(value, manifest.toJSON(), "Execution source manifest"); return manifest; }
   assertVersion(expected) { assertVersion(this, expected); return this; }
   assertSameSource(expected) {
@@ -191,7 +195,7 @@ function observationDescriptors(catalog) {
     && descriptor.logicalKey !== "execution.response.adoption");
 }
 
-function parseObservationArtifact(descriptor, bytes) {
+export function parseFlowExecutionObservationArtifact(descriptor, bytes) {
   const value = JSON.parse(bytes.toString("utf8"));
   if (descriptor.logicalKey === "execution.source.manifest") {
     const manifest = FlowExecutionSourceManifest.fromJSON(value);
@@ -212,12 +216,12 @@ function captureObservationRecords(records, expectedBinding) {
 /** Pure parsing of already captured, catalog-verified bytes. No runtime or filesystem access. */
 export async function captureExecutionObservations({ catalog, readArtifact, expectedBinding = null }) {
   const records = [];
-  for (const descriptor of observationDescriptors(catalog)) records.push(parseObservationArtifact(descriptor, await readArtifact(descriptor)));
+  for (const descriptor of observationDescriptors(catalog)) records.push(parseFlowExecutionObservationArtifact(descriptor, await readArtifact(descriptor)));
   return captureObservationRecords(records, expectedBinding);
 }
 
 /** The same parser for an existing synchronous canonical transaction view. */
 export function captureExecutionObservationsFromView(view) {
   return captureObservationRecords(observationDescriptors(view.catalog).map((descriptor) =>
-    parseObservationArtifact(descriptor, view.readCatalogedArtifact(descriptor))), view.state);
+    parseFlowExecutionObservationArtifact(descriptor, view.readCatalogedArtifact(descriptor))), view.state);
 }

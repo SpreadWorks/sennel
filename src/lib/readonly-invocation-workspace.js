@@ -32,14 +32,15 @@ class WorkspaceExecution {
 export class ReadOnlyProcessRuntimeStorage {
   #workspace;
   #authority;
-  #workspaceAuthority;
   #value;
   #marker;
   constructor(factory, { workspace = null, authority, workspaceAuthority, value = null }) {
     if (factory !== FACTORY) throw new TypeError("runtime storage must be minted by a read-only workspace");
+    let ancestor = authority;
+    while (ancestor !== null && ancestor !== workspaceAuthority) ancestor = ancestor.parentAuthority;
+    if (ancestor === null) throw new TypeError("runtime storage must retain its minted workspace ancestry");
     this.#workspace = workspace;
     this.#authority = authority;
-    this.#workspaceAuthority = workspaceAuthority;
     this.#value = value ?? { schemaVersion: 1, kind: "readonly-invocation", workspaceRoot: workspace.path,
       workspaceGeneration: workspace.generation, directory: authority.directory, token: crypto.randomUUID(),
       workspaceIdentity: { dev: String(workspaceAuthority.identity.dev), ino: String(workspaceAuthority.identity.ino) },
@@ -81,10 +82,12 @@ export class ReadOnlyProcessRuntimeStorage {
   get directory() { return this.#authority.directory; }
   get authority() { this.assertStable(); return this.#authority; }
   assertStable() {
-    this.#workspace?.validate(this.#workspace.path);
-    this.#workspaceAuthority.assertStable(); this.#authority.assertStable();
+    this.#workspace?.assertOpen();
+    // The checked marker reader freshly validates this retained authority and
+    // its complete ancestry before and after reading. The constructor binds
+    // that chain to the exact minted workspace root.
     const current = captureRegularFile(this.#marker.filePath, { label: "read-only runtime storage authority", maxBytes: 64 * 1024,
-      requireSingleLink: true, directoryAuthority: this.#authority, expectedIdentity: this.#marker.identity });
+      requireSingleLink: true, directoryAuthority: this.#authority, allowMissingDirectory: true, expectedIdentity: this.#marker.identity });
     if (current.digest !== this.#marker.digest) throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage authority bytes changed");
   }
   runtime(purpose) {
@@ -123,10 +126,19 @@ export class ReadOnlyInvocationWorkspace {
     this.#generation = crypto.randomUUID();
   }
 
-  static create() {
-    // os.tmpdir uses TMPDIR on POSIX and TEMP/TMP on Windows. Canonicalize the
-    // selected Node parent before minting ownership; its spelling grants none.
-    const parent = new RealDirectoryAuthority(fs.realpathSync(os.tmpdir()));
+  static create({ temporaryParent = os.tmpdir(), outsideRoots = [] } = {}) {
+    // Node selects the native temporary parent. Read-only control storage must
+    // also stay outside the checkouts whose contents the invocation observes.
+    // Ascending selects a parent; only the factory below mints ownership.
+    let selected = fs.realpathSync(temporaryParent);
+    const excluded = outsideRoots.map((root) => fs.realpathSync(root));
+    while (excluded.some((root) => isNativePathWithin(root, selected))) {
+      const ancestor = path.dirname(selected);
+      if (ancestor === selected) throw new ReadOnlyInvocationWorkspaceError("NO_EXTERNAL_PARENT",
+        "Read-only temporary storage has no parent outside the selected checkouts");
+      selected = ancestor;
+    }
+    const parent = new RealDirectoryAuthority(selected);
     parent.assertStable();
     const owned = OwnedTemporaryDirectory.create(parent, "sennel-inspect-");
     return new ReadOnlyInvocationWorkspace(FACTORY, owned, parent);
@@ -152,7 +164,7 @@ export class ReadOnlyInvocationWorkspace {
   }
 
   #validatePath(target) {
-    this.#assertOpen();
+    this.assertOpen();
     const resolved = path.resolve(this.path, target);
     if (!isNativePathWithin(this.path, resolved)) {
       throw new ReadOnlyInvocationWorkspaceError("OUTSIDE_ROOT", "workspace path leaves its owned directory");
@@ -230,7 +242,7 @@ export class ReadOnlyInvocationWorkspace {
   }
 
   processRuntimeStorage() {
-    this.#assertOpen();
+    this.assertOpen();
     if (this.#processRuntimeStorage === null) {
       const directory = this.ensureDirectory(path.join(this.control(), "process-runtime"));
       this.#processRuntimeStorage = new ReadOnlyProcessRuntimeStorage(FACTORY, { workspace: this,
@@ -241,7 +253,7 @@ export class ReadOnlyInvocationWorkspace {
   }
 
   beginExecution() {
-    this.#assertOpen();
+    this.assertOpen();
     const execution = new WorkspaceExecution(FACTORY, this.generation);
     // Persist the pending marker before exposing its resource-tracking token.
     // This token does not grant execution authority.
@@ -284,7 +296,7 @@ export class ReadOnlyInvocationWorkspace {
   }
 
   #executionPath(execution) { return path.join(this.control(), `execution-${execution.id}.json`); }
-  #assertOpen() {
+  assertOpen() {
     if (this.#complete || this.#removed) throw new ReadOnlyInvocationWorkspaceError("CLOSED", "workspace generation is closed");
   }
   #assertGeneration(generation) {
@@ -292,7 +304,7 @@ export class ReadOnlyInvocationWorkspace {
   }
   #assertConfirmation({ generation, resourcesReleased, normalExit } = {}) {
     this.#assertGeneration(generation);
-    this.#assertOpen();
+    this.assertOpen();
     if (resourcesReleased !== true || normalExit !== true) {
       throw new ReadOnlyInvocationWorkspaceError("UNCONFIRMED", "resource release and normal exit require explicit confirmation");
     }

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "sourceRevision": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "producer": "FlowManager.beginNextAction; registered ProcessExecutionRuntime; prepareExecutionObservationSession/append; runtime.close; reconstructed manager.readExecutionObservations",
+  "node": "v22.22.0",
+  "platform": "linux",
+  "sourceId": "04309f5bfb84895b26743161cc4185eb13c849499c05f2d5674351d78b36d196",
+  "sourcePaths": {
+    "src/lib/flow-execution-observation.js": "5909426f12b973a7c9716fdea4c1d3f5e401086c2cb4864589a610dfd1f3b6fb",
+    "src/flow/lib/flow-execution-observation-store.js": "833ce479c690ca3f431a8ad1ecba5606b2353de8c6a7dcb6a231d1b9d9d629f4"
+  },
+  "sourceFlowHash": "1ff7014312c5b603f8c3553185cd387950a1f1d100274ec4c2fb8812601e040f"
+}

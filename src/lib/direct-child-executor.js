@@ -4,7 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { CommandInvocation, CommandLaunchDescriptor, normalizeCommandInvocation } from "./command-invocation.js";
-import { PROCESS_EXECUTION_SCOPE_ENV } from "./process-execution-runtime.js";
+import { PROCESS_EXECUTION_SCOPE_ENV, ProcessExecutionClaimedLaunch } from "./process-execution-runtime.js";
 import { resolveExecutableInvocation } from "./executable-resolution.js";
 import { ManagedOutputSpool } from "./managed-process-output.js";
 import { ChildExitObservation, ProcessExecutorIdentity, ProcessOutputState,
@@ -34,9 +34,13 @@ export class DirectChildExecutionResult {
 
 /** One actual ChildProcess stays in the caller's process and sandbox. */
 export class DirectChildExecutor {
-  constructor(runtime, call) {
+  #claimedLaunch;
+  static #identity() { return new ProcessExecutorIdentity({ executorId: randomUUID(), executorSession, launchClaim: randomUUID() }); }
+  constructor(runtime, call, claimedLaunch = null) {
+    if (claimedLaunch !== null && !(claimedLaunch instanceof ProcessExecutionClaimedLaunch)) throw new TypeError("Executor requires its typed claimed reservation");
+    this.#claimedLaunch = claimedLaunch;
     this.runtime = runtime; this.call = call;
-    this.identity = new ProcessExecutorIdentity({ executorId: randomUUID(), executorSession, launchClaim: randomUUID() });
+    this.identity = claimedLaunch?.executor ?? DirectChildExecutor.#identity();
     this.child = null;
     this.spawned = false;
     this.observation = null;
@@ -91,7 +95,8 @@ export class DirectChildExecutor {
     let call = null, executor = null, completion = null;
     try {
       return await runtime.withDeferredEventPublication(async () => {
-        call = await runtime.reserveCall({ binding: options.processExecutionBinding ?? runtime.binding,
+        const claimedLaunch = await runtime.reserveClaimedCall({ executor: DirectChildExecutor.#identity(),
+          binding: options.processExecutionBinding ?? runtime.binding,
           kind: options.kind ?? "command", commandId: options.commandId ?? null,
           providerAttemptId: options.providerAttemptId ?? null, logicalInvocationId: options.logicalInvocationId ?? null,
           providerAttemptContext: options.providerAttemptContext ?? null, observationBinding: options.observationBinding ?? null,
@@ -99,8 +104,9 @@ export class DirectChildExecutor {
           command: new ProcessExecutionCommandDescriptor(invocation.executable, invocation.args,
             { cwd: invocation.cwd ?? undefined, executionRoot: runtime.executionRoot }),
           actualCommand: invocation.toJSON(), launch: launch.toJSON(), timeoutMs, graceMs: options.graceMs });
+        call = claimedLaunch.call;
         if (executions.has(call.callId)) return executions.get(call.callId);
-        executor = new DirectChildExecutor(runtime, call);
+        executor = new DirectChildExecutor(runtime, call, claimedLaunch);
         const result = executor.run(launch, { ...options, stdinContent, exitDrainMs, maxBuffer: maximum });
         executions.set(call.callId, result);
         try { completion = await result; return completion; }
@@ -150,7 +156,8 @@ export class DirectChildExecutor {
     this.events.catch((error) => { this.controlFailure ??= error; });
   }
   async run(launch, options) {
-    await this.runtime.claimLaunch(this.call, { executor: this.identity });
+    if (this.#claimedLaunch === null) await this.runtime.claimLaunch(this.call, { executor: this.identity });
+    else this.runtime.enter(() => this.#claimedLaunch.consume(this.runtime, this.call, this.identity));
     const maximum = options.maxBuffer ?? 8 * 1024 * 1024;
     const stdout = new ManagedOutputSpool(this.call, "stdout", maximum);
     const stderr = new ManagedOutputSpool(this.call, "stderr", maximum);
@@ -294,11 +301,12 @@ export class DirectChildExecutor {
         observeTimeout(diagnostic);
         stop("timeout").catch((error) => { this.controlFailure ??= error; });
       });
+      let controlObservation = null;
       while (!done) {
         await Promise.race([exit, delay(10)]);
         if (done) break;
-        const control = await this.runtime.readCallControl(this.call, { executor: this.identity });
-        interpretControl(control);
+        controlObservation = await this.runtime.observeCallControl(this.call, { executor: this.identity, after: controlObservation });
+        interpretControl(controlObservation.control);
       }
       await this.events;
       const cutoffAt = new Date().toISOString();

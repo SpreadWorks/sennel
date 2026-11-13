@@ -28,13 +28,21 @@ if (publicCommandEntrypoint.accepts(process.argv.slice(2))) {
 }
 
 async function dispatchOrdinaryCli() {
+  const { coreCommandRegistry } = await import("./lib/command-registry.js");
+  const { CliInvocationPolicy } = await import("./lib/cli-invocation-policy.js");
+  const policy = new CliInvocationPolicy(coreCommandRegistry, process.argv.slice(2));
+  if (policy.migration) {
+    // The migration captures its source before configuration, logging or process
+    // admission can create the canonical target. Its domain transaction owns
+    // repository exclusion; pure planning needs no coordinator or workspace.
+    await policy.definition.entrypoint.execute(process.argv.slice(3));
+    return;
+  }
   const { EXIT_ERROR } = await import("./lib/constants.js");
   const { initContainer } = await import("./lib/container.js");
   const { FinalizeCleanupRoute } = await import("./lib/finalize-cleanup-paths.js");
   const { flowCliFailure } = await import("./lib/flow-cli-failure.js");
 
-  const { coreCommandRegistry } = await import("./lib/command-registry.js");
-  const { CliInvocationPolicy } = await import("./lib/cli-invocation-policy.js");
   const { withManagedProcessScope, withReadOnlyManagedProcessScope } = await import("./lib/managed-process.js");
   const { repoRoot, getMainRepoPath, isInsideWorktree } = await import("./lib/cli.js");
 
@@ -170,7 +178,6 @@ async function dispatchOrdinaryCli() {
     return process.exitCode ?? 0;
   }
 
-  const policy = new CliInvocationPolicy(coreCommandRegistry, process.argv.slice(2));
   if (policy.readOnly) {
     const executionRoot = repoRoot();
     const mainRoot = isInsideWorktree(executionRoot) ? getMainRepoPath(executionRoot) : executionRoot;

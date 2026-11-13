@@ -118,6 +118,8 @@ export function resolveMigrationSpecRoot(root) {
 
 export { LEGACY_MANAGED_DIRECTORY_NAMES };
 
+const MIGRATION_JOURNAL_REVISIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
+
 /** One literal spec, or the existing project-wide migration selection. */
 export class MigrationSpecSelection {
   constructor(specId = null) {
@@ -152,14 +154,14 @@ export class MigrationSpecSelection {
 
   journalFileName(specRoot, revision = 1) {
     if (this.specId === null) throw new Error("migration journal identity requires one spec");
-    if (![1, 2, 3, 4].includes(revision)) throw new Error("migration journal revision is invalid");
+    if (!MIGRATION_JOURNAL_REVISIONS.includes(revision)) throw new Error("migration journal revision is invalid");
     const suffix = revision === 1 ? "" : `\0${revision === 2 ? "revision-root" : `revision-root-${revision}`}`;
     return `${createHash("sha256").update(`${specRoot.relativePath}\0${this.specId}${suffix}`).digest("hex")}.json`;
   }
 
   recoveryEntries(specRoot, journalDirectory) {
     const entries = fs.readdirSync(journalDirectory, { withFileTypes: true });
-    const names = this.specId === null ? null : new Set([1, 2, 3, 4].map((revision) => this.journalFileName(specRoot, revision)));
+    const names = this.specId === null ? null : new Set(MIGRATION_JOURNAL_REVISIONS.map((revision) => this.journalFileName(specRoot, revision)));
     return entries.filter((entry) => names === null || names.has(entry.name))
       .sort(compareEntryNames);
   }

@@ -11,12 +11,12 @@ let snapshot;
 let inheritedBootstrapUrl = null;
 
 export function initialize({ entryPath, argv, cwd, isCli, port, delivery = null, expectedRevision = null, bootstrapUrl = null,
-  capturedEntryPath = null, includeDelivery = false }) {
+  capturedEntryPath = null, includeDelivery = false, repositoryRoot = null, discoveryCeiling = null }) {
   try {
     inheritedBootstrapUrl = bootstrapUrl;
     let selected = null;
     if (delivery === null && isCli && !(argv[0] === "flow" && argv[1] === "query")) {
-      selected = resolveWorktreeLocalCli({ executionPath: entryPath, argv, cwd });
+      selected = resolveWorktreeLocalCli({ executionPath: entryPath, argv, cwd, repositoryRoot, discoveryCeiling });
       if (selected !== null && !worktreeCliSourceAvailable(selected)) {
         port.postMessage({ exitCode: 1, diagnostic: worktreeCliFailure(selected, argv), failed: true });
         return;

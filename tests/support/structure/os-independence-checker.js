@@ -1,5 +1,5 @@
 import { SourceGraph, StructureDiagnostic } from "./source-graph.js";
-import { OsIndependenceRules } from "./os-independence-rules.js";
+import { OsIndependenceRules, reportOsInspectionFailure } from "./os-independence-rules.js";
 import { supportedPlatforms } from "./os-command-policy.js";
 
 export class OsIndependenceDiagnostic extends StructureDiagnostic {}
@@ -59,7 +59,7 @@ export class OsIndependenceChecker {
       } catch (error) { this.diagnose("OS00", file, reference.token, trace, error.message, "incomplete"); }
     }
     try { this.rules.inspect(module); this.report.coverage.inspected++; }
-    catch (error) { this.diagnose("OS00", file, error, trace, `source inspection incomplete: ${error.message}`, "incomplete"); }
+    catch (error) { reportOsInspectionFailure((...args) => this.diagnose(...args), module, error, trace, "source inspection incomplete"); }
   }
   check() {
     if (this.scope.files.length === 0) this.diagnose("OS00", "<scope>", null, [], "source scope is empty", "incomplete");

@@ -1,0 +1,21 @@
+{
+  "id": "ace25cababc0a2da92b23f4c7d27ec7464156b9ad5fe291a4891b551dd171327",
+  "contract": {
+    "runId": "previous-physical-accounting",
+    "specId": "001-physical-accounting",
+    "stepId": "draft-refine",
+    "nodeId": "draft-refine",
+    "taskId": null,
+    "attemptId": "attempt-draft-refine-d7304491-0cf4-4e61-8ffd-47b42aecaf75",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+    "promptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "schemaDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "budgetOwner": "a74ee006951a965bc4e4fd2734db8be1771565f30beb99837498d548205915e8",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": []
+  }
+}

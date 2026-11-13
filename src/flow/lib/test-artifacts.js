@@ -7,8 +7,9 @@ import crypto from "crypto";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { globToRegex } from "../../lib/glob.js";
-import { listChangedFilesDetailed, runGitToFile } from "../../lib/git-helpers.js";
+import { listChangedFilesDetailed, runGitToFile, withGitOutputCleanup } from "../../lib/git-helpers.js";
 import { runGit } from "../../lib/git-command-execution.js";
+import { withReadOnlyManagedProcessScopeSync } from "../../lib/managed-process.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
@@ -839,7 +840,7 @@ export function finalRegressionWorktreeFingerprint(root, options = {}) {
     ? [`:(exclude,top,literal)${scratchRelative.split(path.sep).join("/")}`]
     : [];
   const pathspec = ["--", ".", ...pathspecExcludes, ...scratchExcludes];
-  try {
+  return withGitOutputCleanup(() => {
     const output = (name, args) => {
       const outputPath = path.join(directory, name);
       const result = runGitToFile(args, { cwd: root, outputPath, log: false });
@@ -871,9 +872,7 @@ export function finalRegressionWorktreeFingerprint(root, options = {}) {
       forEachFingerprintFileChunk(absolutePath, (chunk) => hash.update(chunk));
     }
     return hash.digest("hex");
-  } finally {
-    workspace.cleanup();
-  }
+  }, () => workspace.cleanup());
 }
 
 // The three values must always describe the same repository instant.
@@ -889,14 +888,18 @@ export class FinalRegressionRepositoryBinding {
   }
 
   static capture(root, options = {}) {
-    const head = runGit(["rev-parse", "HEAD"], { cwd: root });
-    assertOk(head, "final-regression HEAD read failed");
-    const tree = runGit(["write-tree"], { cwd: root });
-    assertOk(tree, "final-regression tree capture failed");
-    return new FinalRegressionRepositoryBinding({
-      headSha: head.stdout.trim(),
-      treeSha: tree.stdout.trim(),
-      worktreeSha256: finalRegressionWorktreeFingerprint(root, options),
+    // Reuse a current scope, or keep standalone control records outside the
+    // checkout whose complete contents form this binding's own input.
+    return withReadOnlyManagedProcessScopeSync({ mainRoot: root, executionRoot: root }, () => {
+      const head = runGit(["rev-parse", "HEAD"], { cwd: root });
+      assertOk(head, "final-regression HEAD read failed");
+      const tree = runGit(["write-tree"], { cwd: root });
+      assertOk(tree, "final-regression tree capture failed");
+      return new FinalRegressionRepositoryBinding({
+        headSha: head.stdout.trim(),
+        treeSha: tree.stdout.trim(),
+        worktreeSha256: finalRegressionWorktreeFingerprint(root, options),
+      });
     });
   }
 

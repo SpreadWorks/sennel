@@ -10,22 +10,24 @@ import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { RuntimeRegistryPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 
-// Compatibility: these same public outcomes must hold before and after reuse
-// of a decoded registry whose freshly captured physical image is identical.
+// Revision9 retains exact prepared target/source generations until commit.
+// A fault after AtomicFile readback is still inside that publication, so even
+// equal bytes from a foreign generation cannot complete its existing plan.
+// Committed-reader generation reuse is covered separately after normal close.
 for (const [mutation, expectedCode] of [
-  ["malformed-registry", "PROCESS_EXECUTION_REGISTRY_FAILED"],
-  ["changed-registry", "PROCESS_EXECUTION_RECORD_CORRUPT"],
-  ["replaced-registry", null],
+  ["malformed-registry", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
+  ["changed-registry", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
+  ["replaced-registry", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
   ["changed-anchor", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
-  ["changed-archive", "PROCESS_EXECUTION_REGISTRY_FAILED"],
-  ["unexpected-call-directory", "PROCESS_EXECUTION_RECORD_MISSING"],
+  ["changed-archive", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
+  ["unexpected-call-directory", "PROCESS_EXECUTION_AUTHORITY_MISMATCH"],
+  ["replaced-owner", "PROCESS_EXECUTION_OWNERSHIP_CHANGED"],
 ]) {
-  test(`fresh runtime readback after atomic publication handles ${mutation}`, { timeout: 60000 }, async (t) => {
+  test(`prepared revision9 publication refuses ${mutation} before accepting its result`, { timeout: 60000 }, async (t) => {
     const root = createTmpDir(`runtime-publication-${mutation}-`);
-    let predecessor, runtime, completed = false;
+    let predecessor, runtime;
     t.after(async () => {
       try {
-        if (completed) await runtime.close();
       } finally {
         for (const owned of [runtime, predecessor]) {
           const child = owned?.control.child;
@@ -47,6 +49,7 @@ for (const [mutation, expectedCode] of [
     const fault = new RuntimeRegistryPublicationFailure(root, { boundary: "after-readback", mutation, archivePath });
     runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, environment: fault.environment });
     assert.equal(fs.existsSync(fault.witness), false, "startup must not trigger the receipt-bound fault");
+    if (mutation === "replaced-owner") fs.writeFileSync(fault.ownerLockPathFile, JSON.stringify(runtime.store.ownerLock.lockPath));
     if (archivePath !== null) {
       const archive = JSON.parse(fs.readFileSync(archivePath, "utf8"));
       assert.equal(archive.payload.execution.executionId, predecessor.executionId);
@@ -56,9 +59,7 @@ for (const [mutation, expectedCode] of [
     const execute = () => executeManagedProcess(process.execPath, ["-e",
       `require('node:fs').appendFileSync(${JSON.stringify(effect)},'effect\\n');process.stdout.write(${JSON.stringify(stdout)})`],
     { runtime, timeoutMs: 10000, onStdout(bytes) { observedOutput.push(Buffer.from(bytes)); } });
-    let result;
-    if (expectedCode === null) { result = await execute(); completed = true; }
-    else await assert.rejects(execute(), error => error instanceof ProcessExecutionControlFailure
+    await assert.rejects(execute(), error => error instanceof ProcessExecutionControlFailure
       && error.code === expectedCode && error.processExecutionStopReceipt === undefined);
 
     const witness = JSON.parse(fs.readFileSync(fault.witness, "utf8"));
@@ -84,6 +85,11 @@ for (const [mutation, expectedCode] of [
       const changed = JSON.parse(fs.readFileSync(archivePath, "utf8"));
       assert.equal(changed.payload.unexpectedReadbackField, true);
       assert.equal(changed.digest, executionValueDigest(changed.payload));
+    } else if (mutation === "replaced-owner") {
+      assert.equal(witness.mutationPath, runtime.store.ownerLock.lockPath);
+      assert.equal(witness.ownerGenerationChanged, true);
+      assert.equal(witness.ownerBytesPreserved, true);
+      assert.deepEqual(fs.readFileSync(witness.mutationPath), fs.readFileSync(`${witness.mutationPath}.fixture-original`));
     } else if (mutation === "unexpected-call-directory") {
       assert.equal(path.dirname(witness.mutationPath), runtime.store.callsAuthority.directory);
       assert.equal(fs.lstatSync(witness.mutationPath).isDirectory(), true);
@@ -98,16 +104,6 @@ for (const [mutation, expectedCode] of [
     assert.equal(physical.receipt.callId, witness.callId);
     assert.equal(physical.receipt.output.stdoutBytes, Buffer.byteLength(stdout));
     assert.equal(fs.readFileSync(path.join(runtime.store.callsAuthority.directory, witness.callId, "stdout.bin"), "utf8"), stdout);
-    if (expectedCode === null) {
-      assert.equal(result.code, 0); assert.equal(result.stdout, stdout);
-      assert.ok(result.processExecutionStopReceipt instanceof ProcessExecutionStopReceipt);
-      assert.equal(result.processExecutionStopReceipt.callId, witness.callId);
-      await runtime.close();
-      const closed = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions.find(e => e.executionId === runtime.executionId);
-      assert.equal(closed.status, "closed");
-      assert.deepEqual(closed.calls[0].receipt, result.processExecutionStopReceipt.toJSON());
-      assert.equal(fs.existsSync(runtime.store.transition.filePath), false);
-    } else {
       assert.equal(fs.existsSync(runtime.store.transition.filePath), true);
       assert.equal(fs.existsSync(runtime.store.ownerLock.lockPath), true);
       assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
@@ -115,6 +111,5 @@ for (const [mutation, expectedCode] of [
       await assert.rejects(runtime.close(), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
       assert.equal(runtime.closed, false);
       assert.equal(fs.readFileSync(effect, "utf8"), "effect\n", "refusal must not repeat the physical child effect");
-    }
   });
 }

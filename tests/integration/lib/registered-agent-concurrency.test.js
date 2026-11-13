@@ -39,12 +39,17 @@ function mailboxDiagnostics(runtime) {
     const request = JSON.parse(fs.readFileSync(requestPath));
     const responsePath = path.join(mailbox.responses, name);
     const response = fs.statSync(responsePath, { throwIfNoEntry: false });
-    const error = response !== undefined && response.size < 64 * 1024
-      ? JSON.parse(fs.readFileSync(responsePath)).payload?.error : null;
+    const document = response !== undefined && response.size < 64 * 1024
+      ? JSON.parse(fs.readFileSync(responsePath)) : null;
+    const error = document?.payload?.error;
+    const launch = request.operation === "reserve-and-claim" && document?.payload?.ok === true
+      ? document.payload.value : null;
     return { requestId: request.requestId, operation: request.operation,
       callId: request.payload.data?.call?.callId ?? request.callId,
       requestPublishedAt: fs.statSync(requestPath).mtime.toISOString(),
       responsePublishedAt: response?.mtime.toISOString() ?? null, responseBytes: response?.size ?? null,
+      launch: launch === null ? null : { status: launch.status, callId: launch.callId,
+        permitCallId: launch.permit?.callId, permitExecutionId: launch.permit?.executionId },
       responseFailure: error == null ? null : { code: error.code, reason: error.reason,
         message: error.message === knownAdmissionFailure ? knownAdmissionFailure : null } };
   });
@@ -173,9 +178,16 @@ async function runConcurrentAgents(t, { mailboxOnly = false } = {}) {
     const snapshots = diagnostic.mailbox.filter((frame) => frame.operation === "runtime-snapshot");
     assert.equal(snapshots.length, 12, "every public wrapper must obtain its pinned runtime through the real authenticated mailbox");
     assert.ok(snapshots.every((frame) => frame.responsePublishedAt !== null && frame.responseBytes > 0));
-    for (const operation of ["authenticate", "reserve", "claim-launch", "observe", "read-control", "persist-call-output", "finish"]) {
+    for (const operation of ["authenticate", "reserve-and-claim", "observe", "read-control", "persist-call-output", "finish"]) {
       assert.ok(diagnostic.mailbox.some((frame) => frame.operation === operation), `${operation} must use the same real mailbox fallback`);
     }
+    const launches = diagnostic.mailbox.filter((frame) => frame.operation === "reserve-and-claim");
+    const inherited = new Map(physical.calls.filter((call) => call.parentCallId !== null).map((call) => [call.callId, call]));
+    assert.equal(launches.length, 12, "every inherited target must reserve and claim through one real mailbox response");
+    assert.deepEqual(launches.map((frame) => frame.launch?.callId).sort(), [...inherited.keys()].sort());
+    assert.ok(launches.every((frame) => frame.launch.status === "claimed"
+      && frame.launch.callId === frame.launch.permitCallId && frame.launch.permitExecutionId === runtime.executionId
+      && inherited.get(frame.launch.callId).parentCallId === frame.callId));
   }
   for (let ordinal = 0; ordinal < outcomes.length; ordinal++) {
     const results = JSON.parse(outcomes[ordinal].value);
@@ -243,9 +255,9 @@ async function runStartPublication(t, { expire = false, stop = false } = {}) {
   let coordinatorEnvironment = {};
   if (expire || stop) {
     const timerPreload = path.join(root, "early-deadline.mjs");
-    fs.writeFileSync(timerPreload, `import fs from 'node:fs';const original=globalThis.setTimeout;let fired=false;
+    fs.writeFileSync(timerPreload, `import { AtomicFile } from ${JSON.stringify(new URL("../../../src/lib/atomic-file.js", import.meta.url).href)};const original=globalThis.setTimeout;let fired=false;
       globalThis.setTimeout=(callback,delay,...args)=>{
-        if(!fired&&delay>13000&&delay<=14000){fired=true;return original(()=>{fs.writeFileSync(${JSON.stringify(earlyTimer)},JSON.stringify({fired:1,delay}));callback(...args);},0);}
+        if(!fired&&delay>13000&&delay<=14000&&new Error().stack.includes('ParentStartPublication')){fired=true;return original(()=>{new AtomicFile(${JSON.stringify(earlyTimer)}).write(JSON.stringify({fired:1,delay,owner:'parent-start'}),{exclusive:true});callback(...args);},0);}
         return original(callback,delay,...args);
       };`);
     coordinatorEnvironment = { NODE_OPTIONS: `--import=${pathToFileURL(timerPreload).href}` };
@@ -300,6 +312,7 @@ async function runStartPublication(t, { expire = false, stop = false } = {}) {
       t.after(() => timerWatcher.close());
       check();
     });
+    assert.equal(JSON.parse(fs.readFileSync(earlyTimer)).owner, "parent-start");
   }
   if (stop) {
     let executionFailure = null;

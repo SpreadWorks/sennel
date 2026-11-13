@@ -1,5 +1,15 @@
+import { isUtf8 } from "node:buffer";
+import { FileIdentity } from "../../lib/file-identity.js";
+import { SourceWorkingFileCapture, observeSourceUntrackedMode, SelectedSourceGitRepository } from "./source-working-file-capture.js";
+import { SOURCE_STATE_VERSION, SourceMutationEntry, SourceMutationManifestValue, SourceRollbackOperationReceipt } from "./source-mutation-manifest.js";
+export { SOURCE_STATE_VERSION, SourceMutationEntry, SourceRollbackOperationReceipt } from "./source-mutation-manifest.js";
+import { GitSourceEntry, SourceWorkingFile, SourceGitState, SourceGitDirectoryGenerations, SourceGitControlFiles, WorkerArtifactRepositoryEntry } from "./source-working-file.js";
+import { SourceGitRestoreStage, SourceRestoreCapability } from "./source-git-restore-stage.js";
+import { GitRepositoryPolicy } from "../../lib/git-repository-environment.js";
+import { isGitObjectId } from "../../lib/git-snapshot.js";
+import { GitConfigurationObservation, GitReferenceObservation, GitIndexObservation, readGitBoolean as sourceGitBoolean } from "../../lib/git-source-observation.js";
 import { PROCESS_EVENT_OPERATION } from "./flow-process-event.js";
-import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
+import { SourceExecutionObservationCatalog, SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { capturePromptResponseAdoptionsFromView } from "./prompt-response-adoption-publication.js";
 import { isFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
 import { CanonicalPromptResponseSelection, CanonicalPromptResponseAdoption } from "./prompt-response-adoption.js";
@@ -26,10 +36,13 @@ import { GateRepairWorkerReport, SourceWorkerEffect, SourceWorkerEffectReport } 
 export { SourceFileEffect, SourceIssueEffect, SourceOverviewEffect, SourceRepairRecurrenceResolution, SourceRepairEffect, SourceRepairReport, GateRepairWorkerReport, SourceNoChangeReason, TaskRepairNoChangeEffect, SourceWorkerEffect, SourceWorkerEffectReport } from "./source-effect-values.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES as MAX_INPUT_BYTES,
-  workerArtifactStableStringify as stableStringify } from "./worker-artifact-input-format.js";
+  workerArtifactStableStringify as stableStringify, workerArtifactDigest as digest, assertWorkerArtifactStoredValue } from "./worker-artifact-input-format.js";
 import crypto from "node:crypto";
-import { runGit } from "../../lib/git-command-execution.js";
-import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { runGit, GitCommandExecution } from "../../lib/git-command-execution.js";
+import { CommandExecutionBatchFailure } from "../../lib/process.js";
+import { completeManagedOperationSync } from "../../lib/process-execution-completion.js";
+import { withReadOnlyManagedProcessScopeSync } from "../../lib/managed-process.js";
+import { ProcessExecutionControlFailure, ProcessStopArtifactEncoding } from "../../lib/process-execution-values.js";
 import { assertOk } from "../../lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -39,7 +52,7 @@ import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selec
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { appendRegularFile } from "../../lib/regular-file-io.js";
-import { isNativePathWithin } from "../../lib/portable-path.js";
+import { isNativePathWithin, LogicalPathSet } from "../../lib/portable-path.js";
 import { SpecGateRepairInputDescriptor, SpecGateRepairInputSnapshotLocator,
   SPEC_GATE_REPAIR_INPUT_NAME, specGateRepairInputFormatUnavailable } from "./spec-gate-repair-input-descriptor.js";
 import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
@@ -113,6 +126,7 @@ import { acquireSpecGateRepairExecutionContractOptions } from "./spec-gate-repai
 import { readStoredExecutionContractFromView, readExecutionContractFromView,
   readStoredPromptExecutionEpisodeFromView } from "./canonical-prompt-execution.js";
 import { captureProcessExecutionCheckoutIdentity, ProcessExecutionRuntime } from "../../lib/process-execution-runtime.js";
+import { withRuntimeRecordMigrationPreview } from "../../lib/process-runtime-migration-guidance.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
 import { SpecGateRepairCallPlan } from "./spec-gate-repair-call-plan.js";
@@ -200,7 +214,7 @@ import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { WorkerArtifactHandoffError, requiredString } from "./worker-artifact-handoff-error.js";
 export { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
-import { getPorcelainV2Status } from "../../lib/git-helpers.js";
+import { GitPorcelainV2StatusExecution } from "../../lib/git-helpers.js";
 import { PlanGateRepairOutcomeDraft } from "./gate-observation-convergence.js";
 import {
   CanonicalGateObservationCycle,
@@ -225,7 +239,6 @@ const MAX_AUTHORITY_DIRTY_PATHS = 20_000;
 const MAX_AUTHORITY_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_AUTHORITY_TOTAL_FILE_BYTES = 256 * 1024 * 1024;
 const FLOW_REPOSITORY_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
-const AUTHORITY_ENTRY_KINDS = new Set(["missing", "symlink", "directory", "file", "other"]);
 const TEMPORARY_CANONICAL_READ_CODES = new Set(["EAGAIN", "EBUSY", "EIO", "EMFILE", "ENFILE"]);
 const SPEC_TEST_FILE = /\.(?:js|mjs|ts|json|md|ya?ml|txt|sh)$/;
 const REQUIREMENT_TEST_SUPPORT_PREFIX = "tests/support/";
@@ -266,11 +279,6 @@ function duplicateValues(values) {
     seen.add(value);
   }
   return [...duplicates];
-}
-
-function digest(value) {
-  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
-  return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
 function base64Bytes(value, label) {
@@ -927,11 +935,13 @@ const POLICIES = Object.freeze([
   new WorkerArtifactHandoffPolicy({
     stepId: "spec-triage",
     inputs: ["spec.json", "review.json"],
+    optionalVirtualInputs: ["review-process-evidence.json"],
     payloads: [{ logicalName: "review.delta.json", targetRelativePath: "review.delta.json" }],
   }),
   new WorkerArtifactHandoffPolicy({
     stepId: "spec-repair",
     inputs: ["spec.json", "review.json"],
+    optionalVirtualInputs: ["review-process-evidence.json"],
     payloads: [{ logicalName: "review.delta.json", targetRelativePath: "review.delta.json" }],
     // Workers propose full-input-bound deltas only. The parent merges and
     // publishes the revision-scoped canonical review.
@@ -1796,9 +1806,22 @@ function preparationReceiptHandoffInput({ flowManager, state, policy }) {
   })];
 }
 
+function specReviewProcessEvidenceHandoffInput({ flowManager, state, policy }) {
+  const name = "review-process-evidence.json";
+  if (!policy.inputContract.optionalVirtualInputs.includes(name)) return [];
+  const current = flowManager.readCurrentSpecReview({ specId: state.specId, consumerNodeId: policy.stepId });
+  const processEvidence = current.review.processEvidence;
+  if (processEvidence === null) return [];
+  const document = processEvidence.toJSON();
+  const bytes = Buffer.from(stableStringify(document));
+  return [new WorkerArtifactInputSnapshot({ name, targetRelativePath: name,
+    snapshot: { digest: digest(bytes), byteLength: bytes.length }, document })];
+}
+
 function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot, request = null, specGateRepairDocument = null }) {
   const available = new Map([
     ...preparationReceiptHandoffInput({ flowManager, state, policy }),
+    ...specReviewProcessEvidenceHandoffInput({ flowManager, state, policy }),
     ...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }),
     ...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }),
     ...reviewRecurrenceHandoffInput({ flowManager, state, policy }),
@@ -1947,174 +1970,160 @@ function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeL
   ));
 }
 
-function boundedGitOutput(root, args, label) {
-  try {
-    const result = runGit(args, {
-      cwd: root,
-      encoding: "buffer",
+/** One original bounded read policy, reusable by independent query groups. */
+class GitAuthorityRead extends GitCommandExecution {
+  #root;
+  #label;
+  constructor(root, args, label, input = undefined) {
+    super(args, { cwd: root, encoding: "buffer",
+      gitPolicy: new GitRepositoryPolicy({ repositoryRoot: root, readOnly: true }),
       maxBuffer: MAX_AUTHORITY_GIT_OUTPUT_BYTES,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    assertOk(result, `failed to read ${label}`);
-    return result.stdout;
-  } catch (cause) {
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], input });
+    this.#root = path.resolve(root); this.#label = label;
+  }
+  fail(cause) {
     if (cause instanceof ProcessExecutionControlFailure) throw cause;
-    throw authoritySnapshotError(
-      `worker artifact authority could not read ${label}: ${cause.message}`,
-      cause,
-      { root: path.resolve(root), label },
-    );
-  }
-}
-
-function exactGitRoot(root, repositoryRoot = root) {
-  try {
-    const result = runGit(["rev-parse", "--show-toplevel"], {
-      cwd: root,
-      repositoryRoot,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    assertOk(result, "failed to read Git root");
-    const output = result.stdout.trim();
-    return fs.realpathSync(output) === fs.realpathSync(root);
-  } catch (cause) {
-    if (cause instanceof ProcessExecutionControlFailure) throw cause;
-    if (fs.existsSync(path.join(path.resolve(root), ".git"))) {
-      throw authoritySnapshotError(
-        `worker artifact authority could not resolve its Git root: ${cause.message}`,
-        cause,
-        { root: path.resolve(root), label: "Git root" },
-      );
-    }
-    return false;
-  }
-}
-
-class WorkerArtifactRepositoryEntry {
-  constructor({ path: relativePath, kind, mode, digest: contentDigest }) {
-    if (typeof relativePath !== "string" || relativePath === "") {
-      throw new Error("worker artifact repository entry path is required");
-    }
-    this.path = relativePath;
-    if (!AUTHORITY_ENTRY_KINDS.has(kind)) {
-      throw new Error(`invalid worker artifact repository entry kind: ${kind}`);
-    }
-    this.kind = kind;
-    if (mode != null && (!Number.isSafeInteger(mode) || mode < 0)) {
-      throw new Error("worker artifact repository entry mode is invalid");
-    }
-    this.mode = mode;
-    this.digest = contentDigest == null
-      ? null
-      : requiredDigest(contentDigest, "worker artifact repository entry digest");
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return { path: this.path, kind: this.kind, mode: this.mode, digest: this.digest };
-  }
-}
-
-function gitVisibleAuthorityEntry(entry, workingTreeMode = null) {
-  if (!(entry instanceof WorkerArtifactRepositoryEntry)) {
-    throw new Error("Git-visible authority entry must be typed");
-  }
-  if (entry.kind === "missing") return entry;
-  const modeKind = workingTreeMode === 0o120000 ? "symlink"
-    : workingTreeMode !== null && workingTreeMode !== 0 && (workingTreeMode & 0o170000) === 0o100000
-      ? "file" : null;
-  if (modeKind !== null && entry.kind !== modeKind) {
-    throw authoritySnapshotError(`worker artifact authority Git status changed while inspecting ${entry.path}`);
-  }
-  const kind = entry.kind;
-  const visibleMode = workingTreeMode === null || workingTreeMode === 0 ? entry.mode : workingTreeMode;
-  const mode = kind === "file"
-    ? ((visibleMode & 0o100) === 0 ? 0o644 : 0o755)
-    : kind === "symlink" ? 0o777
-      : kind === "directory" ? 0o755 : null;
-  return new WorkerArtifactRepositoryEntry({ ...entry.toJSON(), kind, mode });
-}
-
-function digestAuthorityFile(filePath, visible, relativePath, budget) {
-  try {
-    return visitRegularFileChunks(filePath, { label: `source authority ${relativePath}`, maxBytes: MAX_AUTHORITY_FILE_BYTES,
-      expectedIdentity: visible, visit(chunk) {
-        budget.bytes += chunk.length;
-        if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES) throw new Error(`dirty content exceeds ${MAX_AUTHORITY_TOTAL_FILE_BYTES} bytes`);
-      } }).digest;
-  } catch (cause) {
-    throw authoritySnapshotError(
-      `worker artifact authority could not fingerprint ${relativePath}: ${cause.message}`,
-      cause,
-      { path: relativePath },
-    );
-  }
-}
-
-function authorityFileEntry(root, relativePath, budget) {
-  const normalized = relativePath.split(path.sep).join("/");
-  if (
-    path.posix.isAbsolute(normalized)
-    || path.posix.normalize(normalized) !== normalized
-    || normalized === "."
-    || normalized.startsWith("../")
-  ) {
-    throw authoritySnapshotError(`worker artifact authority path is invalid: ${relativePath}`);
-  }
-  const filePath = path.resolve(root, ...normalized.split("/"));
-  if (!isWithin(root, filePath)) {
-    throw authoritySnapshotError(`worker artifact authority path escapes its repository: ${relativePath}`);
-  }
-  let stat;
-  try {
-    stat = fs.lstatSync(filePath, { bigint: true });
-  } catch (cause) {
-    if (cause.code === "ENOENT") {
-      return new WorkerArtifactRepositoryEntry({
-        path: normalized,
-        kind: "missing",
-        mode: null,
-        digest: null,
-      });
+    if (cause instanceof CommandExecutionBatchFailure) {
+      const control = cause.controlFailure();
+      if (control !== null) throw control;
     }
     throw authoritySnapshotError(
-      `worker artifact authority could not inspect ${normalized}: ${cause.message}`,
-      cause,
-    );
+      `worker artifact authority could not read ${this.#label}: ${cause.message}`,
+      cause, { root: this.#root, label: this.#label });
   }
-  const mode = Number(stat.mode & 0o7777n);
-  if (stat.isSymbolicLink()) {
-    return new WorkerArtifactRepositoryEntry({
-      path: normalized,
-      kind: "symlink",
-      mode,
-      digest: digest(fs.readlinkSync(filePath)),
+  consume(result) {
+    try { assertOk(result, `failed to read ${this.#label}`); return result.stdout; }
+    catch (cause) { return this.fail(cause); }
+  }
+  read() {
+    let result;
+    try { result = this.run(); }
+    catch (cause) { return this.fail(cause); }
+    return this.consume(result);
+  }
+}
+function boundedGitOutput(root, args, label, input = undefined) {
+  return new GitAuthorityRead(root, args, label, input).read();
+}
+function independentAuthorityGitResults(queries) {
+  try { return GitCommandExecution.runTogether(queries); }
+  catch (cause) { return queries[0].fail(cause); }
+}
+
+
+
+
+/** Complete native streams owned by one source authority capture. */
+class GitAuthorityReadObservation {
+  #refs;
+  #configuration;
+  #attributes;
+  #cachedAttributes;
+  constructor({ refs, configuration, reference, index, attributes, cachedAttributes, status }) {
+    if (!(reference instanceof GitReferenceObservation) || !(index instanceof GitIndexObservation)) {
+      throw new TypeError("Source Git authority requires its native reference and index observations");
+    }
+    this.#refs = Buffer.from(refs); this.#configuration = Buffer.from(configuration);
+    this.#attributes = Buffer.from(attributes); this.#cachedAttributes = Buffer.from(cachedAttributes);
+    this.head = reference.head; this.indexObservation = index; this.status = status; Object.freeze(this);
+  }
+  get refs() { return Buffer.from(this.#refs); }
+  get configuration() { return Buffer.from(this.#configuration); }
+  get index() { return this.indexObservation.index; }
+  get flags() { return this.indexObservation.flags; }
+  get materialization() { return this.indexObservation.materialization; }
+  get attributes() { return Buffer.from(this.#attributes); }
+  get cachedAttributes() { return Buffer.from(this.#cachedAttributes); }
+}
+
+/** The same bounded native queries, scheduled from the captured index layout. */
+class GitAuthoritySnapshotReads {
+  #root;
+  #snapshot;
+  #referenceRead;
+  #configurationRead;
+  #attributeRead;
+  #cachedAttributeRead;
+  #statusRead;
+  #refs;
+  #configuration;
+  #reference;
+  constructor(root, snapshot) {
+    this.#root = root; this.#snapshot = snapshot;
+    this.#referenceRead = new GitAuthorityRead(root, ["show-ref", "--head"], "Git refs");
+    this.#configurationRead = new GitAuthorityRead(root, ["config", "--null", "--list", "--show-origin"], "Git configuration");
+  }
+  #readReferences(results) {
+    this.#refs = this.#referenceRead.consume(results[0]);
+    this.#configuration = this.#configurationRead.consume(results[1]);
+    this.#reference = new GitReferenceObservation(this.#refs);
+  }
+  #attributeQueries(input) {
+    this.#attributeRead = new GitAuthorityRead(this.#root, ["check-attr", "--all", "--stdin", "-z"], "Git materialization attributes", input);
+    this.#cachedAttributeRead = new GitAuthorityRead(this.#root, ["check-attr", "--cached", "--all", "--stdin", "-z"], "Git immutable attribute policy", input);
+    this.#statusRead = new GitPorcelainV2StatusExecution(this.#root, { repositoryRoot: this.#root, forceFileMode: false });
+    return [this.#attributeRead, this.#cachedAttributeRead, this.#statusRead];
+  }
+  #assertIndexEncoding(index) {
+    for (const [label, bytes] of [["Git index", index.index], ["Git index flags", index.flags], ["Git materialization EOL", index.materialization]]) {
+      if (!isUtf8(bytes)) throw authoritySnapshotError(`${label} contains a source path that is not valid UTF-8`);
+    }
+  }
+  read() {
+    const prepared = GitIndexObservation.prepare({ snapshot: this.#snapshot, maxBytes: MAX_AUTHORITY_GIT_OUTPUT_BYTES });
+    let index, attributes;
+    if (prepared !== null) {
+      const indexRead = new GitAuthorityRead(this.#root, prepared.args, prepared.label);
+      const attributeQueries = this.#attributeQueries(prepared.attributeInput);
+      const results = independentAuthorityGitResults([this.#referenceRead, this.#configurationRead, indexRead, ...attributeQueries]);
+      this.#readReferences(results);
+      index = prepared.observe(indexRead.consume(results[2]), this.#reference.head.length);
+      this.#assertIndexEncoding(index);
+      attributes = results.slice(3);
+    } else {
+      this.#readReferences(independentAuthorityGitResults([this.#referenceRead, this.#configurationRead]));
+      // Unsupported/ambiguous layouts retain the original exact bounded reads.
+      // Decide before execution; there is no retry or broader output allowance.
+      index = GitIndexObservation.read({ snapshot: this.#snapshot, objectIdLength: this.#reference.head.length,
+        maxBytes: MAX_AUTHORITY_GIT_OUTPUT_BYTES, read: (args, label) => boundedGitOutput(this.#root, args, label) });
+      this.#assertIndexEncoding(index);
+      attributes = independentAuthorityGitResults(this.#attributeQueries(index.attributeInput));
+    }
+    return new GitAuthorityReadObservation({ refs: this.#refs, configuration: this.#configuration,
+      reference: this.#reference, index, attributes: this.#attributeRead.consume(attributes[0]),
+      cachedAttributes: this.#cachedAttributeRead.consume(attributes[1]), status: this.#statusRead.parseResult(attributes[2]) });
+  }
+}
+
+
+function authorityFileEntry(root, relativePath, budget, { requireExisting = false } = {}) {
+  try {
+    const { working } = SourceWorkingFileCapture.capture(root, relativePath, { maxBytes: MAX_AUTHORITY_FILE_BYTES, requireExisting,
+      budget: { get bytes() { return budget.bytes; }, set bytes(value) { budget.bytes = value; }, limit: MAX_AUTHORITY_TOTAL_FILE_BYTES } });
+    return new WorkerArtifactRepositoryEntry({ path: relativePath, workingPath: relativePath, working });
+  } catch (cause) { throw authoritySnapshotError(`source authority could not capture ${relativePath}: ${cause.message}`, cause); }
+}
+
+
+function sourceAuthorityPaths(root, { ignoredDirectories, runtimeLocks }) {
+  const paths = [];
+  const authority = new RealDirectoryAuthority(root);
+  const directories = [authority];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    directory.forEachEntry((entry) => {
+      const absolute = path.join(directory.directory, entry.name);
+      const relative = path.relative(root, absolute).split(path.sep).join("/");
+      if (entry.name === ".git" && relative !== ".git") throw authoritySnapshotError(`source authority does not include an independent nested Git boundary: ${relative}`);
+      if (isIgnoredAuthorityPath(root, relative, ignoredDirectories, runtimeLocks)
+        || FLOW_REPOSITORY_RUNTIME_ARTIFACTS.directoryRoots().includes(relative)) return;
+      paths.push(relative);
+      if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) throw authoritySnapshotError(`source authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} potential paths`);
+      if (entry.isDirectory()) directories.push(directory.descendant(absolute));
     });
   }
-  if (stat.isDirectory()) {
-    return new WorkerArtifactRepositoryEntry({
-      path: normalized,
-      kind: "directory",
-      mode,
-      digest: null,
-    });
-  }
-  if (!stat.isFile()) {
-    return new WorkerArtifactRepositoryEntry({
-      path: normalized,
-      kind: "other",
-      mode,
-      digest: null,
-    });
-  }
-  return new WorkerArtifactRepositoryEntry({
-    path: normalized,
-    kind: "file",
-    mode,
-    digest: digestAuthorityFile(filePath, stat, normalized, budget),
-  });
+  authority.assertStable();
+  return paths;
 }
 
 function filteredIndexDigest(root, bytes, runtimeLocks) {
@@ -2132,85 +2141,96 @@ function filteredIndexDigest(root, bytes, runtimeLocks) {
   return hash.digest("hex");
 }
 
-function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = [] } = {}) {
-  const head = boundedGitOutput(root, ["rev-parse", "HEAD"], "Git HEAD").toString("utf8").trim();
-  const indexDigest = filteredIndexDigest(
-    root,
-    boundedGitOutput(root, ["ls-files", "--stage", "-z"], "Git index"),
-    runtimeLocks,
-  );
-  let status;
-  try {
-    status = getPorcelainV2Status(root, { repositoryRoot: root });
-  } catch (cause) {
-    throw authoritySnapshotError(
-      `worker artifact authority could not read Git status: ${cause.message}`,
-      cause,
-      { root: path.resolve(root), label: "Git status" },
-    );
-  }
-  const statusByPath = new Map();
-  for (const entry of status.entries) {
-    statusByPath.set(entry.path, entry);
-    if (entry.originalPath !== null) statusByPath.set(entry.originalPath, entry);
-  }
-  const paths = status.pathSet.toArray()
-    .filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
-    .sort((left, right) => left.localeCompare(right));
-  if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) {
-    throw authoritySnapshotError(
-      `worker artifact authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} changed paths`,
-    );
-  }
-  const budget = { bytes: 0 };
-  return {
-    mode: "git",
-    head,
-    indexDigest,
-    entries: paths.map((relativePath) => {
-      const observation = statusByPath.get(relativePath);
-      return gitVisibleAuthorityEntry(
-        authorityFileEntry(root, relativePath, budget),
-        observation?.path === relativePath ? observation.worktreeMode : observation?.headMode,
-      );
-    }),
+function gitAuthoritySnapshot(root, selectedRepository, { ignoredDirectories = [], runtimeLocks = [] } = {}) {
+  const gitDirectories = selectedRepository.physicalPaths;
+  const authorities = gitDirectories.slice(0, 2).map((directory) => new RealDirectoryAuthority(path.resolve(root, directory)));
+  const sparsePath = path.resolve(root, gitDirectories[2]);
+  const sparseAuthority = RealDirectoryAuthority.closestAncestor(path.dirname(sparsePath), authorities);
+  if (sparseAuthority === null) throw authoritySnapshotError("Git sparse policy lies outside its captured repository authority");
+  const sparse = SourceWorkingFileCapture.capture(sparseAuthority.directory, path.relative(sparseAuthority.directory, sparsePath).split(path.sep).join("/"), { maxBytes: MAX_AUTHORITY_FILE_BYTES }).working;
+  if (sparse.kind === "directory") throw authoritySnapshotError("Git sparse policy must be a regular file or absent");
+  for (const authority of authorities) authority.assertStable();
+  const controlBudget = { bytes: 0, limit: MAX_AUTHORITY_TOTAL_FILE_BYTES };
+  const captureControl = (controlPath, { retainBytes = false } = {}) => {
+    const absolute = path.resolve(root, controlPath);
+    const authority = RealDirectoryAuthority.closestAncestor(path.dirname(absolute), authorities);
+    if (authority === null) throw authoritySnapshotError("Git named control lies outside its captured repository authority");
+    return SourceWorkingFileCapture.capture(authority.directory, path.relative(authority.directory, absolute).split(path.sep).join("/"),
+      { maxBytes: MAX_AUTHORITY_FILE_BYTES, budget: controlBudget, retainBytes });
   };
+  const capturedIndex = captureControl(gitDirectories[4], { retainBytes: true });
+  const controlFiles = new SourceGitControlFiles({ head: captureControl(gitDirectories[3]).working, index: capturedIndex.working,
+    commonConfig: captureControl(path.join(authorities[1].directory, "config")).working,
+    worktreeConfig: captureControl(path.join(authorities[0].directory, "config.worktree")).working });
+  for (const authority of authorities) authority.assertStable();
+  const directories = new SourceGitDirectoryGenerations({ git: FileIdentity.capture(authorities[0].identity), common: FileIdentity.capture(authorities[1].identity) });
+  const observation = new GitAuthoritySnapshotReads(root, capturedIndex.snapshot).read();
+  const { refs, head, index, flags, materialization, attributes, cachedAttributes, status } = observation;
+  const config = observation.configuration;
+  const configuration = new GitConfigurationObservation(config);
+  const gitState = new SourceGitState({ directories, controlFiles, filemode: configuration.boolean("core.filemode", true, () => sourceGitBoolean(root, "core.filemode", true)),
+    symlinks: configuration.boolean("core.symlinks", true, () => sourceGitBoolean(root, "core.symlinks", true)), configDigest: digest(Buffer.concat([config, Buffer.from(stableStringify(sparse.contentJSON()))])), refsDigest: digest(refs),
+    flagsDigest: digest(flags), attributesDigest: digest(cachedAttributes), workingAttributesDigest: digest(Buffer.concat([attributes, Buffer.from(materialization.toString("utf8").split("\0").filter(Boolean).map((record) => record.replace(/^i\/[^ ]+\s+w\/[^ ]+\s+/, "")).join("\0"))])) });
+  const flagByPath = new Map(flags.toString("utf8").split("\0").filter(Boolean).map((record) => [record.slice(2), record[0]]));
+  const statusByPath = new Map(status.entries.map((entry) => [entry.path, entry]));
+  const indexByPath = new Map();
+  for (const record of index.toString("utf8").split("\0").filter(Boolean)) {
+    const match = /^(100644|100755|120000) ([a-f0-9]{40,64}) 0\t([\s\S]+)$/.exec(record);
+    const relativePath = record.slice(record.indexOf("\t") + 1);
+    if (isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) continue;
+    if (match === null) throw authoritySnapshotError(`unsupported or unmerged Git source entry: ${relativePath}`);
+    indexByPath.set(relativePath, { logicalMode: match[1], indexOid: match[2] });
+  }
+  const physicalPaths = sourceAuthorityPaths(root, { ignoredDirectories, runtimeLocks });
+  const budget = { bytes: 0 };
+  const physicalEntries = physicalPaths.map((relativePath) => authorityFileEntry(root, relativePath, budget, { requireExisting: true }));
+  const projected = SourceWorkingFileCapture.projectGitPaths(root, physicalEntries, [...indexByPath.keys()], { maxBytes: MAX_AUTHORITY_FILE_BYTES });
+  const physical = new Map(projected.map((entry) => [entry.path, entry]));
+  const paths = [...new Set([...physical.keys(), ...indexByPath.keys()])].sort();
+  if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) throw authoritySnapshotError(`source authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} potential paths`);
+  const entries = paths.map((relativePath) => {
+    let raw = physical.get(relativePath);
+    if (raw === undefined) {
+      // Preserve native ancestor spelling, then let the shared no-follow
+      // acquisition prove absence, including beneath a regular-file blocker.
+      let ancestor = path.posix.dirname(relativePath);
+      while (ancestor !== "." && !physical.has(ancestor)) ancestor = path.posix.dirname(ancestor);
+      const workingPath = ancestor === "." ? relativePath
+        : path.posix.join(physical.get(ancestor).workingPath, relativePath.slice(ancestor.length + 1));
+      raw = authorityFileEntry(root, workingPath, budget);
+      if (raw.kind !== "missing") throw authoritySnapshotError(`indexed source appeared outside its captured physical inventory: ${relativePath}`);
+    }
+    const indexed = indexByPath.get(relativePath);
+    if (raw.kind === "directory" && indexed === undefined) return raw;
+    const tag = flagByPath.get(relativePath) ?? "?";
+    const observation = statusByPath.get(relativePath);
+    const observedMode = raw.kind !== "file" ? null : indexed?.logicalMode === "120000" ? "120000"
+      : indexed !== undefined && gitState.filemode === false ? indexed.logicalMode
+      : raw.kind === "file" && (tag === "S" || tag !== tag.toUpperCase()) ? observeSourceUntrackedMode(root, raw.workingPath, { ...gitState, maxBytes: MAX_AUTHORITY_FILE_BYTES })
+      : observation?.worktreeMode > 0 ? observation.worktreeMode.toString(8)
+        : indexed?.logicalMode ?? (raw.kind === "file" ? observeSourceUntrackedMode(root, raw.workingPath, { ...gitState, maxBytes: MAX_AUTHORITY_FILE_BYTES }) : null);
+    const git = new GitSourceEntry({ logicalMode: indexed?.logicalMode ?? null, indexOid: indexed?.indexOid ?? null,
+      assumeUnchanged: tag !== "?" && tag === tag.toLowerCase(), skipWorktree: tag.toUpperCase() === "S", worktreeMode: observedMode });
+    git.assertRepresentation(raw.working, gitState);
+    return new WorkerArtifactRepositoryEntry({ path: relativePath, workingPath: raw.workingPath, working: raw.working, git });
+  });
+  return { mode: "git", head, indexDigest: filteredIndexDigest(root, index, runtimeLocks), gitState, entries };
 }
 
 function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = [] } = {}) {
-  const relativePaths = [];
-  const rootAuthority = new RealDirectoryAuthority(root);
-  const directories = [rootAuthority];
-  while (directories.length > 0) {
-    const directory = directories.pop();
-    directory.forEachEntry((entry) => {
-      const absolutePath = path.join(directory.directory, entry.name);
-      const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
-      if (isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) return;
-      relativePaths.push(relativePath);
-      if (relativePaths.length > MAX_AUTHORITY_DIRTY_PATHS) {
-        throw authoritySnapshotError(
-          `non-Git worker artifact authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} paths`,
-        );
-      }
-      if (entry.isDirectory()) directories.push(directory.descendant(absolutePath));
-    });
-  }
   const budget = { bytes: 0 };
-  const result = {
-    mode: "filesystem",
-    head: null,
-    indexDigest: null,
-    entries: relativePaths
-      .sort((left, right) => left.localeCompare(right))
-      .map((relativePath) => authorityFileEntry(root, relativePath, budget)),
-  };
-  rootAuthority.assertStable();
-  return result;
+  return { mode: "filesystem", head: null, indexDigest: null, gitState: null,
+    entries: sourceAuthorityPaths(root, { ignoredDirectories, runtimeLocks }).sort().map((relativePath) => authorityFileEntry(root, relativePath, budget, { requireExisting: true })) };
+}
+
+function isCreatedDirectoryAncestor(relativePath, beforeEntry, afterEntry, exactLeafPaths) {
+  return exactLeafPaths.some((directory) => directory.startsWith(`${relativePath}/`))
+    && (beforeEntry === null || beforeEntry.kind === "missing")
+    && afterEntry?.kind === "directory";
 }
 
 export class WorkerArtifactRepositoryMutationSnapshot {
-  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, entries }) {
+  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, gitState = null, generation, entries }) {
     this.root = path.resolve(root);
     this.authorities = Object.freeze(authorities.map((entry) => requiredString(
       entry,
@@ -2222,41 +2242,56 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       throw new Error(`invalid worker artifact repository snapshot mode: ${mode}`);
     }
     this.mode = mode;
+    if (mode === "git" ? !isGitObjectId(head) || typeof indexDigest !== "string" || !/^[a-f0-9]{64}$/.test(indexDigest) : head !== null || indexDigest !== null) throw new Error("source repository control identity is invalid");
     this.head = head;
     this.indexDigest = indexDigest;
+    this.generation = generation instanceof FileIdentity ? generation : FileIdentity.fromStored(generation);
+    this.gitState = gitState === null ? null : gitState instanceof SourceGitState ? gitState : SourceGitState.fromStored(gitState);
+    if ((mode === "git") !== (this.gitState !== null)) throw new Error("source snapshot Git policy is missing");
     this.entries = Object.freeze(entries.map((entry) => (
       entry instanceof WorkerArtifactRepositoryEntry
         ? entry
         : new WorkerArtifactRepositoryEntry(entry)
     )));
-    if (new Set(this.entries.map((entry) => entry.path)).size !== this.entries.length) {
-      throw new Error("worker artifact repository entries must be unique");
+    new LogicalPathSet(this.entries.map((entry) => entry.path), { allowDirectoryPrefixes: true });
+    new LogicalPathSet(this.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path));
+    new LogicalPathSet(this.entries.filter((entry) => entry.kind !== "missing").map((entry) => entry.workingPath), { allowDirectoryPrefixes: true });
+    new LogicalPathSet(this.entries.filter((entry) => entry.kind === "file").map((entry) => entry.workingPath));
+    for (const entry of this.entries) {
+      if (mode === "filesystem" && (entry.git !== null || entry.workingPath !== entry.path) || mode === "git" && entry.kind !== "directory" && entry.git === null) throw new Error("source entry repository policy differs from its snapshot");
+      entry.git?.assertRepresentation(entry.working, this.gitState);
     }
     this.digest = digest(stableStringify({
       mode,
       head,
       indexDigest,
-      entries: this.entries.map((entry) => entry.toJSON()),
+      gitState: this.gitState?.contentJSON() ?? null,
+      entries: this.entries.map((entry) => entry.contentJSON()),
     }));
     Object.freeze(this);
   }
 
   static capture({ root, authorities, ignoredDirectories = [], runtimeLocks = [] }) {
     try {
+      const directory = new RealDirectoryAuthority(root);
       const ignored = authorityIgnoredDirectories(ignoredDirectories);
       const locks = authorityRuntimeLocksForRoot(root, runtimeLocks);
-      const snapshot = exactGitRoot(root, locks[0]?.repositoryRoot ?? root)
-        ? gitAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks })
+      const selectedRepository = SelectedSourceGitRepository.read(root, { repositoryRoot: locks[0]?.repositoryRoot ?? root,
+        maxBuffer: MAX_AUTHORITY_GIT_OUTPUT_BYTES });
+      const snapshot = selectedRepository !== null
+        ? withReadOnlyManagedProcessScopeSync({ mainRoot: root }, () => gitAuthoritySnapshot(root, selectedRepository, { ignoredDirectories: ignored, runtimeLocks: locks }))
         : filesystemAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks });
+      directory.assertStable();
       return new WorkerArtifactRepositoryMutationSnapshot({
         root,
         authorities,
         ignoredDirectories: ignored,
         runtimeLocks: locks,
         ...snapshot,
+        generation: FileIdentity.capture(directory.identity),
       });
     } catch (cause) {
-      if (cause instanceof WorkerArtifactHandoffError) throw cause;
+      if (cause instanceof WorkerArtifactHandoffError || cause instanceof ProcessExecutionControlFailure) throw cause;
       throw authoritySnapshotError(
         `worker artifact repository authority could not be captured: ${cause.message}`,
         cause,
@@ -2266,9 +2301,10 @@ export class WorkerArtifactRepositoryMutationSnapshot {
   }
 
   static fromStored(value, { root, authorities = ["execution"], runtimeLocks = [] } = {}) {
-    exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "ignoredDirectories"], "source mutation baseline snapshot");
+    exactObjectKeys(value, ["version", "mode", "head", "indexDigest", "gitState", "generation", "entries", "ignoredDirectories"], "source mutation baseline snapshot");
+    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source repository snapshot version is invalid");
     if (!Array.isArray(value.entries)) throw new Error("source mutation baseline snapshot entries must be an array");
-    return new WorkerArtifactRepositoryMutationSnapshot({
+    const snapshot = new WorkerArtifactRepositoryMutationSnapshot({
       root,
       authorities,
       ignoredDirectories: value.ignoredDirectories,
@@ -2276,15 +2312,19 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       mode: value.mode,
       head: value.head,
       indexDigest: value.indexDigest,
-      entries: value.entries,
+      gitState: value.gitState, generation: value.generation,
+      entries: value.entries.map((entry) => WorkerArtifactRepositoryEntry.fromStored(entry)),
     });
+    assertWorkerArtifactStoredValue(value, snapshot.toJSON(), "source repository snapshot");
+    return snapshot;
   }
 
   toJSON() {
     return {
-      mode: this.mode,
+      version: SOURCE_STATE_VERSION, mode: this.mode,
       head: this.head,
       indexDigest: this.indexDigest,
+      gitState: this.gitState?.toJSON() ?? null, generation: this.generation.toJSON(),
       entries: this.entries.map((entry) => entry.toJSON()),
       ignoredDirectories: [...this.ignoredDirectories],
     };
@@ -2295,14 +2335,61 @@ export class WorkerArtifactRepositoryMutationSnapshot {
     return this.allChangedPaths(current).slice(0, 20);
   }
 
+  assertCurrentGenerations(current) {
+    if (!this.generation.equals(current.generation)) throw authoritySnapshotError("source repository physical generation changed");
+    const actual = new Map(current.entries.map((entry) => [entry.path, entry]));
+    for (const entry of this.entries) {
+      const observed = actual.get(entry.path);
+      if (entry.working.generation !== null && (observed === undefined || entry.workingPath !== observed.workingPath || !entry.working.generation.equals(observed.working.generation))) {
+        throw authoritySnapshotError(`source physical generation changed before worker: ${entry.path}`);
+      }
+    }
+  }
+
   allChangedPaths(current) {
     const changed = [];
     if (this.head !== current.head) changed.push("<HEAD>");
     if (this.indexDigest !== current.indexDigest) changed.push("<index>");
+    if (!this.generation.equals(current.generation)) changed.push("<generation>");
+    if (stableStringify(this.gitState?.controlJSON() ?? null) !== stableStringify(current.gitState?.controlJSON() ?? null)) changed.push("<git-control>");
+    changed.push(...this.changedEntryPaths(current.entries));
+    return changed;
+  }
+
+  excludesPath(relativePath) {
+    return isIgnoredAuthorityPath(this.root, relativePath, this.ignoredDirectories, this.runtimeLocks)
+      || FLOW_REPOSITORY_RUNTIME_ARTIFACTS.directoryRoots().includes(relativePath);
+  }
+
+  sameObservation(current) { return this.observationChanges(current).length === 0; }
+
+  observationChanges(current) {
+    const { entries: beforeEntries, ...before } = this.toJSON();
+    const { entries: afterEntries, ...after } = current.toJSON();
+    return [
+      ...(stableStringify(before) === stableStringify(after) ? [] : ["<observation-header>"]),
+      ...this.changedEntryPaths(current.entries, { includeGenerations: true }),
+    ];
+  }
+
+  /** Path projection only; the caller must authenticate each publication's producer and bytes. */
+  publicationPaths(current, exactLeafPaths) {
+    const leaves = [...exactLeafPaths];
+    const allowed = new Set(leaves);
     const beforeEntries = new Map(this.entries.map((entry) => [entry.path, entry]));
-    const afterEntries = new Map(current.entries.map((entry) => [entry.path, entry]));
-    const before = new Map(this.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-    const after = new Map(current.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
+    for (const entry of current.entries) {
+      if (isCreatedDirectoryAncestor(entry.path, beforeEntries.get(entry.path) ?? null, entry, leaves)) allowed.add(entry.path);
+    }
+    return allowed;
+  }
+
+  changedEntryPaths(entries, { includeGenerations = false } = {}) {
+    const changed = [];
+    const beforeEntries = new Map(this.entries.map((entry) => [entry.path, entry]));
+    const afterEntries = new Map(entries.map((entry) => [entry.path, entry]));
+    const serializeEntry = (entry) => stableStringify(includeGenerations ? entry.toJSON() : entry.contentJSON());
+    const before = new Map(this.entries.map((entry) => [entry.path, serializeEntry(entry)]));
+    const after = new Map(entries.map((entry) => [entry.path, serializeEntry(entry)]));
     for (const relativePath of new Set([...before.keys(), ...after.keys()])) {
       if (before.get(relativePath) !== after.get(relativePath)) {
         // A transient handoff subtree can be created after baseline capture.
@@ -2310,9 +2397,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
         // source changes; sibling entries remain independently fingerprinted.
         const beforeEntry = beforeEntries.get(relativePath) ?? null;
         const afterEntry = afterEntries.get(relativePath) ?? null;
-        const createdIgnoredAncestor = this.ignoredDirectories.some((directory) => directory.startsWith(`${relativePath}/`))
-          && (beforeEntry === null || beforeEntry.kind === "missing")
-          && afterEntry?.kind === "directory";
+        const createdIgnoredAncestor = isCreatedDirectoryAncestor(relativePath, beforeEntry, afterEntry, this.ignoredDirectories);
         if (!createdIgnoredAncestor) {
           changed.push(relativePath);
         }
@@ -2329,15 +2414,8 @@ export class SourceMutationBaseline {
     if (!(snapshot instanceof WorkerArtifactRepositoryMutationSnapshot)) {
       throw new Error("source mutation baseline requires a repository snapshot");
     }
-    const unobservableGitDirectories = snapshot.mode === "git"
-      ? snapshot.entries.filter((entry) => entry.kind === "directory").map((entry) => entry.path)
-      : [];
-    if (unobservableGitDirectories.length > 0) {
-      throw authoritySnapshotError(
-        "source mutation baseline cannot safely fingerprint dirty Git directories",
-        null,
-        { paths: unobservableGitDirectories.slice(0, 20) },
-      );
+    if (snapshot.entries.some((entry) => entry.git?.logicalMode !== null && entry.git !== null && entry.kind === "directory")) {
+      throw authoritySnapshotError("tracked source baseline has a directory host type mismatch");
     }
     this.snapshot = snapshot;
     this.digest = digest(stableStringify(this.unsignedJSON()));
@@ -2357,7 +2435,8 @@ export class SourceMutationBaseline {
   }
 
   static fromStored(value, { root, runtimeLocks = [] } = {}) {
-    exactObjectKeys(value, ["attempt", "snapshot", "digest"], "source mutation baseline");
+    exactObjectKeys(value, ["version", "attempt", "snapshot", "digest"], "source mutation baseline");
+    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source mutation baseline version is invalid");
     const baseline = new SourceMutationBaseline({
       attempt: value.attempt,
       snapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root, runtimeLocks }),
@@ -2365,220 +2444,101 @@ export class SourceMutationBaseline {
     if (baseline.digest !== requiredDigest(value.digest, "source mutation baseline digest")) {
       throw new Error("source mutation baseline digest does not match its content");
     }
+    assertWorkerArtifactStoredValue(value, baseline.toJSON(), "source mutation baseline");
     return baseline;
   }
 
-  unsignedJSON() { return { attempt: this.attempt.toJSON(), snapshot: this.snapshot.toJSON() }; }
+  unsignedJSON() { return { version: SOURCE_STATE_VERSION, attempt: this.attempt.toJSON(), snapshot: this.snapshot.toJSON() }; }
   toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
 }
 
-export class SourceMutationEntry {
-  constructor({ mutationId, path: relativePath, changeKind, beforeKind, beforeMode, beforeDigest, afterKind, afterMode, afterDigest } = {}) {
-    this.mutationId = requiredDigest(mutationId, "source mutation id");
-    this.path = normalizedRelativePath(relativePath, "source mutation path");
-    this.changeKind = requiredString(changeKind, "source mutation changeKind");
-    if (!new Set(["added", "deleted", "content", "mode", "type"]).has(this.changeKind)) {
-      throw new Error("source mutation changeKind is invalid");
+/** Source acquisition stays outside the pure persisted mutation codec. */
+export class SourceMutationManifest extends SourceMutationManifestValue {
+  static capture({ baseline, executionObservations = null, beforeWorker = false } = {}) {
+    if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source mutation manifest requires a baseline");
+    const current = WorkerArtifactRepositoryMutationSnapshot.capture(baseline.snapshot);
+    if (beforeWorker) baseline.snapshot.assertCurrentGenerations(current);
+    const changed = baseline.snapshot.allChangedPaths(current);
+    if (changed.some((entry) => entry.startsWith("<"))) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION", "source worker must not commit or stage repository changes", { retryable: false, data: { changedPaths: changed.slice(0, 20) } });
     }
-    const before = new WorkerArtifactRepositoryEntry({
-      path: this.path, kind: beforeKind, mode: beforeMode, digest: beforeDigest,
-    });
-    const after = new WorkerArtifactRepositoryEntry({
-      path: this.path, kind: afterKind, mode: afterMode, digest: afterDigest,
-    });
-    if (before.kind === after.kind && before.mode === after.mode && before.digest === after.digest) {
-      throw new Error("source mutation entry has no before/after change");
-    }
-    const expectedChangeKind = before.kind === "missing" ? "added"
-      : after.kind === "missing" ? "deleted"
-        : before.kind !== after.kind ? "type"
-          : before.mode !== after.mode ? "mode" : "content";
-    if (this.changeKind !== expectedChangeKind) {
-      throw new Error("source mutation changeKind does not match its entry fingerprints");
-    }
-    this.beforeKind = before.kind;
-    this.beforeMode = before.mode;
-    this.beforeDigest = before.digest;
-    this.afterKind = after.kind;
-    this.afterMode = after.mode;
-    this.afterDigest = after.digest;
-    Object.freeze(this);
-  }
-  toJSON() {
-    return {
-      mutationId: this.mutationId, path: this.path, changeKind: this.changeKind,
-      beforeKind: this.beforeKind, beforeMode: this.beforeMode, beforeDigest: this.beforeDigest,
-      afterKind: this.afterKind, afterMode: this.afterMode, afterDigest: this.afterDigest,
-    };
-  }
-}
-
-/** Canonical, Attempt-bound declaration of actual source mutations. */
-export class SourceMutationManifest {
-  #mutationIdByPath;
-  #pathByMutationId;
-
-  constructor({ attempt, baselineDigest, mutations = [] } = {}) {
-    this.attempt = CurrentAttemptIdentity.from(attempt);
-    this.baselineDigest = requiredDigest(baselineDigest, "source mutation manifest baselineDigest");
-    if (!Array.isArray(mutations)) throw new Error("source mutation manifest mutations must be an array");
-    this.mutations = Object.freeze(mutations.map((entry) => entry instanceof SourceMutationEntry ? entry : new SourceMutationEntry(entry))
-      .sort((left, right) => left.path.localeCompare(right.path)));
-    if (new Set(this.mutations.map((entry) => entry.mutationId)).size !== this.mutations.length
-      || new Set(this.mutations.map((entry) => entry.path)).size !== this.mutations.length) {
-      throw new Error("source mutation manifest mutations must be unique");
-    }
-    this.#mutationIdByPath = new Map(this.mutations.map((entry) => [entry.path, entry.mutationId]));
-    this.#pathByMutationId = new Map(this.mutations.map((entry) => [entry.mutationId, entry.path]));
-    this.digest = digest(stableStringify(this.unsignedJSON()));
-    Object.freeze(this);
+    return this.fromEntries({ baseline, observations: current.entries, executionObservations });
   }
 
-  static mutationId(attempt, relativePath) {
-    return digest(stableStringify({ attempt: CurrentAttemptIdentity.from(attempt).toJSON(), path: normalizedRelativePath(relativePath, "source mutation id path") }));
-  }
-
-  static capture({ baseline, executionObservations = null } = {}) {
+  static fromEntries({ baseline, observations, executionObservations = null } = {}) {
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source mutation manifest requires a baseline");
     if (executionObservations !== null && !(executionObservations instanceof SourceExecutionObservationAppends)) {
       throw new TypeError("Source mutation observation exclusions require validated execution appends");
     }
-    const current = WorkerArtifactRepositoryMutationSnapshot.capture({
-      root: baseline.snapshot.root,
-      authorities: baseline.snapshot.authorities,
-      ignoredDirectories: baseline.snapshot.ignoredDirectories,
-      runtimeLocks: baseline.snapshot.runtimeLocks,
-    });
-    let changed = baseline.snapshot.allChangedPaths(current);
-    if (changed.includes("<HEAD>") || changed.includes("<index>")) {
-      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION", "source worker must not commit or stage repository changes", { retryable: false, data: { changedPaths: changed.slice(0, 20) } });
+    if (!Array.isArray(observations) || observations.some((entry) => !(entry instanceof WorkerArtifactRepositoryEntry))) {
+      throw new TypeError("source mutation producer requires typed repository observations");
     }
     const before = new Map(baseline.snapshot.entries.map((entry) => [entry.path, entry]));
-    const after = new Map(current.entries.map((entry) => [entry.path, entry]));
+    const after = new Map(observations.map((entry) => [entry.path, entry]));
+    for (const relativePath of new Set([...before.keys(), ...after.keys()])) {
+      const left = before.get(relativePath)?.git ?? null;
+      const right = after.get(relativePath)?.git ?? null;
+      if ((left?.logicalMode ?? null) !== null || (right?.logicalMode ?? null) !== null) {
+        if (stableStringify(left?.indexJSON() ?? null) !== stableStringify(right?.indexJSON() ?? null)) {
+          throw authoritySnapshotError(`source observation changed its immutable index facts: ${relativePath}`);
+        }
+      }
+    }
+    for (const entry of observations) {
+      if (baseline.snapshot.mode === "filesystem" && (entry.git !== null || entry.workingPath !== entry.path)
+        || baseline.snapshot.mode === "git" && entry.kind !== "directory" && entry.git === null) {
+        throw authoritySnapshotError("source observation repository policy differs from its baseline");
+      }
+      entry.git?.assertRepresentation(entry.working, baseline.snapshot.gitState);
+    }
+    let changed = baseline.snapshot.changedEntryPaths(observations);
     if (executionObservations !== null) {
-      if (!executionObservations.matches(current)) throw authoritySnapshotError("Execution observation appends differ from their cataloged bytes");
+      if (!executionObservations.matches(baseline.snapshot, observations)) throw authoritySnapshotError("Execution observation appends differ from their cataloged bytes");
       changed = changed.filter((relativePath) => !executionObservations.allowsPath(relativePath));
     }
-    const indexBudget = { bytes: 0 };
     const mutations = changed.map((relativePath) => {
-      // Git snapshots intentionally record only dirty paths. With HEAD and
-      // index proven unchanged, recover a clean tracked path from its index
-      // object so a first Attempt edit/deletion has its real before state.
-      const indexedBefore = before.get(relativePath) === undefined && baseline.snapshot.mode === "git"
-        ? indexedSourceMutationBaselineEntry(baseline.snapshot.root, relativePath, indexBudget)
-        : null;
-      const indexedAfter = after.get(relativePath) === undefined && baseline.snapshot.mode === "git"
-        ? indexedSourceMutationCurrentEntry(baseline.snapshot.root, relativePath, indexBudget)
-        : null;
-      const recordedBefore = before.get(relativePath) || indexedBefore || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null });
-      const recordedAfter = after.get(relativePath);
-      const recordedRight = recordedAfter === undefined
-        ? indexedAfter || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null })
-        : recordedAfter;
+      const recordedBefore = before.get(relativePath) ?? WorkerArtifactRepositoryEntry.missing(relativePath);
+      const recordedRight = after.get(relativePath) ?? WorkerArtifactRepositoryEntry.missing(relativePath);
       const changeKind = recordedBefore.kind === "missing" ? "added"
         : recordedRight.kind === "missing" ? "deleted"
           : recordedBefore.kind !== recordedRight.kind ? "type"
             : recordedBefore.mode !== recordedRight.mode ? "mode" : "content";
       return new SourceMutationEntry({
-        mutationId: SourceMutationManifest.mutationId(baseline.attempt, relativePath),
-        path: relativePath,
-        changeKind,
-        beforeKind: recordedBefore.kind,
-        beforeMode: recordedBefore.mode,
-        beforeDigest: recordedBefore.digest,
-        afterKind: recordedRight.kind,
-        afterMode: recordedRight.mode,
-        afterDigest: recordedRight.digest,
+        mutationId: this.mutationId(baseline.attempt, relativePath), path: relativePath, changeKind,
+        beforeKind: recordedBefore.kind, beforeMode: recordedBefore.mode, beforeDigest: recordedBefore.digest,
+        beforeGeneration: recordedBefore.working.generation,
+        afterKind: recordedRight.kind, afterMode: recordedRight.mode, afterDigest: recordedRight.digest,
+        afterGeneration: recordedRight.working.generation,
       });
-    }).filter((entry) => entry !== null);
-    return new SourceMutationManifest({ attempt: baseline.attempt, baselineDigest: baseline.digest, mutations });
+    });
+    return new this({ attempt: baseline.attempt, baselineDigest: baseline.digest, mutations, observations });
   }
 
-  static fromStored(value) {
-    exactObjectKeys(value, ["attempt", "baselineDigest", "mutations", "digest"], "source mutation manifest");
-    const manifest = new SourceMutationManifest(value);
-    if (manifest.digest !== requiredDigest(value.digest, "source mutation manifest digest")) throw new Error("source mutation manifest digest does not match its content");
-    return manifest;
-  }
-
-  unsignedJSON() { return { attempt: this.attempt.toJSON(), baselineDigest: this.baselineDigest, mutations: this.mutations.map((entry) => entry.toJSON()) }; }
-  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
-  paths() { return this.mutations.map((entry) => entry.path); }
-  mutationIdForPath(relativePath) {
-    const path = normalizedRelativePath(relativePath, "source mutation manifest path");
-    const mutationId = this.#mutationIdByPath.get(path);
-    if (!mutationId) throw new Error(`repair finding path is absent from the current Attempt manifest: ${path}`);
-    return mutationId;
-  }
-  pathForMutationId(mutationId) {
-    const path = this.#pathByMutationId.get(mutationId);
-    if (!path) throw new Error(`source mutation id is absent from the current Attempt manifest: ${mutationId}`);
-    return path;
-  }
-  assertBinding(baseline) {
-    if (!(baseline instanceof SourceMutationBaseline)) {
-      throw new Error("source mutation manifest binding requires a SourceMutationBaseline");
+  assertBinding(baseline, { executionObservations = null } = {}) {
+    if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source mutation manifest binding requires a SourceMutationBaseline");
+    if (this.baselineDigest !== baseline.digest || stableStringify(this.attempt.toJSON()) !== stableStringify(baseline.attempt.toJSON())) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_BINDING_INVALID",
+        "source mutation manifest does not bind the current Attempt baseline", { retryable: false });
     }
-    if (this.baselineDigest !== baseline.digest
-      || this.attempt.id !== baseline.attempt.id
-      || this.attempt.nodeId !== baseline.attempt.nodeId
-      || this.attempt.sequence !== baseline.attempt.sequence) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_MANIFEST_BINDING_INVALID",
-        "source mutation manifest does not bind the current Attempt baseline",
-        { retryable: false },
-      );
-    }
+    const expected = SourceMutationManifest.fromEntries({ baseline, observations: this.observations, executionObservations });
+    if (expected.digest !== this.digest) throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_BINDING_INVALID",
+      "source mutation manifest does not cover its stopped source observations", { retryable: false });
     return this;
   }
   assertMatchesCurrent(baseline, { executionObservations = null } = {}) {
     const current = SourceMutationManifest.capture({ baseline, executionObservations });
-    if (current.digest !== this.digest) {
+    let matches = current.digest === this.digest;
+    if (executionObservations !== null) {
+      const retainedMatches = executionObservations.matchesRetainedEntries(baseline.snapshot, this.observations);
+      const comparable = (manifest) => ({ ...manifest.unsignedJSON(),
+        observations: manifest.observations.filter((entry) => !executionObservations.allowsPath(entry.path)).map((entry) => entry.toJSON()) });
+      matches = retainedMatches && stableStringify(comparable(current)) === stableStringify(comparable(this));
+    }
+    if (!matches) {
       throw new WorkerArtifactHandoffError("stale", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after its sealed mutation manifest; regenerate the handoff", { retryable: true, data: { expectedManifestDigest: this.digest, currentManifestDigest: current.digest } });
     }
     return current;
   }
-}
-
-function assertRollbackResumeObservation({ baseline, observed }) {
-  observed.assertBinding(baseline);
-  const current = SourceMutationManifest.capture({ baseline });
-  const expected = new Map(observed.mutations.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-  for (const mutation of current.mutations) {
-    if (expected.get(mutation.path) !== stableStringify(mutation.toJSON())) {
-      throw new WorkerArtifactHandoffError(
-        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
-        "source rollback cannot prove ownership of the current after-image",
-        { retryable: false, recoveryPossible: false },
-      );
-    }
-  }
-  return current;
-}
-
-function indexedSourceMutationBaselineEntry(root, relativePath, budget) {
-  const mode = indexedSourceRollbackEntry(root, relativePath);
-  if (mode === null) return null;
-  const bytes = boundedGitOutput(root, ["show", `:${relativePath}`], `Git index baseline content for ${relativePath}`);
-  budget.bytes += bytes.length;
-  if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES) {
-    throw authoritySnapshotError(`source mutation baseline exceeds ${MAX_AUTHORITY_TOTAL_FILE_BYTES} bytes`);
-  }
-  return new WorkerArtifactRepositoryEntry({
-    path: relativePath,
-    kind: mode === 0o120000 ? "symlink" : "file",
-    // Git reports a file-type prefix (100644/100755/120000). Normalize the
-    // recovered clean baseline to the snapshot's Git-visible permission
-    // representation before deriving the change kind.
-    mode: mode === 0o120000 ? 0o777 : mode & 0o7777,
-    digest: digest(bytes),
-  });
-}
-
-function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
-  if (indexedSourceRollbackEntry(root, relativePath) === null) return null;
-  return gitVisibleAuthorityEntry(authorityFileEntry(root, relativePath, budget));
 }
 
 /**
@@ -2616,6 +2576,8 @@ class CanonicalObservationPrefixIdentity {
 }
 
 export class SourceWorkerCanonicalObservationAdvance {
+  #activityJSON;
+
   constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, catalogHash, prefixIdentity = null,
     addedActivities = [], allowedPublications = [], allowedActivityIds = [], allowedTaskReviewClaims = [] }) {
     if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities) || !Array.isArray(allowedPublications) || !Array.isArray(allowedActivityIds)) {
@@ -2628,6 +2590,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       throw new Error("source worker canonical observation advance requires a canonical repository snapshot");
     }
     this.activityPrefix = Object.freeze(activityPrefix.map((activity) => stableStringify(activity)));
+    this.#activityJSON = Object.freeze(activityPrefix.map((activity) => JSON.stringify(activity)));
     this.activityBytes = Buffer.from(activityBytes);
     this.prefixIdentity = prefixIdentity ?? CanonicalObservationPrefixIdentity.capture(this.activityPrefix, this.activityBytes);
     if (!(this.prefixIdentity instanceof CanonicalObservationPrefixIdentity)) {
@@ -2963,6 +2926,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       }
     }
     if (!authenticatedClaim || !authenticatedSourceClaim) throw new FlowExecutionContractRefusal("Conditional worker observation has no authenticated claim");
+    assertCanonicalActivityAdvance(observation, view.activities.map((activity) => activity.toJSON()));
     return observation;
   }
 
@@ -3071,6 +3035,60 @@ export class SourceWorkerCanonicalObservationAdvance {
     return this;
   }
 
+  /** Compare two coherent captured observations without replacing the after-image with a fresh read. */
+  assertCapturedAdvance(current, { executionObservations } = {}) {
+    if (!(current instanceof SourceWorkerCanonicalObservationAdvance)
+      || !(executionObservations instanceof SourceExecutionObservationCatalog)
+      || current.canonicalSnapshot.root !== this.canonicalSnapshot.root
+      || executionObservations.directory !== current.canonicalSnapshot.root
+      || executionObservations.catalog.hash !== current.catalogHash
+      || stableStringify(current.mutablePaths) !== stableStringify(this.mutablePaths)
+      || stableStringify(current.canonicalSnapshot.ignoredDirectories) !== stableStringify(this.canonicalSnapshot.ignoredDirectories)) {
+      throw new TypeError("canonical observation comparison requires the same captured scope and catalog");
+    }
+    this.#assertAdvance({
+      current: current.#activityJSON.map((entry) => JSON.parse(entry)),
+      activityBytes: current.activityBytes,
+      currentSnapshot: current.canonicalSnapshot,
+      executionObservations: new SourceExecutionObservationAppends(executionObservations, this.canonicalSnapshot),
+    });
+    return this;
+  }
+
+  /** Bind an exact metadata change to both captured physical images; Git facts remain source authority. */
+  coversSourceMetadataChange(current, { before, after, relativePath }) {
+    if (!(current instanceof SourceWorkerCanonicalObservationAdvance)
+      || !(before instanceof WorkerArtifactRepositoryMutationSnapshot)
+      || !(after instanceof WorkerArtifactRepositoryMutationSnapshot)) {
+      throw new TypeError("canonical metadata projection requires captured repository observations");
+    }
+    if (before.root !== after.root) return false;
+    const beforeSource = before.entries.find((entry) => entry.path === relativePath);
+    const afterSource = after.entries.find((entry) => entry.path === relativePath);
+    if (beforeSource === undefined || afterSource === undefined
+      || beforeSource.workingPath !== afterSource.workingPath
+      || stableStringify(beforeSource.git?.toJSON() ?? null) !== stableStringify(afterSource.git?.toJSON() ?? null)) return false;
+    const matches = (source, entry, canonical, canonicalEntry) => {
+      if (canonicalEntry === undefined) return false;
+      const nativeRoot = source.generation.equals(canonical.generation) ? ""
+        : source.entries.find((candidate) => candidate.kind === "directory"
+          && candidate.working.generation.equals(canonical.generation))?.workingPath;
+      return nativeRoot !== undefined
+        && entry.workingPath === path.posix.join(nativeRoot, canonicalEntry.workingPath)
+        && stableStringify(entry.working.toJSON()) === stableStringify(canonicalEntry.working.toJSON());
+    };
+    return this.mutablePaths.some((canonicalPath) => current.mutablePaths.includes(canonicalPath)
+      && matches(before, beforeSource, this.canonicalSnapshot,
+        this.canonicalSnapshot.entries.find((entry) => entry.path === canonicalPath))
+      && matches(after, afterSource, current.canonicalSnapshot,
+        current.canonicalSnapshot.entries.find((entry) => entry.path === canonicalPath)));
+  }
+
+  #assertAdvance({ current, activityBytes, currentSnapshot, executionObservations }) {
+    return assertCanonicalObservationAdvance({ observation: this, current, activityBytes, currentSnapshot,
+      allowedPublications: this.allowedPublications, executionObservations });
+  }
+
   #advanceTransitionView(view, canonicalSnapshot, advance) {
     if (view === null || typeof view !== "object" || !Array.isArray(view.activities)
       || view.location === null || typeof view.location.activitiesFile !== "string") {
@@ -3094,16 +3112,8 @@ export class SourceWorkerCanonicalObservationAdvance {
       runtimeLocks,
     });
     const activityBytes = captureRegularFile(view.location.activitiesFile, { label: "worker Activity journal", maxBytes: MAX_AUTHORITY_TOTAL_FILE_BYTES, requireSingleLink: true }).bytes;
-    const addedActivities = assertCanonicalObservationAdvance({
-      observation: this,
-      current,
-      activityBytes,
-      currentSnapshot,
-      allowedPublications: this.allowedPublications,
-      allowedActivityIds: this.allowedActivityIds,
-      allowedTaskReviewClaims: this.allowedTaskReviewClaims,
-      executionObservations: new SourceExecutionObservationAppends(view, canonicalSnapshot),
-    });
+    const addedActivities = this.#assertAdvance({ current, activityBytes, currentSnapshot,
+      executionObservations: new SourceExecutionObservationAppends(view, canonicalSnapshot) });
     if (!advance) return this;
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: current,
@@ -3123,16 +3133,8 @@ export class SourceWorkerCanonicalObservationAdvance {
   }
 }
 
-function assertCanonicalObservationAdvance({
-  observation,
-  current,
-  activityBytes,
-  currentSnapshot,
-  allowedPublications = [],
-  allowedActivityIds = [],
-  allowedTaskReviewClaims = [],
-  executionObservations,
-}) {
+function assertCanonicalActivityAdvance(observation, current) {
+  const { allowedPublications, allowedActivityIds, allowedTaskReviewClaims } = observation;
   const prefix = observation.prefixIdentity;
   if (current.length < prefix.activityCount) {
     throw new WorkerArtifactHandoffError(
@@ -3167,19 +3169,27 @@ function assertCanonicalObservationAdvance({
       { retryable: false },
     );
   }
-  const changedPaths = observation.canonicalSnapshot.allChangedPaths(currentSnapshot);
+  return addedActivities;
+}
+
+function assertCanonicalObservationAdvance({
+  observation,
+  current,
+  activityBytes,
+  currentSnapshot,
+  allowedPublications = [],
+  executionObservations,
+}) {
+  const prefix = observation.prefixIdentity;
+  const addedActivities = assertCanonicalActivityAdvance(observation, current);
+  const changedPaths = observation.canonicalSnapshot.observationChanges(currentSnapshot);
   const currentEntries = new Map(currentSnapshot.entries.map((entry) => [entry.path, entry]));
   const invalidPublication = allowedPublications.some((publication) => {
     const entry = currentEntries.get(publication.relativePath);
     return entry?.kind !== "file" || entry.digest !== publication.digest;
   });
-  const allowedPaths = new Set();
-  for (const publication of allowedPublications) {
-    const segments = publication.relativePath.split("/");
-    for (let length = 1; length <= segments.length; length += 1) {
-      allowedPaths.add(segments.slice(0, length).join("/"));
-    }
-  }
+  const allowedPaths = observation.canonicalSnapshot.publicationPaths(currentSnapshot,
+    allowedPublications.map((publication) => publication.relativePath));
   const unexpectedPaths = changedPaths.filter((entry) => (
     !observation.mutablePaths.includes(entry) && !allowedPaths.has(entry) && !executionObservations.allowsPath(entry)
   ));
@@ -3302,9 +3312,14 @@ export class DispatchExecutionRepositoryBinding {
   assertCurrent({ flowManager, request }) {
     const submission = request.hasSealedSubmission() ? readSubmission(request) : null;
     if (submission !== null) validateSubmission(request, submission);
+    // Refuse an unrelated canonical advance before Git observations can be published.
+    // The complete repository and canonical checks below still validate the after-image.
+    flowManager.readCanonicalTransitionView({ specId: request.specId, read: (view) => {
+      this.canonicalObservation.withConditionalWorkerExecution(view, request, submission);
+    } });
     for (const snapshot of [this.executionSnapshot, this.canonicalRepositorySnapshot].filter(Boolean)) {
       const current = WorkerArtifactRepositoryMutationSnapshot.capture(snapshot);
-      if (snapshot.digest !== current.digest && snapshot.allChangedPaths(current).length > 0) {
+      if (snapshot.allChangedPaths(current).length > 0) {
         throw new FlowExecutionContractRefusal("Repository outside the execution Version changed since its claim");
       }
     }
@@ -3409,7 +3424,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         )),
       });
     } catch (cause) {
-      if (cause instanceof WorkerArtifactHandoffError) throw cause;
+      if (cause instanceof WorkerArtifactHandoffError || cause instanceof ProcessExecutionControlFailure) throw cause;
       throw authoritySnapshotError(
         `worker artifact repository authority checkpoint is unavailable: ${cause.message}`,
         cause,
@@ -3444,7 +3459,8 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         ignoredDirectories: captured.ignoredDirectories,
         runtimeLocks: captured.runtimeLocks,
       });
-      if (current.digest === captured.digest) continue;
+      const changedPaths = captured.allChangedPaths(current);
+      if (changedPaths.length === 0) continue;
       throw new WorkerArtifactHandoffError(
         "invalid",
         "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION",
@@ -3453,7 +3469,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
           data: {
             specId: this.specId,
             authorities: captured.authorities,
-            changedPaths: captured.changedPaths(current),
+            changedPaths: changedPaths.slice(0, 20),
           },
         },
       );
@@ -3480,7 +3496,8 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         ignoredDirectories: captured.ignoredDirectories,
         runtimeLocks: captured.runtimeLocks,
       });
-      if (current.digest === captured.digest) continue;
+      const changedPaths = captured.allChangedPaths(current);
+      if (changedPaths.length === 0) continue;
       throw new WorkerArtifactHandoffError(
         "invalid",
         "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION",
@@ -3489,7 +3506,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
           data: {
             specId: this.specId,
             authorities: captured.authorities,
-            changedPaths: captured.changedPaths(current),
+            changedPaths: changedPaths.slice(0, 20),
           },
         },
       );
@@ -3529,7 +3546,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         runtimeLocks: captured.runtimeLocks,
       });
       const changed = captured.allChangedPaths(current);
-      if (changed.includes("<HEAD>") || changed.includes("<index>")) {
+      if (changed.some((entry) => entry.startsWith("<"))) {
         throw new WorkerArtifactHandoffError(
           "invalid",
           "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION",
@@ -3618,338 +3635,223 @@ export class WorkerArtifactMutationAuthoritySnapshot {
     return Object.freeze(unique);
   }
 
-  rollbackRejectedSourceMutation() {
+  rollbackRejectedSourceMutation({ journal = null } = {}) {
     if (!this.sourceMode || this.sourceRollbackCheckpoint === null) return;
     // This uses the same single-writer attribution as assertSourceDiff(): the
     // dispatcher holds FlowHandoffAuthorityLease until its registered executions
     // exit and this restore completes. This receipt does not prove that unrelated
     // external writers stopped. The checkpoint rechecks repository state before
     // applying any operation so an unstable handoff fails closed.
-    this.sourceRollbackCheckpoint.restore();
+    this.sourceRollbackCheckpoint.restore({ journal });
   }
 }
 
 class WorkerArtifactSourceRollbackEntry {
   #bytes;
-
-  constructor({ entry, bytes = null, target = null }) {
-    if (!(entry instanceof WorkerArtifactRepositoryEntry)) {
-      throw new Error("source rollback entry requires a repository entry");
+  constructor({ entry, bytes = null }) {
+    if (!(entry instanceof WorkerArtifactRepositoryEntry)) throw new TypeError("source rollback requires a typed repository entry");
+    if ((entry.kind === "file") !== Buffer.isBuffer(bytes) || (bytes !== null && digest(bytes) !== entry.digest)) {
+      throw new Error("source rollback entry requires its exact raw before-image");
     }
-    if (entry.kind === "file" && !Buffer.isBuffer(bytes)) {
-      throw new Error("source rollback file entry requires bytes");
-    }
-    if (entry.kind === "symlink" && typeof target !== "string") {
-      throw new Error("source rollback symlink entry requires a target");
-    }
-    if (["missing", "directory", "other"].includes(entry.kind) && (bytes !== null || target !== null)) {
-      throw new Error(`source rollback ${entry.kind} entry cannot carry content`);
-    }
-    if (entry.kind !== "file" && entry.kind !== "symlink" && !["missing", "directory", "other"].includes(entry.kind)) {
-      throw new Error(`invalid source rollback entry kind: ${entry.kind}`);
-    }
-    this.entry = entry;
-    this.#bytes = bytes === null ? null : Buffer.from(bytes);
-    this.target = target;
+    this.entry = entry; this.#bytes = bytes === null ? null : Buffer.from(bytes);
     Object.freeze(this);
   }
-
+  get bytes() { return this.#bytes === null ? null : Buffer.from(this.#bytes); }
   static capture(root, entry, budget) {
-    const absolute = path.join(root, entry.path);
-    if (entry.kind === "missing") return new WorkerArtifactSourceRollbackEntry({ entry });
-    if (entry.kind === "symlink") {
-      const target = fs.readlinkSync(absolute);
-      if (digest(target) !== entry.digest) throw new Error(`source rollback checkpoint changed while reading ${entry.path}`);
-      return new WorkerArtifactSourceRollbackEntry({ entry, target });
+    const captured = SourceWorkingFileCapture.capture(root, entry.workingPath, { maxBytes: MAX_AUTHORITY_FILE_BYTES,
+      budget: { get bytes() { return budget.bytes; }, set bytes(value) { budget.bytes = value; }, limit: MAX_AUTHORITY_TOTAL_FILE_BYTES }, retainBytes: true });
+    if (!entry.working.sameContent(captured.working)
+      || (entry.working.generation !== null && !entry.working.generation.equals(captured.working.generation))) {
+      throw new Error(`source rollback before-image changed during capture: ${entry.path}`);
     }
-    if (entry.kind === "directory" || entry.kind === "other") return new WorkerArtifactSourceRollbackEntry({ entry });
-    if (entry.kind !== "file") throw new Error(`source rollback cannot checkpoint ${entry.kind} path ${entry.path}`);
-    const file = captureRegularFile(absolute, {
-      label: `source rollback checkpoint ${entry.path}`,
-      maxBytes: MAX_AUTHORITY_FILE_BYTES,
-    });
-    budget.bytes += file.byteLength;
-    if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES || file.digest !== entry.digest) {
-      throw new Error(`source rollback checkpoint changed while reading ${entry.path}`);
-    }
-    return new WorkerArtifactSourceRollbackEntry({ entry, bytes: file.bytes });
+    return new this({ entry, bytes: captured.snapshot?.bytes ?? null });
   }
-
-  operation(root, { gitMode, currentMode = null }) {
-    const absolute = path.join(root, this.entry.path);
-    if (this.entry.kind === "directory") {
-      if (gitMode) throw new Error(`source rollback cannot restore Git directory path ${this.entry.path}`);
-      return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "directory", root, mode: this.entry.mode });
-    }
-    if (this.entry.kind === "missing") return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "remove", root });
-    if (this.entry.kind === "symlink") return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "symlink", root, target: this.target });
-    if (this.entry.kind === "file") return new WorkerArtifactSourceRollbackOperation({
-      absolute,
-      kind: "file",
-      root,
-      bytes: this.#bytes,
-      mode: gitMode ? gitRollbackFileMode(this.entry.mode, currentMode) : this.entry.mode,
-    });
-    throw new Error(`source rollback cannot restore ${this.entry.kind} path ${this.entry.path}`);
-  }
-
-  toBlobJSON() {
-    return {
-      entry: this.entry.toJSON(),
-      bytes: this.entry.kind === "file" ? this.#bytes.toString("base64") : null,
-      target: this.entry.kind === "symlink" ? this.target : null,
-    };
-  }
+  toBlobJSON() { return { entry: this.entry.toJSON(), bytes: this.#bytes?.toString("base64") ?? null }; }
 }
 
 class WorkerArtifactSourceRollbackOperation {
-  #bytes;
-
-  constructor({ absolute, root, kind, bytes = null, mode = null, target = null }) {
-    this.absolute = path.resolve(absolute);
-    this.root = path.resolve(root);
-    if (!isWithin(this.root, this.absolute)) throw new Error("source rollback operation escapes its repository");
-    if (!new Set(["remove", "remove-directory", "directory", "file", "symlink"]).has(kind)) {
-      throw new Error(`invalid source rollback operation kind: ${kind}`);
-    }
-    if ((kind === "file" || kind === "directory") && (!Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777)) {
-      throw new Error(`source rollback ${kind} operation requires a mode`);
-    }
-    if (kind === "file" && !Buffer.isBuffer(bytes)) {
-      throw new Error("source rollback file operation requires bytes and mode");
-    }
-    if (kind === "symlink" && typeof target !== "string") {
-      throw new Error("source rollback symlink operation requires a target");
-    }
-    this.kind = kind;
-    this.#bytes = bytes === null ? null : Buffer.from(bytes);
-    this.mode = mode;
-    this.target = target;
+  constructor({ root, relativePath, before, current, stage, commitGuard, didPublish, targetWorkingPath, journal = null }) {
+    this.root = root; this.relativePath = relativePath; this.targetWorkingPath = targetWorkingPath;
+    this.before = before; this.current = current; this.stage = stage; this.commitGuard = commitGuard; this.didPublish = didPublish; this.journal = journal;
+    const beforeKind = before?.entry.kind ?? "missing";
+    this.kind = beforeKind === "missing" ? current.kind === "directory" ? "remove-directory" : "remove" : beforeKind;
     Object.freeze(this);
   }
-
+  get absolute() { return path.join(this.root, this.targetWorkingPath()); }
+  #receipt(operation, after, before = this.current.working, beforeMode = this.current.mode) {
+    const receipt = new SourceRollbackOperationReceipt({ path: this.relativePath, workingPath: this.targetWorkingPath(), operation, phase: "prepared", before, after,
+      beforeMode, afterMode: operation === "remove" ? null : this.before?.entry.mode ?? null });
+    this.journal?.record(receipt);
+    return receipt;
+  }
+  #published(receipt) {
+    const captured = SourceWorkingFileCapture.capture(this.root, receipt.workingPath, { maxBytes: MAX_AUTHORITY_FILE_BYTES });
+    if (!receipt.matches(captured.working)) throw new Error(`source publication readback lost its owned generation: ${this.relativePath}`);
+    this.didPublish(receipt);
+    this.commitGuard();
+    this.journal?.record(receipt.published());
+  }
   apply() {
-    if (this.kind === "remove") {
-      removeSourceRollbackPath(this.absolute);
-      return;
-    }
-    if (this.kind === "remove-directory") {
-      removeEmptySourceRollbackDirectory(this.absolute);
+    this.commitGuard();
+    if (["remove-directory", "remove"].includes(this.kind)) {
+      const directory = this.kind === "remove-directory" ? new RealDirectoryAuthority(this.absolute) : null;
+      if (directory !== null && !this.current.working.generation.equals(FileIdentity.capture(directory.identity))) throw new Error(`source rollback directory generation changed: ${this.relativePath}`);
+      const receipt = this.#receipt("remove", new SourceWorkingFile({ kind: "missing" }));
+      if (directory !== null) { this.commitGuard(); directory.remove(); }
+      else if (this.current.kind !== "missing") new AtomicFile(this.absolute, { commitGuard: this.commitGuard }).remove();
+      this.#published(receipt);
       return;
     }
     if (this.kind === "directory") {
-      let stat = null;
-      try {
-        stat = fs.lstatSync(this.absolute);
-      } catch (cause) {
-        if (cause.code !== "ENOENT") throw cause;
+      let current = this.current.working;
+      if (this.current.kind === "file") {
+        const removal = this.#receipt("remove", new SourceWorkingFile({ kind: "missing" }));
+        new AtomicFile(this.absolute, { commitGuard: this.commitGuard }).remove();
+        this.#published(removal);
+        current = removal.after;
       }
-      if (stat !== null && (!stat.isDirectory() || stat.isSymbolicLink())) removeSourceRollbackPath(this.absolute);
-      ensureRealDirectory(this.absolute, this.root);
-      fs.chmodSync(this.absolute, this.mode);
+      if (current.kind === "directory") return;
+      const parent = RealDirectoryAuthority.resolve(path.dirname(this.absolute), { create: true });
+      const staged = parent.createExclusiveChild(`.${path.basename(this.absolute)}.${crypto.randomUUID()}.source-restore`);
+      const after = new SourceWorkingFile({ kind: "directory", generation: FileIdentity.capture(staged.identity) });
+      let moved = false;
+      try {
+        const receipt = this.#receipt("directory", after, current, null);
+        staged.moveTo(this.absolute, { commitGuard: () => this.commitGuard({ tempPath: staged.directory }) });
+        moved = true;
+        this.#published(receipt);
+      } catch (cause) {
+        completeManagedOperationSync(() => { throw cause; }, () => {
+          if (!moved && cause.committedToVisibleName !== true && staged.exists()) staged.remove();
+        });
+      }
       return;
     }
-    removeSourceRollbackPath(this.absolute);
+    let current = this.current.working;
+    if (current.kind === "directory") {
+      const directory = new RealDirectoryAuthority(this.absolute);
+      if (!current.generation.equals(FileIdentity.capture(directory.identity))) throw new Error(`source rollback directory generation changed: ${this.relativePath}`);
+      const removal = this.#receipt("remove", new SourceWorkingFile({ kind: "missing" }));
+      this.commitGuard(); directory.remove(); this.#published(removal);
+      current = removal.after;
+    }
     ensureRealDirectory(path.dirname(this.absolute), this.root);
-    if (this.kind === "symlink") {
-      fs.symlinkSync(this.target, this.absolute);
-      return;
+    const produced = this.stage?.snapshot(this.relativePath) ?? null;
+    const writer = new AtomicFile(this.absolute, { maxBytes: MAX_AUTHORITY_FILE_BYTES,
+      permissionHint: produced?.permissionHint ?? null, commitGuard: this.commitGuard, phaseNamespace: "source-restore" });
+    const staged = writer.createStage(produced?.bytes ?? this.before.bytes);
+    try {
+      writer.adoptStage(staged);
+      const expected = new SourceWorkingFile({ kind: "file", digest: this.before.entry.digest, generation: FileIdentity.capture(staged.identity) });
+      const receipt = this.#receipt("write", expected, current, current.kind === "missing" ? null : this.current.mode);
+      writer.publishStage(staged);
+      this.#published(receipt);
+    } catch (cause) {
+      completeManagedOperationSync(() => { throw cause; }, () => { if (staged.active) staged.dispose(); });
     }
-    new AtomicFile(this.absolute).write(this.#bytes, { exclusive: true });
-    fs.chmodSync(this.absolute, this.mode);
   }
-}
-
-function removeSourceRollbackPath(absolute) {
-  let stat;
-  try {
-    stat = fs.lstatSync(absolute);
-  } catch (cause) {
-    if (cause.code === "ENOENT") return;
-    throw cause;
-  }
-  if (stat.isDirectory() && !stat.isSymbolicLink()) {
-    throw new Error(`source rollback refuses to replace directory ${absolute}`);
-  }
-  if (stat.isFile()) new AtomicFile(absolute).remove();
-  else fs.unlinkSync(absolute); // Source symlink/special-entry semantics belong to its domain codec.
-}
-
-function removeEmptySourceRollbackDirectory(absolute) {
-  let stat;
-  try {
-    stat = fs.lstatSync(absolute);
-  } catch (cause) {
-    if (cause.code === "ENOENT") return;
-    throw cause;
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(`source rollback expected a directory at ${absolute}`);
-  }
-  new RealDirectoryAuthority(absolute).remove();
-}
-
-function indexedSourceRollbackEntry(root, relativePath) {
-  const listing = boundedGitOutput(root, ["ls-files", "--stage", "-z", "--", relativePath], "Git index path");
-  const records = listing.toString("utf8").split("\u0000").filter(Boolean);
-  if (records.length === 0) return null;
-  if (records.length !== 1) throw new Error(`source rollback requires one Git index entry for ${relativePath}`);
-  const match = /^(100644|100755|120000) [a-f0-9]{40,64} 0\t/.exec(records[0]);
-  if (match === null || records[0].slice(match[0].length) !== relativePath) {
-    throw new Error(`source rollback received an invalid Git index entry for ${relativePath}`);
-  }
-  return Number.parseInt(match[1], 8);
-}
-
-function gitRollbackFileMode(baselineMode, currentMode) {
-  if (currentMode === null) return baselineMode;
-  const currentGitMode = (currentMode & 0o100) === 0 ? 0o644 : 0o755;
-  return currentGitMode === baselineMode ? currentMode : baselineMode;
-}
-
-function indexedSourceRollbackOperation(root, relativePath, budget, { currentMode = null } = {}) {
-  const mode = indexedSourceRollbackEntry(root, relativePath);
-  const absolute = path.join(root, relativePath);
-  if (mode === null) return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "remove", root });
-  const bytes = boundedGitOutput(root, ["show", `:${relativePath}`], `Git index content for ${relativePath}`);
-  budget.bytes += bytes.length;
-  if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES) {
-    throw new Error(`source rollback index content exceeds ${MAX_AUTHORITY_TOTAL_FILE_BYTES} bytes`);
-  }
-  if (mode === 0o120000) {
-    return new WorkerArtifactSourceRollbackOperation({
-      absolute,
-      kind: "symlink",
-      root,
-      target: bytes.toString("utf8"),
-    });
-  }
-  return new WorkerArtifactSourceRollbackOperation({
-    absolute,
-    kind: "file",
-    root,
-    bytes,
-    mode: gitRollbackFileMode(mode & 0o777, currentMode),
-  });
-}
-
-function filesystemSourceRollbackOperation(root, relativePath, currentEntry) {
-  return new WorkerArtifactSourceRollbackOperation({
-    absolute: path.join(root, relativePath),
-    kind: currentEntry.kind === "directory" ? "remove-directory" : "remove",
-    root,
-  });
 }
 
 class WorkerArtifactSourceRollbackRepositoryCheckpoint {
-  constructor(snapshot, { entries = null } = {}) {
+  constructor(snapshot, { entries = null, capability = null } = {}) {
     this.snapshot = snapshot;
     const budget = { bytes: 0 };
     this.entries = entries ?? new Map(snapshot.entries.map((entry) => [
       entry.path, WorkerArtifactSourceRollbackEntry.capture(snapshot.root, entry, budget),
     ]));
+    const entriesDigest = digest(stableStringify([...this.entries.values()].map((entry) => entry.toBlobJSON())));
+    if (capability === null) {
+      if (snapshot.mode === "git") {
+        const stage = new SourceGitRestoreStage({ root: snapshot.root, gitState: snapshot.gitState,
+          entries: this.entries.values(), maxBytes: MAX_AUTHORITY_FILE_BYTES });
+        stage.dispose();
+      }
+      this.capability = new SourceRestoreCapability({ snapshotDigest: snapshot.digest, entriesDigest, gitState: snapshot.gitState });
+    } else {
+      this.capability = capability instanceof SourceRestoreCapability ? capability : SourceRestoreCapability.fromStored(capability);
+      if (this.capability.snapshotDigest !== snapshot.digest || this.capability.entriesDigest !== entriesDigest
+        || stableStringify(this.capability.gitState?.toJSON() ?? null) !== stableStringify(snapshot.gitState?.toJSON() ?? null)) {
+        throw new Error("source restore capability does not bind its checkpoint before-images");
+      }
+    }
     Object.freeze(this);
   }
-
   static fromBlob(value, { root, runtimeLocks = [] } = {}) {
-    if (value === null || typeof value !== "object" || Array.isArray(value)
-      || value.snapshot === null || !Array.isArray(value.entries)) {
-      throw new Error("source rollback blob repository is invalid");
-    }
-    const snapshot = WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, {
-      root, authorities: ["execution"], runtimeLocks,
-    });
+    exactObjectKeys(value, ["snapshot", "entries", "capability"], "source rollback repository");
+    const snapshot = WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root, authorities: ["execution"], runtimeLocks });
+    if (!Array.isArray(value.entries)) throw new Error("source rollback repository entries must be an array");
     const entries = new Map(value.entries.map((stored) => {
-      if (stored === null || typeof stored !== "object" || stored.entry === null) {
-        throw new Error("source rollback blob entry is invalid");
-      }
-      const entry = new WorkerArtifactRepositoryEntry(stored.entry);
-      const bytes = stored.bytes === null ? null : base64Bytes(stored.bytes, "source rollback blob bytes");
-      const target = stored.target === null ? null : requiredString(stored.target, "source rollback blob symlink target");
-      if (entry.kind === "file" && digest(bytes) !== entry.digest) throw new Error("source rollback blob file digest is invalid");
-      if (entry.kind === "symlink" && digest(target) !== entry.digest) throw new Error("source rollback blob symlink digest is invalid");
-      return [entry.path, new WorkerArtifactSourceRollbackEntry({ entry, bytes, target })];
+      exactObjectKeys(stored, ["entry", "bytes"], "source rollback entry");
+      const entry = WorkerArtifactRepositoryEntry.fromStored(stored.entry);
+      return [entry.path, new WorkerArtifactSourceRollbackEntry({ entry,
+        bytes: stored.bytes === null ? null : base64Bytes(stored.bytes, "source rollback raw bytes") })];
     }));
-    if (entries.size !== snapshot.entries.length || [...entries.keys()].some((key) => !snapshot.entries.some((entry) => entry.path === key))) {
-      throw new Error("source rollback blob entries do not match its baseline");
+    if (entries.size !== snapshot.entries.length || value.entries.length !== entries.size
+      || snapshot.entries.some((entry) => stableStringify(entries.get(entry.path)?.entry.toJSON()) !== stableStringify(entry.toJSON()))) {
+      throw new Error("source rollback entries differ from their immutable baseline");
     }
-    for (const snapshotEntry of snapshot.entries) {
-      const rollbackEntry = entries.get(snapshotEntry.path);
-      if (rollbackEntry === undefined
-        || stableStringify(rollbackEntry.entry.toJSON()) !== stableStringify(snapshotEntry.toJSON())) {
-        throw new Error("source rollback blob entry metadata does not match its baseline");
-      }
-    }
-    return new WorkerArtifactSourceRollbackRepositoryCheckpoint(snapshot, { entries });
+    return new this(snapshot, { entries, capability: SourceRestoreCapability.fromStored(value.capability) });
   }
-
-  restore() {
-    const current = WorkerArtifactRepositoryMutationSnapshot.capture(this.snapshot);
+  restore({ journal = null } = {}) {
+    const current = journal?.assertCurrent(this.snapshot) ?? WorkerArtifactRepositoryMutationSnapshot.capture(this.snapshot);
     const changed = this.snapshot.allChangedPaths(current);
-    if (changed.includes("<HEAD>") || changed.includes("<index>")) {
-      throw new Error("source rollback refuses committed or staged changes");
+    if (changed.some((entry) => entry.startsWith("<"))) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION",
+        "source rollback refuses changed repository HEAD, index, flags, refs, configuration or physical authority", { retryable: false });
     }
-    const paths = changed.filter((entry) => !entry.startsWith("<")).sort();
+    const paths = changed.sort();
     const forbidden = paths.filter((entry) => entry.startsWith(".sennel/") || entry.startsWith("specs/"));
     if (forbidden.length > 0) throw new Error(`source rollback refuses canonical or runtime paths: ${forbidden.join(", ")}`);
     const currentEntries = new Map(current.entries.map((entry) => [entry.path, entry]));
-    const budget = { bytes: 0 };
-    const currentStates = new Map();
-    const currentModes = new Map();
-    const restoreBudget = { bytes: 0 };
-    for (const relativePath of paths) {
-      const captured = authorityFileEntry(this.snapshot.root, relativePath, budget);
-      const actual = this.snapshot.mode === "git" ? gitVisibleAuthorityEntry(captured) : captured;
-      const listed = currentEntries.get(relativePath);
-      if (listed !== undefined && stableStringify(actual.toJSON()) !== stableStringify(listed.toJSON())) {
-        throw new Error(`source rollback cannot prove ownership of ${relativePath}`);
+    // A surviving regular target keeps its stopped native leaf spelling.
+    // A directory is removed before a regular before-image is written, so that
+    // materialization retains the baseline native leaf.
+    const targetWorkingPaths = new Map(paths.filter((relativePath) => currentEntries.get(relativePath)?.kind === "file")
+      .map((relativePath) => [relativePath, SourceRollbackOperationReceipt.targetWorkingPath(relativePath, {
+        baselineEntries: this.snapshot.entries, stoppedEntries: current.entries, operations: new Map() })]));
+    const stage = this.snapshot.mode === "git" && paths.some((entry) => this.entries.get(entry)?.entry.kind === "file")
+      ? new SourceGitRestoreStage({ root: this.snapshot.root, gitState: this.snapshot.gitState,
+        entries: paths.flatMap((entry) => this.entries.has(entry) ? [this.entries.get(entry)] : []), maxBytes: MAX_AUTHORITY_FILE_BYTES, targetWorkingPaths }) : null;
+    return completeManagedOperationSync(() => {
+      const expected = new Map(current.entries.map((entry) => [entry.path, { working: entry.working, mode: entry.mode, workingPath: entry.workingPath }]));
+      const publications = new Map();
+      const commitGuard = (event = null) => {
+        const observed = WorkerArtifactRepositoryMutationSnapshot.capture({ ...this.snapshot, ignoredDirectories: [...this.snapshot.ignoredDirectories, ...(event?.tempPath ? [path.relative(this.snapshot.root, event.tempPath).split(path.sep).join("/")] : [])] });
+        const control = current.allChangedPaths(observed).filter((entry) => entry.startsWith("<"));
+        if (control.length > 0) throw new Error(`source rollback lost its repository authority: ${control.join(", ")}`);
+        const actual = new Map(observed.entries.map((entry) => [entry.path, entry]));
+        for (const relativePath of new Set([...expected.keys(), ...actual.keys()])) {
+          const wanted = expected.get(relativePath) ?? { working: new SourceWorkingFile({ kind: "missing" }), mode: null };
+          const entry = actual.get(relativePath);
+          const working = entry?.working ?? new SourceWorkingFile({ kind: "missing" });
+          if (!wanted.working.sameContent(working) || wanted.mode !== (entry?.mode ?? null)
+            || working.kind !== "missing" && wanted.workingPath !== entry.workingPath
+            || (wanted.working.generation === null ? working.generation !== null : !wanted.working.generation.equals(working.generation))) {
+            throw new Error(`source rollback lost its source generation: ${relativePath}`);
+          }
+        }
+      };
+      commitGuard();
+      const operations = paths.map((relativePath) => new WorkerArtifactSourceRollbackOperation({ root: this.snapshot.root, relativePath,
+        journal, before: this.entries.get(relativePath) ?? null, current: currentEntries.get(relativePath) ?? WorkerArtifactRepositoryEntry.missing(relativePath), stage,
+        commitGuard,
+        targetWorkingPath: () => SourceRollbackOperationReceipt.targetWorkingPath(relativePath, {
+          baselineEntries: this.snapshot.entries, stoppedEntries: current.entries, operations: publications }),
+        didPublish: (receipt) => {
+          publications.set(relativePath, receipt.published());
+          expected.set(relativePath, { working: receipt.after, mode: receipt.afterMode, workingPath: receipt.workingPath });
+        } }));
+      const removals = new Set(["remove", "remove-directory"]);
+      const ordered = [...operations.filter((entry) => removals.has(entry.kind)).sort((left, right) => right.absolute.localeCompare(left.absolute)),
+        ...operations.filter((entry) => !removals.has(entry.kind))];
+      for (const operation of ordered) {
+        operation.apply();
       }
-      currentStates.set(relativePath, actual);
-      currentModes.set(relativePath, captured.kind === "file" ? captured.mode : null);
-    }
-    const operations = [];
-    for (const relativePath of paths) {
-      const checkpoint = this.entries.get(relativePath);
-      const operation = checkpoint !== undefined
-        ? (checkpoint.entry.kind === "missing" && currentStates.get(relativePath).kind === "directory"
-            ? new WorkerArtifactSourceRollbackOperation({
-                absolute: path.join(this.snapshot.root, relativePath), kind: "remove-directory", root: this.snapshot.root,
-              })
-            : checkpoint.operation(this.snapshot.root, {
-                gitMode: this.snapshot.mode === "git",
-                currentMode: currentModes.get(relativePath),
-              }))
-        : this.snapshot.mode === "git"
-          ? indexedSourceRollbackOperation(this.snapshot.root, relativePath, restoreBudget, {
-              currentMode: currentModes.get(relativePath),
-            })
-          : filesystemSourceRollbackOperation(
-            this.snapshot.root,
-            relativePath,
-            currentStates.get(relativePath),
-          );
-      const currentEntry = currentStates.get(relativePath);
-      if (currentEntry.kind === "directory" && !["directory", "remove-directory"].includes(operation.kind)) {
-        throw new Error(`source rollback refuses to replace directory ${relativePath}`);
-      }
-      operations.push(operation);
-    }
-    const verifiedBudget = { bytes: 0 };
-    for (const relativePath of paths) {
-      const captured = authorityFileEntry(this.snapshot.root, relativePath, verifiedBudget);
-      const actual = this.snapshot.mode === "git" ? gitVisibleAuthorityEntry(captured) : captured;
-      if (stableStringify(actual.toJSON()) !== stableStringify(currentStates.get(relativePath).toJSON())) {
-        throw new Error(`source rollback cannot prove ownership of ${relativePath}`);
-      }
-    }
-    const verified = WorkerArtifactRepositoryMutationSnapshot.capture(this.snapshot);
-    if (verified.digest !== current.digest) {
-      throw new Error("source rollback cannot prove repository ownership after checkpoint verification");
-    }
-    const regular = operations.filter((operation) => operation.kind !== "remove-directory");
-    const directories = operations.filter((operation) => operation.kind === "remove-directory");
-    for (const operation of regular) operation.apply();
-    for (const operation of directories.sort((left, right) => right.absolute.localeCompare(left.absolute))) operation.apply();
+      commitGuard();
+      const final = WorkerArtifactRepositoryMutationSnapshot.capture(this.snapshot);
+      const remaining = this.snapshot.allChangedPaths(final);
+      if (remaining.length !== 0) throw new Error(`source restore final readback differs from its baseline: ${remaining.join(", ")}`);
+    }, () => stage?.dispose());
   }
 }
 
@@ -3963,10 +3865,11 @@ export class WorkerArtifactSourceRollbackCheckpoint {
     Object.freeze(this);
   }
 
-  restore() {
+  restore({ journal = null } = {}) {
     try {
-      for (const repository of this.repositories) repository.restore();
+      for (const repository of this.repositories) repository.restore({ journal });
     } catch (cause) {
+      if (cause instanceof WorkerArtifactHandoffError) throw cause;
       throw new WorkerArtifactHandoffError(
         "recovery-required",
         "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
@@ -3983,10 +3886,11 @@ export class WorkerArtifactSourceRollbackCheckpoint {
    */
   blobBytes() {
     const document = {
-      version: 1,
+      version: SOURCE_STATE_VERSION,
       repositories: this.repositories.map((repository) => ({
         snapshot: repository.snapshot.toJSON(),
         entries: [...repository.entries.values()].map((entry) => entry.toBlobJSON()),
+        capability: repository.capability.toJSON(),
       })),
     };
     return Buffer.from(`${JSON.stringify(document)}\n`);
@@ -3999,7 +3903,8 @@ export class WorkerArtifactSourceRollbackCheckpoint {
     } catch (cause) {
       throw new Error(`source rollback blob is malformed: ${cause.message}`);
     }
-    if (document?.version !== 1 || !Array.isArray(document.repositories)) {
+    exactObjectKeys(document, ["version", "repositories"], "source rollback blob");
+    if (document?.version !== SOURCE_STATE_VERSION || !Array.isArray(document.repositories)) {
       throw new Error("source rollback blob version is invalid");
     }
     return new WorkerArtifactSourceRollbackCheckpoint(document.repositories.map((repository) => (
@@ -4014,7 +3919,7 @@ function sourceHandoffPolicyRevision(policy) {
     throw new Error("source handoff policy revision requires a source policy");
   }
   return digest(stableStringify({
-    protocolVersion: 1,
+    protocolVersion: 2,
     stepId: policy.stepId,
     kind: policy.kind,
     preservesRejectedSource: policy.preservesRejectedSource,
@@ -4133,7 +4038,7 @@ export class CanonicalSourceHandoffCheckpoint {
 
   unsignedJSON() {
     return {
-      version: 1, identity: this.identity.toJSON(), baseline: this.baseline.toJSON(),
+      version: SOURCE_STATE_VERSION, identity: this.identity.toJSON(), baseline: this.baseline.toJSON(),
       canonicalObservation: this.canonicalObservation.storedJSON(), rollbackBlobDigest: this.rollbackBlobDigest,
       allowedCanonicalPaths: [...this.allowedCanonicalPaths], producer: this.producer,
     };
@@ -4142,8 +4047,9 @@ export class CanonicalSourceHandoffCheckpoint {
 
   static fromStored(value, { root, canonicalLocation } = {}) {
     exactObjectKeys(value, ["version", "identity", "baseline", "canonicalObservation", "rollbackBlobDigest", "allowedCanonicalPaths", "producer", "digest"], "source handoff checkpoint");
-    if (value.version !== 1) throw new Error("source handoff checkpoint version is invalid");
-    return new CanonicalSourceHandoffCheckpoint({
+    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source handoff checkpoint version is invalid");
+    requiredDigest(value.digest, "source handoff checkpoint digest");
+    const checkpoint = new CanonicalSourceHandoffCheckpoint({
       identity: value.identity,
       baseline: SourceMutationBaseline.fromStored(value.baseline, { root }),
       canonicalObservation: SourceWorkerCanonicalObservationAdvance.fromStored(value.canonicalObservation, { canonicalLocation }),
@@ -4152,20 +4058,24 @@ export class CanonicalSourceHandoffCheckpoint {
       producer: value.producer,
       digest: value.digest,
     });
+    assertWorkerArtifactStoredValue(value, checkpoint.toJSON(), "source handoff checkpoint");
+    return checkpoint;
   }
 }
 
 /** One append-only protocol event, linked by the preceding event digest. */
 export class SourceHandoffEvent {
-  constructor({ identity, checkpointDigest, sequence, previousDigest = null, kind, requestDigest = null, rollbackPlanDigest = null, sourceManifest = null, workerStopped = null, failureFacts = null, processStopEvidence = null, digest: storedDigest = null } = {}) {
+  constructor({ identity, checkpointDigest, sequence, previousDigest = null, kind, requestDigest = null, rollbackPlanDigest = null, sourceManifest = null, workerStopped = null, failureFacts = null, processStopEvidence = null, rollbackOperation = null, digest: storedDigest = null } = {}) {
     this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
     this.checkpointDigest = requiredDigest(checkpointDigest, "source handoff event checkpoint digest");
     if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("source handoff event sequence is invalid");
     this.sequence = sequence;
     this.previousDigest = previousDigest === null ? null : requiredDigest(previousDigest, "source handoff event previous digest");
     if ((sequence === 1) !== (this.previousDigest === null)) throw new Error("source handoff event chain is invalid");
-    if (!new Set(["prepared", "start-intent", "worker-exited", "rollback-intent", "failure"]).has(kind)) throw new Error("source handoff event kind is invalid");
+    if (!new Set(["prepared", "start-intent", "worker-exited", "rollback-intent", "rollback-progress", "failure"]).has(kind)) throw new Error("source handoff event kind is invalid");
     this.kind = kind;
+    this.rollbackOperation = rollbackOperation === null ? null : rollbackOperation instanceof SourceRollbackOperationReceipt ? rollbackOperation : SourceRollbackOperationReceipt.fromStored(rollbackOperation);
+    if ((kind === "rollback-progress") !== (this.rollbackOperation !== null)) throw new Error("source rollback progress requires its exact operation receipt");
     this.requestDigest = requestDigest === null ? null : requiredDigest(requestDigest, "source handoff event request digest");
     this.rollbackPlanDigest = rollbackPlanDigest === null ? null : requiredDigest(rollbackPlanDigest, "source handoff rollback plan digest");
     this.sourceManifest = sourceManifest === null ? null : (sourceManifest instanceof SourceMutationManifest ? sourceManifest : SourceMutationManifest.fromStored(sourceManifest));
@@ -4201,6 +4111,7 @@ export class SourceHandoffEvent {
     if (kind === "rollback-intent" && (this.requestDigest !== null || this.rollbackPlanDigest === null || this.sourceManifest === null || this.workerStopped !== null || this.failureFacts !== null)) {
       throw new Error("source handoff rollback-intent requires only plan and observed source manifest");
     }
+    if (kind === "rollback-progress" && (this.requestDigest !== null || this.rollbackPlanDigest === null || this.sourceManifest !== null || this.workerStopped !== null || this.failureFacts !== null)) throw new Error("source rollback progress carries only its plan and operation");
     if (kind === "failure" && (this.requestDigest === null || this.rollbackPlanDigest !== null || this.sourceManifest !== null || this.workerStopped !== null || this.failureFacts === null)) {
       throw new Error("source handoff failure requires its request and typed facts");
     }
@@ -4212,27 +4123,28 @@ export class SourceHandoffEvent {
     if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff event digest")) throw new Error("source handoff event digest does not match its content");
     Object.freeze(this);
   }
-  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, sequence: this.sequence, previousDigest: this.previousDigest, kind: this.kind, requestDigest: this.requestDigest, rollbackPlanDigest: this.rollbackPlanDigest, sourceManifest: this.sourceManifest?.toJSON() ?? null, workerStopped: this.workerStopped, failureFacts: this.failureFacts?.toJSON() ?? null,
-    ...(this.processStopEvidence === null ? {} : { processStopEvidence: this.processStopEvidence.toJSON() }) }; }
+  unsignedJSON() { return { version: SOURCE_STATE_VERSION, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, sequence: this.sequence, previousDigest: this.previousDigest, kind: this.kind, requestDigest: this.requestDigest, rollbackPlanDigest: this.rollbackPlanDigest, sourceManifest: this.sourceManifest?.toJSON() ?? null, workerStopped: this.workerStopped, failureFacts: this.failureFacts?.toJSON() ?? null, rollbackOperation: this.rollbackOperation?.toJSON() ?? null,
+    ...(this.processStopEvidence === null ? {} : { processStopEvidence: this.processStopEvidence.toArtifactJSON() }) }; }
   toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
-  static fromStored(value) {
+  static fromStored(value, { processEvidence = null } = {}) {
     exactObjectKeys(value, [
       "version", "identity", "checkpointDigest", "sequence", "previousDigest", "kind",
-      "requestDigest", "rollbackPlanDigest", "sourceManifest", "workerStopped", "failureFacts", "digest",
+      "requestDigest", "rollbackPlanDigest", "sourceManifest", "workerStopped", "failureFacts", "rollbackOperation", "digest",
       ...(Object.hasOwn(value, "processStopEvidence") ? ["processStopEvidence"] : []),
     ], "source handoff event");
-    if (value.version !== 1) throw new Error("source handoff event version is invalid");
+    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source handoff event version is invalid");
+    requiredDigest(value.digest, "source handoff event digest");
     const event = new SourceHandoffEvent({
       ...value,
+      processStopEvidence: value.processStopEvidence == null ? null
+        : FlowProcessStopEvidence.fromStored(value.processStopEvidence, { processEvidence }),
       sourceManifest: value.sourceManifest === null ? null : SourceMutationManifest.fromStored(value.sourceManifest),
       failureFacts: value.failureFacts === null ? null : new SourceHandoffFailureFacts({
         ...value.failureFacts,
         identity: value.failureFacts.identity === null ? null : new SourceWorkerHandoffIdentity(value.failureFacts.identity),
       }),
     });
-    if (value.failureFacts !== null && stableStringify(event.failureFacts.toJSON()) !== stableStringify(value.failureFacts)) {
-      throw new Error("source handoff failure facts contain unknown or inconsistent fields");
-    }
+    assertWorkerArtifactStoredValue(value, event.toJSON(), "source handoff event");
     return event;
   }
 }
@@ -4251,12 +4163,15 @@ export class SourceHandoffSettlement {
     if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff settlement digest")) throw new Error("source handoff settlement digest does not match its content");
     Object.freeze(this);
   }
-  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, handoffDigest: this.handoffDigest, eventDigest: this.eventDigest, kind: this.kind }; }
+  unsignedJSON() { return { version: SOURCE_STATE_VERSION, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, handoffDigest: this.handoffDigest, eventDigest: this.eventDigest, kind: this.kind }; }
   toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
   static fromStored(value) {
     exactObjectKeys(value, ["version", "identity", "checkpointDigest", "handoffDigest", "eventDigest", "kind", "digest"], "source handoff settlement");
-    if (value.version !== 1) throw new Error("source handoff settlement version is invalid");
-    return new SourceHandoffSettlement(value);
+    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source handoff settlement version is invalid");
+    requiredDigest(value.digest, "source handoff settlement digest");
+    const settlement = new SourceHandoffSettlement(value);
+    assertWorkerArtifactStoredValue(value, settlement.toJSON(), "source handoff settlement");
+    return settlement;
   }
 }
 
@@ -4284,7 +4199,7 @@ export class SourceHandoffRollbackPlan {
 
   unsignedJSON() {
     return {
-      version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest,
+      version: SOURCE_STATE_VERSION, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest,
       rollbackBlobDigest: this.rollbackBlobDigest, sourceManifest: this.sourceManifest.toJSON(), facts: this.facts.toJSON(),
     };
   }
@@ -4302,6 +4217,61 @@ export class SourceHandoffRollbackPlan {
       sourceManifest: rollbackEvent.sourceManifest, facts: failureEvent.failureFacts,
       digest: rollbackEvent.rollbackPlanDigest,
     });
+  }
+}
+
+/** Durable per-operation progress on the existing source handoff event chain. */
+class SourceRollbackJournal {
+  constructor({ flowManager, specId, checkpoint, plan }) {
+    this.flowManager = flowManager; this.specId = specId; this.checkpoint = checkpoint; this.plan = plan;
+  }
+  authority() {
+    return this.flowManager.readSourceHandoffAuthority({ specId: this.specId, identity: this.checkpoint.identity });
+  }
+  record(receipt) {
+    const authority = this.authority();
+    const event = new SourceHandoffEvent({ identity: this.checkpoint.identity, checkpointDigest: this.checkpoint.digest,
+      sequence: authority.event.sequence + 1, previousDigest: authority.event.digest, kind: "rollback-progress",
+      rollbackPlanDigest: this.plan.digest, rollbackOperation: receipt });
+    this.flowManager.appendSourceHandoffEvent({ specId: this.specId, event });
+  }
+  assertCurrent(snapshot) {
+    const authority = this.authority();
+    const operations = new Map(authority.events.filter((event) => event.kind === "rollback-progress")
+      .map((event) => [event.rollbackOperation.path, event.rollbackOperation]));
+    const current = WorkerArtifactRepositoryMutationSnapshot.capture(snapshot);
+    const mutations = new Map(this.plan.sourceManifest.mutations.map((entry) => [entry.path, entry]));
+    const stoppedEntries = new Map(this.plan.sourceManifest.observations.map((entry) => [entry.path, entry]));
+    const actual = new Map(current.entries.map((entry) => [entry.path, entry]));
+    const changed = snapshot.allChangedPaths(current);
+    if (changed.some((entry) => entry.startsWith("<") || !mutations.has(entry))) throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", "source rollback observed an out-of-scope or repository control mutation");
+    for (const [relativePath, mutation] of mutations) {
+      const working = actual.get(relativePath)?.working ?? new SourceWorkingFile({ kind: "missing" });
+      const receipt = operations.get(relativePath);
+      if (receipt !== undefined) {
+        if (receipt.matchesEntry(actual.get(relativePath))) {
+          if (receipt.phase === "prepared") this.record(receipt.published());
+          continue;
+        }
+        if (receipt.phase === "prepared" && receipt.matchesEntry(actual.get(relativePath), "before")) continue;
+      } else {
+        const stopped = new SourceWorkingFile({ kind: mutation.afterKind, digest: mutation.afterDigest, generation: mutation.afterGeneration });
+        if (stopped.sameContent(working) && (actual.get(relativePath)?.mode ?? null) === mutation.afterMode
+          && (working.kind === "missing" || stoppedEntries.get(relativePath)?.workingPath === actual.get(relativePath)?.workingPath)
+          && (stopped.generation === null ? working.generation === null : stopped.generation.equals(working.generation))) continue;
+      }
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", `source rollback cannot attribute its current after-image generation: ${relativePath}`);
+    }
+    for (const entry of this.plan.sourceManifest.observations) {
+      if (mutations.has(entry.path)) continue;
+      const working = actual.get(entry.path)?.working;
+      if (working === undefined || !entry.working.sameContent(working) || entry.mode !== (actual.get(entry.path)?.mode ?? null)
+        || working.kind !== "missing" && entry.workingPath !== actual.get(entry.path)?.workingPath
+        || (entry.working.generation !== null && !entry.working.generation.equals(working.generation))) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", `source rollback observed a foreign out-of-scope generation: ${entry.path}`);
+      }
+    }
+    return current;
   }
 }
 
@@ -5850,7 +5820,8 @@ export class WorkerArtifactHandoffRequest {
   }
 
   executionEnvironment() {
-    return { [WORKER_ARTIFACT_HANDOFF_REQUEST_ENV]: this.requestPath };
+    return { ...new GitRepositoryPolicy({ repositoryRoot: this.executionRoot, readOnly: true }).environment({}),
+      [WORKER_ARTIFACT_HANDOFF_REQUEST_ENV]: this.requestPath };
   }
 
   sourceResponseSchema() {
@@ -6233,7 +6204,9 @@ export class WorkerArtifactHandoffSubmission {
 function specReviewInput(request) {
   const reviewInput = request.inputs.find((input) => input.name === "review.json");
   if (!reviewInput) throw new Error(`${request.stepId} handoff is missing its immutable review input`);
-  return new CanonicalSpecReview(reviewInput.document);
+  const proof = request.inputs.find(input => input.name === "review-process-evidence.json");
+  const processEvidence = proof === undefined ? null : ProcessStopArtifactEncoding.fromJSON(proof.document);
+  return new CanonicalSpecReview(reviewInput.document, { processEvidence });
 }
 
 /**
@@ -7139,7 +7112,7 @@ export function captureSourceMutationManifestForParent({ request } = {}) {
       .write(`${JSON.stringify(manifest.toJSON(), null, 2)}\n`);
     return manifest;
   } catch (cause) {
-    if (cause instanceof WorkerArtifactHandoffError) throw cause;
+    if (cause instanceof WorkerArtifactHandoffError || cause instanceof ProcessExecutionControlFailure) throw cause;
     throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_INVALID", `parent source mutation manifest could not be captured: ${cause.message}`, { cause, retryable: false });
   }
 }
@@ -7162,7 +7135,7 @@ function sealParentSourceWorkerArtifactHandoff({ request, now = () => new Date()
       payloadCount: submission.payloadManifest.length,
     });
   } catch (cause) {
-    if (cause instanceof WorkerArtifactHandoffError) throw cause;
+    if (cause instanceof WorkerArtifactHandoffError || cause instanceof ProcessExecutionControlFailure) throw cause;
     throw new WorkerArtifactHandoffError(
       "invalid", "FLOW_SOURCE_HANDOFF_PARENT_SEAL_INVALID",
       `parent source handoff could not be sealed: ${cause.message}`,
@@ -7834,7 +7807,7 @@ function prepareSpecWorkerCanonical({ request, state, submission }) {
       : validateSpecRepairPayloadAtProducerBoundary(request, payloadDocument(request, submission, "review.delta.json"));
     const facts = new SpecReviewWorkerFacts({
       stepId: request.stepId, spec: specInput.document,
-      review: new CanonicalSpecReview(reviewInput.document), delta,
+      review: specReviewInput(request), delta,
       reviewDigest: reviewInput.digest, reviewByteLength: reviewInput.byteLength,
       validator: readSpecJsonValidator(),
     });
@@ -9247,8 +9220,8 @@ export class WorkerArtifactHandoffCoordinator {
         if (readHandoffQuarantine(request, submission) !== null) throw new FlowExecutionContractRefusal("Saved artifact worker response was rejected by its parent");
         responseDigest = submission.handoffDigest;
       }
-      const registry = ProcessExecutionRuntime.inspect({ mainRoot: ctx.mainRoot || ctx.root,
-        executionRoot: ctx.executionRoot || ctx.root });
+      const runtimeRoots = { mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root };
+      const registry = withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.inspect(runtimeRoots));
       const calls = (registry?.executions ?? []).flatMap((execution) => execution.calls)
         .filter((call) => call.binding?.executionContractId === contract.id);
       const stops = readFlowProcessStops({ mainRoot: ctx.mainRoot || ctx.root,
@@ -9296,7 +9269,8 @@ export class WorkerArtifactHandoffCoordinator {
         const episode = ctx.flowManager.readStoredPromptExecutionEpisode({ executionContract: originalContract });
         const pending = episode.scopes.filter((entry) => entry.batches.some((batch) => batch.claim !== null));
         if (pending.length > 1) throw new FlowExecutionContractRefusal("Original worker has multiple unresolved provider reservations");
-        return ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
+        return withRuntimeRecordMigrationPreview({ mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root }, () =>
+          ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
           executionRoot: ctx.executionRoot || ctx.root, binding: FlowProcessExecutionBinding.forEpisode(originalContract) }, (physicalEvidence) => {
           const physical = physicalEvidence.forBinding(FlowProcessExecutionBinding.forContract(originalContract));
           if (physical.calls.length === 0 && physical.nonExecution === null) {
@@ -9312,7 +9286,7 @@ export class WorkerArtifactHandoffCoordinator {
               physicalEvidence, operationId: digest(stableStringify(["artifact-reservation", authorization.id, pending[0].toJSON()])),
             }) });
           return authorization;
-        }).then((authorization) => authorization ?? this.recoverArtifactGeneration({ ctx, state, binding, frontier, createRecoveryInvocation }));
+        })).then((authorization) => authorization ?? this.recoverArtifactGeneration({ ctx, state, binding, frontier, createRecoveryInvocation }));
       }
     }
     return this.recoverArtifactGeneration({ ctx, state, binding, frontier, createRecoveryInvocation });
@@ -9327,7 +9301,8 @@ export class WorkerArtifactHandoffCoordinator {
       const request = this.storedArtifactExecutionRequest({ ctx, state, executionContract: target });
       const pending = episode.scopes.filter((snapshot) => snapshot.batches.some((batch) => batch.claim !== null));
       if (pending.length !== 1) throw new FlowExecutionContractRefusal("Artifact recovery has no unique unresolved provider reservation");
-      await ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
+      await withRuntimeRecordMigrationPreview({ mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root }, () =>
+        ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
         executionRoot: ctx.executionRoot || ctx.root, binding: FlowProcessExecutionBinding.forEpisode(target) }, (physicalEvidence) => {
         ctx.flowManager.savePromptReservationReconciliation({ publication: new CanonicalPromptReservationReconciliationPublication({
           contract: target, scope: pending[0].scope, snapshot: pending[0], recoveryReceipt: frontier.recovery,
@@ -9335,7 +9310,7 @@ export class WorkerArtifactHandoffCoordinator {
           physicalEvidence, operationId: digest(stableStringify(["artifact-reservation", frontier.recovery.id,
             pending[0].toJSON(), physicalEvidence.digest])),
         }) });
-      });
+      }));
       return frontier.recovery;
     }
     const sourceContract = frontier.executionContract;
@@ -9345,7 +9320,8 @@ export class WorkerArtifactHandoffCoordinator {
     if (sourceRequest.hasSealedSubmission()) throw new FlowExecutionContractRefusal("Saved worker response must be replayed before recovery");
     const { executeArtifactWorkerRecovery } = await import("../engine/composition/artifact-worker-recovery.js");
     const processBinding = FlowProcessExecutionBinding.forEpisode(sourceContract);
-    return ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
+    return withRuntimeRecordMigrationPreview({ mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root }, () =>
+      ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root, binding: processBinding }, (physicalEvidence) => {
       const current = ctx.flowManager.artifactWorkerExecutionState({ binding, checkoutIdentity: physicalEvidence.checkoutIdentity });
       if (current.recovery !== null) return current.recovery;
@@ -9386,7 +9362,7 @@ export class WorkerArtifactHandoffCoordinator {
           ? ctx.flowManager.draftStepExecutionState({ binding }) : null,
         targetContentDigest: isConditionalDraftWorkerStep(sourceContract.stepId) ? targetRequest.checkpointContentDigest() : null });
       return executeArtifactWorkerRecovery({ stepId: sourceContract.stepId, selection: evidence.selection(), writer });
-    });
+    }));
   }
 
   /** Return the stopped, sealed request without creating a new execution claim. */
@@ -9738,6 +9714,10 @@ export class WorkerArtifactHandoffCoordinator {
         "Source request lacks its exact worker execution checkpoint", { retryable: false });
     }
     const captured = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+    const rollbackRepository = captured.sourceRollbackCheckpoint.repositories.find((entry) => entry.snapshot.root === request.executionRoot);
+    if (rollbackRepository === undefined || stableStringify(rollbackRepository.snapshot.toJSON()) !== stableStringify(request.sourceMutationBaseline.snapshot.toJSON())) {
+      throw authoritySnapshotError("source changed between its baseline and rollback capability capture");
+    }
     const rollbackBlob = captured.sourceRollbackCheckpoint.blobBytes();
     const checkpoint = new CanonicalSourceHandoffCheckpoint({
       identity,
@@ -9813,7 +9793,7 @@ export class WorkerArtifactHandoffCoordinator {
     }
     assertCurrentSourceRequestCapability(request);
     request.assertCurrent(ctx.flowManager.load(request.specId));
-    const beforeStart = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline });
+    const beforeStart = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline, beforeWorker: true });
     if (beforeStart.mutations.length !== 0) {
       throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after checkpoint publication and before worker start", {
         retryable: false, data: { changedPaths: beforeStart.paths().slice(0, 20) },
@@ -9831,7 +9811,7 @@ export class WorkerArtifactHandoffCoordinator {
     // uncertain; recovery must never infer that it is safe to spawn again.
     assertCurrentSourceRequestCapability(request);
     request.assertCurrent(ctx.flowManager.load(request.specId));
-    const finalBeforeSpawn = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline });
+    const finalBeforeSpawn = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline, beforeWorker: true });
     if (finalBeforeSpawn.mutations.length !== 0) {
       throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after worker start-intent", { retryable: false });
     }
@@ -10054,7 +10034,9 @@ export class WorkerArtifactHandoffCoordinator {
     // Rehydrate after the intent, never from the dispatcher-held object.  It
     // makes a crash between intent and restore resume the same before-image.
     const persistedAuthority = this.sourceMutationAuthority({ ctx, request });
-    persistedAuthority.rollbackRejectedSourceMutation();
+    persistedAuthority.rollbackRejectedSourceMutation({ journal: new SourceRollbackJournal({
+      flowManager: ctx.flowManager, specId: request.specId, checkpoint: authority.checkpoint, plan: restorePlan,
+    }) });
     if (SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline }).mutations.length !== 0) {
       throw new WorkerArtifactHandoffError(
         "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
@@ -10063,7 +10045,7 @@ export class WorkerArtifactHandoffCoordinator {
     }
     const settlement = new SourceHandoffSettlement({
       identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
-      eventDigest: intent.digest, kind: "rolled-back",
+      eventDigest: this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true }).event.digest, kind: "rolled-back",
     });
     try {
       ctx.flowManager.settleSourceHandoff({
@@ -10257,19 +10239,21 @@ export class WorkerArtifactHandoffCoordinator {
         if (authority.event.kind === "start-intent") {
           throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN", "source worker has a start-intent without a durable exit observation", { retryable: false, recoveryPossible: false });
         }
-        if (authority.event.kind === "rollback-intent") {
+        if (["rollback-intent", "rollback-progress"].includes(authority.event.kind)) {
+          const intentIndex = authority.events.findIndex((event) => event.kind === "rollback-intent");
           const restorePlan = SourceHandoffRollbackPlan.fromEvents({
-            checkpoint, rollbackEvent: authority.event, failureEvent: authority.events.at(-2),
+            checkpoint, rollbackEvent: authority.events[intentIndex], failureEvent: authority.events[intentIndex - 1],
           });
           restorePlan.sourceManifest.assertBinding(checkpoint.baseline);
-          assertRollbackResumeObservation({ baseline: checkpoint.baseline, observed: restorePlan.sourceManifest });
           const mutationAuthority = this.sourceMutationAuthority({ ctx, request });
-          mutationAuthority.rollbackRejectedSourceMutation();
+          mutationAuthority.rollbackRejectedSourceMutation({ journal: new SourceRollbackJournal({
+            flowManager: ctx.flowManager, specId: request.specId, checkpoint, plan: restorePlan,
+          }) });
           if (SourceMutationManifest.capture({ baseline: checkpoint.baseline }).mutations.length !== 0) {
             throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", "source rollback did not restore the immutable baseline", { retryable: false, recoveryPossible: false });
           }
           const settlement = new SourceHandoffSettlement({
-            identity, checkpointDigest: checkpoint.digest, eventDigest: authority.event.digest, kind: "rolled-back",
+            identity, checkpointDigest: checkpoint.digest, eventDigest: this.#readSourceAuthority({ ctx, request, identity, requireUnsettled: true }).event.digest, kind: "rolled-back",
           });
           ctx.flowManager.settleSourceHandoff({ specId: state.specId, settlement, expectedAttempt: checkpoint.baseline.attempt });
           completedRecovery = true;

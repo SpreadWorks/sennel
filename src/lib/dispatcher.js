@@ -42,6 +42,7 @@ import { flowProcessRuntimeRequired, withFlowProcessRuntime, captureFlowProcessE
 import { ProcessExecutionRuntime } from "./process-execution-runtime.js";
 import { nonblockingFailureContinuation } from "../flow/lib/nonblocking-command-failure.js";
 import { FlowStopFacts, publicFlowErrorMessage, selectedFlowStopDirective } from "./flow-stop-guidance.js";
+import { selectedRuntimeRecordMigrationPreview } from "./process-runtime-migration-guidance.js";
 
 function attachSelectedFailureContinuation(envelope, ctx, error = null) {
   if (!(envelope instanceof Envelope) || selectedFlowStopDirective(envelope.data) !== null
@@ -883,7 +884,7 @@ async function executeDispatch({
   };
 
   publication.stage = "COMMAND_FAILED";
-  const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input });
+  const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input, readOnly: entry.readOnly });
   try {
     await withFlowProcessRuntime(hookCtx, async () => {
       try { await executeLifecycle(); }
@@ -939,11 +940,12 @@ async function resolveOutputMode(entry) {
 }
 
 function createFailureEnvelope({ err, envelopeType, envelopeKey, runtimeLogMetadata, flowContext }) {
-  const code = err?.code || "ERROR";
+  const selected = selectedRuntimeRecordMigrationPreview(err);
+  const code = selected?.code ?? (err?.code || "ERROR");
   const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, publicFlowErrorMessage(err));
-  const errorData = err instanceof ProcessExecutionControlFailure
+  const errorData = selected?.data ?? (err instanceof ProcessExecutionControlFailure
     ? { processExecutionControlFailure: err.toJSON() }
-    : err?.data !== undefined ? err.data : err instanceof AgentFailure ? err.toJSON() : undefined;
+    : err?.data !== undefined ? err.data : err instanceof AgentFailure ? err.toJSON() : undefined);
   if (errorData !== undefined) env.data = errorData;
   if (err?.continuation) attachFlowContinuation(env, FlowContinuation.fromStored(err.continuation));
   else attachSelectedFailureContinuation(env, flowContext, err);

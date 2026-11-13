@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "sourceRevision": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "producer": "CurrentFlowVersionStore.createFresh, followed by a new Store load",
+  "sourceContract": "flow-schema-4/created-without-physical-source-authority",
+  "capturedWith": "v22.22.0",
+  "producerFiles": [
+    {
+      "path": "src/flow/lib/current-flow-state.js",
+      "sha256": "94bcf697b6b8b1ccb9e0e57e3bfdc1f9ce7d9dd8eae39c8d57c5fc1de305753c"
+    },
+    {
+      "path": "src/lib/flow-schema-revision.js",
+      "sha256": "13e1b4af243d4028d3cd345e8ce4be7090129a272c696e029ba4fd3879c88ba7"
+    }
+  ],
+  "sourceFlowHash": "cf23524fbeda1c568fba83d2a104a83d5a48bbb630cbc23a2eb1cb015aec64bb"
+}

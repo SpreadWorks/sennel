@@ -1,0 +1,70 @@
+{
+  "schemaRevision": 1,
+  "id": "7e7d09b9a57af3d343cf759e07128c21954e77dbe3e5bffb3a94065907d996ab",
+  "flowVersionId": "flow-v1-previous-physical-accounting",
+  "runId": "previous-physical-accounting",
+  "specId": "001-physical-accounting",
+  "recordingStartedAt": "2026-11-04T03:05:47.080Z",
+  "runtimeSourceId": "9d9ac4e41908ae6b582e163f0eb9b8c8a4c26567db126725b943edc93553ef7b",
+  "checkoutIdentity": {
+    "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r177-previous-physical-producer/package/.tmp/tests/r177-previous-physical-producer/26.12.1/previous-physical-accounting-qJHVEm",
+    "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r177-previous-physical-producer/package/.tmp/tests/r177-previous-physical-producer/26.12.1/previous-physical-accounting-qJHVEm",
+    "mainDevice": 2049,
+    "mainInode": 18428648,
+    "checkoutDevice": 2049,
+    "checkoutInode": 18428648
+  },
+  "checkoutNamespace": "9d9ac4e41908ae6b582e163f0eb9b8c8a4c26567db126725b943edc93553ef7b",
+  "retention": "permanent",
+  "producerCoverage": [
+    {
+      "producer": "agent-invocation",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "provider-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "outbox-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "process-call",
+      "status": "available",
+      "boundary": "managed-launcher-after-source-registration"
+    },
+    {
+      "producer": "synchronous-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "unmanaged-async-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "direct-spawn",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "provider-internal-tool",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "outer-agent",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    }
+  ],
+  "boundary": {
+    "confirmationOrder": 17,
+    "activityCount": 17
+  }
+}

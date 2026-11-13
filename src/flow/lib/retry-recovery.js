@@ -29,6 +29,7 @@ import { TaskReviewReconciliationRecord, TASK_REVIEW_RECONCILIATION_KEY } from "
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import {
   readTaskReviewUnsealedCheckpoint,
+  sameTaskReviewRepositorySnapshot,
   TaskReviewRecoveryAuthorization,
   taskReviewAuthorizationArtifact,
 } from "./task-review-recovery-checkpoint.js";
@@ -151,6 +152,11 @@ export class RetryRecoveryBaseline {
   }
   get digest() { return crypto.createHash("sha256").update(JSON.stringify(this.toJSON())).digest("hex"); }
   equals(other) { return other instanceof RetryRecoveryBaseline && JSON.stringify(this.toJSON()) === JSON.stringify(other.toJSON()); }
+  matchesCurrentAttempt(state) {
+    return state.attempt !== null && state.attempt !== undefined
+      && this.attemptId === state.attempt.id && this.attempt === state.attempt.sequence
+      && this.runId === state.runId && this.specId === state.specId && this.issue === (state.issue ?? null);
+  }
   toJSON() { return { route: this.route.toJSON(), attemptId: this.attemptId, attempt: this.attempt, runId: this.runId, specId: this.specId, issue: this.issue, projectDigest: this.projectDigest, runtimeDigest: this.runtimeDigest, targetDigest: this.targetDigest }; }
 }
 
@@ -725,9 +731,9 @@ export class ExhaustedReviewRetryRecoveryAdmission {
         ignoredDirectories: snapshot.ignoredDirectories,
         runtimeLocks: snapshot.runtimeLocks,
       });
-      if (fresh.digest !== snapshot.digest) {
+      if (!sameTaskReviewRepositorySnapshot(snapshot, fresh)) {
         throw new Error(
-          `Task Review recovery checkout observation changed before publication: ${snapshot.allChangedPaths(fresh).join(",")}`,
+          `Task Review recovery checkout observation changed before publication: ${snapshot.observationChanges(fresh).join(",")}`,
         );
       }
     }
@@ -850,11 +856,7 @@ export function readRetryBaseline(flowManager, state, route) {
   try { baseline = new RetryRecoveryBaseline(JSON.parse(source.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry baseline is invalid: ${error.message}`); }
   if (
     !baseline.route.equals(route)
-    || baseline.attemptId !== state.attempt.id
-    || baseline.attempt !== state.attempt.sequence
-    || baseline.runId !== state.runId
-    || baseline.specId !== state.specId
-    || baseline.issue !== (state.issue ?? null)
+    || !baseline.matchesCurrentAttempt(state)
   ) throw new Error("retry baseline identity does not match the active Attempt and Flow");
   return baseline;
 }
@@ -879,11 +881,7 @@ export function readRetryRecoveryReceipt(flowManager, state, route) {
   const current = receipt.current;
   if (
     !current.route.equals(route)
-    || current.attemptId !== state.attempt.id
-    || current.attempt !== state.attempt.sequence
-    || current.runId !== state.runId
-    || current.specId !== state.specId
-    || current.issue !== (state.issue ?? null)
+    || !current.matchesCurrentAttempt(state)
   ) throw new Error("retry recovery receipt identity does not match the active Attempt and Flow");
   const catalog = flowManager.artifactCatalog(state.specId);
   const descriptor = catalog.artifacts.find((entry) => entry.relativePath === source.relativePath) ?? null;

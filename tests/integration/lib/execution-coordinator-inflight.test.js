@@ -10,6 +10,8 @@ import { ProcessExecutionCoordinator, ProcessExecutionRuntime, ProcessExecutionG
 import { ProcessExecutorIdentity, ChildExitObservation, ProcessOutputState, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
 import { ManagedProcessMessage } from "../../../src/lib/managed-process-protocol.js";
 import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
 import { ManagedOutputSnapshot } from "../../../src/lib/managed-process-output.js";
 import { managedMonotonicNow } from "../../../src/lib/managed-stop-operation.js";
 import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocation-workspace.js";
@@ -52,6 +54,11 @@ function fixture(t, { beforeClose = null } = {}) {
   return { root, coordinator, grant: coordinator.grant };
 }
 
+function committedRequest(coordinator, requestId) {
+  const envelope = JSON.parse(coordinator.store.requestFile(coordinator.executionId, requestId).read());
+  return RuntimeStandaloneRequestDocument.fromEnvelope(coordinator.executionId, requestId, envelope).requestRecord();
+}
+
 function eventsRequest(grant, requestId = randomUUID()) {
   return new ManagedProcessMessage(grant, "events", { grant, data: {} }, { requestId });
 }
@@ -88,7 +95,7 @@ test("an identical in-flight request receives its first committed response befor
   assert.deepEqual(firstResponse.payload, { ok: true, value: [] });
   assert.deepEqual(repeatedResponse, firstResponse);
   assert.equal(repeatedResponse.respondsTo(message), true);
-  const ledger = JSON.parse(coordinator.store.requestFile(coordinator.executionId, message.requestId).read()).payload;
+  const ledger = committedRequest(coordinator, message.requestId);
   assert.equal(ledger.requestId, message.requestId);
   assert.deepEqual(ledger.response, firstResponse.payload);
   assert.deepEqual(coordinator.store.readInventory().executions[0].calls, []);
@@ -169,7 +176,7 @@ test("a queued request owns a stable validated snapshot despite later mutation b
   assert.equal(response.respondsTo(ManagedProcessMessage.from(JSON.parse(originalWire))), true);
   const replay = await coordinator.handle(ManagedProcessMessage.from(JSON.parse(originalWire)));
   assert.deepEqual(replay, response);
-  const ledger = JSON.parse(coordinator.store.requestFile(coordinator.executionId, message.requestId).read()).payload;
+  const ledger = committedRequest(coordinator, message.requestId);
   assert.equal(ledger.payloadDigest, JSON.parse(originalWire).payloadDigest);
   assert.deepEqual(ledger.response, response.payload);
 });
@@ -283,3 +290,697 @@ for (const warm of [false, true]) {
     : "first read-control after the actual start deadline commits one timeout stop and preserves its receipt through closure",
   { timeout: 30000 }, (t) => assertTimeoutReadControl(t, { warm }));
 }
+
+import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { executionValueDigest } from "../../../src/lib/process-execution-values.js";
+
+function cohortReserve(grant, data = {}, requestId = randomUUID()) {
+  return new ManagedProcessMessage(grant, "reserve", { grant,
+    data: { binding: null, timeoutMs: null, graceMs: 500, ...data } }, { requestId });
+}
+function cohortPublicationObserver(t, coordinator, root, requestIds, beforeSave = () => {}) {
+  const observed = [];
+  const save = coordinator.store.save.bind(coordinator.store);
+  t.mock.method(coordinator.store, "save", (registry, options) => {
+    beforeSave(registry.executions.find((entry) => entry.executionId === coordinator.executionId));
+    const result = save(registry, options);
+    // Reopen through the real independent strict reader, without changing the
+    // writer Store's observations or passing its returned logical result on.
+    const history = ProcessExecutionRuntime.inspect({ mainRoot: root });
+    const current = history.executions.find((entry) => entry.executionId === coordinator.executionId);
+    observed.push({ calls: current.calls, events: current.events,
+      requests: current.requests.filter((entry) => requestIds.includes(entry.requestId)) });
+    return result;
+  });
+  return observed;
+}
+async function revokeCohortIntents(coordinator, grant) {
+  const root = coordinator.store.readInventory().executions.find((entry) => entry.executionId === coordinator.executionId);
+  for (const call of root.calls.filter((entry) => entry.status === "intent")) {
+    const response = await coordinator.handle(new ManagedProcessMessage(grant, "revoke-reservation", { grant, data: {
+      call: { callId: call.callId, capability: call.capability, bindingDigest: executionValueDigest(call.binding) },
+      reason: "cancelled-before-launch",
+    } }));
+    assert.equal(response.payload.ok, true);
+  }
+}
+
+test("a call context refuses a replaced retained directory without changing the registry or foreign contents", { timeout: 30000 }, async (t) => {
+  const { coordinator, grant } = fixture(t);
+  const reserved = await coordinator.handle(cohortReserve(grant));
+  assert.equal(reserved.payload.ok, true);
+  const execution = coordinator.store.read().executions.find((entry) => entry.executionId === coordinator.executionId);
+  const call = execution.calls.find((entry) => entry.callId === reserved.payload.value.callId);
+  const context = coordinator.store.callContext(execution, call);
+  const directory = path.dirname(context.outcomePath), original = `${directory}.fixture-original`;
+  const before = coordinator.store.file.read();
+  fs.renameSync(directory, original);
+  fs.mkdirSync(directory);
+  const foreign = path.join(directory, "foreign.txt");
+  fs.writeFileSync(foreign, "another generation\n");
+  try {
+    assert.throws(() => coordinator.store.callContext(execution, call),
+      (error) => RealDirectoryAuthority.isAuthorityFailure(error));
+    assert.deepEqual(coordinator.store.file.read(), before);
+    assert.equal(fs.readFileSync(foreign, "utf8"), "another generation\n");
+    assert.equal(fs.existsSync(context.outcomePath), false);
+  } finally {
+    // Only the test's deliberate replacement is removed. Restore the actual
+    // original inode before legally revoking this never-launched reservation.
+    fs.rmSync(directory, { recursive: true });
+    fs.renameSync(original, directory);
+    await revokeCohortIntents(coordinator, grant);
+  }
+});
+
+test("logical request coalescing persists every pending identity before reservations and publishes exact replayable results", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const ids = messages.map((message) => message.requestId);
+  const observed = cohortPublicationObserver(t, coordinator, root, ids);
+  let released = false;
+  const first = coordinator.handle(messages[0]).then((response) => { released = true; return response; });
+  const duplicate = coordinator.handle(ManagedProcessMessage.from(JSON.parse(JSON.stringify(messages[0]))));
+  const second = coordinator.handle(messages[1]);
+  const [one, two, repeated] = await Promise.all([first, second, duplicate]);
+  assert.equal(released, true);
+  assert.deepEqual(repeated, one);
+  for (const [index, response] of [one, two].entries()) {
+    assert.equal(response.respondsTo(messages[index]), true);
+    assert.equal(response.payload.ok, true);
+  }
+  const accepted = observed.find((entry) => entry.requests.length === 2 && entry.requests.every((request) => request.response === null));
+  assert.ok(accepted, "the actual common publication must durably accept both identities before either reservation");
+  assert.deepEqual(accepted.requests.map((request) => request.requestId), ids);
+  assert.deepEqual(accepted.calls, []); assert.deepEqual(accepted.events, []);
+  const committed = observed.at(-1);
+  assert.deepEqual(committed.requests.map((request) => request.requestId), ids);
+  assert.deepEqual(committed.requests.map((request) => request.response), [one.payload, two.payload]);
+  assert.deepEqual(committed.calls.map((call) => call.callId), [one.payload.value.callId, two.payload.value.callId]);
+  assert.deepEqual(committed.events.map((event) => event.type), ["reserved", "reserved"]);
+  assert.equal(new Set(committed.calls.map((call) => call.callId)).size, 2);
+  assert.equal(new Set(committed.calls.map((call) => call.capability)).size, 2);
+  const beforeReplay = executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }));
+  assert.deepEqual(await coordinator.handle(messages[0]), one);
+  assert.deepEqual(await coordinator.handle(messages[1]), two);
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root })), beforeReplay);
+  await revokeCohortIntents(coordinator, grant);
+});
+
+test("cohort publication preserves a valid admission change made at the save boundary", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const ids = messages.map((message) => message.requestId);
+  let changed = false;
+  cohortPublicationObserver(t, coordinator, root, ids, (record) => {
+    if (record.requests.filter((request) => ids.includes(request.requestId) && request.response?.ok).length !== 2) return;
+    record.accepting = false;
+    changed = true;
+  });
+  const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(changed, true);
+  assert.equal(responses.every((response) => response.payload.ok), true);
+  const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(cold.accepting, false);
+  assert.deepEqual(cold.requests.map((request) => request.response), responses.map((response) => response.payload));
+  const later = await coordinator.handle(cohortReserve(grant));
+  assert.equal(later.payload.ok, false);
+  assert.equal(ProcessExecutionControlFailure.fromStored(later.payload.error).code, "PROCESS_EXECUTION_REGISTRATION_CLOSED");
+  await revokeCohortIntents(coordinator, grant);
+});
+
+test("an already queued bounded arrival stream shares one durable acceptance and completion", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = Array.from({ length: 8 }, () => cohortReserve(grant));
+  const ids = messages.map((message) => message.requestId);
+  const observed = cohortPublicationObserver(t, coordinator, root, ids);
+  const pending = messages.slice(0, 2).map((message) => coordinator.handle(message));
+  // A filled delivery queue exposes successive already-prepared inputs on
+  // consecutive I/O turns. There is no elapsed-time sleep or absent peer.
+  await new Promise((resolve) => {
+    let index = 2;
+    const deliver = () => {
+      pending.push(coordinator.handle(messages[index++]));
+      if (index === messages.length) resolve();
+      else setImmediate(deliver);
+    };
+    setImmediate(deliver);
+  });
+  const responses = await Promise.all(pending);
+  const publications = [...observed];
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  for (const [index, response] of responses.entries()) {
+    assert.equal(response.respondsTo(messages[index]), true);
+    assert.equal(response.payload.ok, true);
+  }
+  assert.deepEqual(current.requests.filter((request) => ids.includes(request.requestId)).map((request) => request.response),
+    responses.map((response) => response.payload));
+  // Close this successful reservation-only lifetime before the cost assertion;
+  // a failed assessment never re-enters a failed or unconfirmed runtime.
+  await revokeCohortIntents(coordinator, grant);
+  assert.equal((await coordinator.handle(new ManagedProcessMessage(grant, "close", { grant, data: {} }))).payload.ok, true);
+  assert.equal((await coordinator.handle(new ManagedProcessMessage(grant, "release-root", { grant, data: {} }))).payload.ok, true);
+  assert.equal(publications.length, 2, "the bounded arriving stream must share its two durable publication boundaries");
+  assert.deepEqual(publications[0].requests.map((request) => request.requestId), ids);
+  assert.equal(publications[0].requests.every((request) => request.response === null), true);
+  assert.deepEqual(publications[0].calls, []);
+  assert.deepEqual(publications[1].requests.map((request) => request.response), responses.map((response) => response.payload));
+  assert.equal(publications[1].calls.length, messages.length);
+});
+
+test("cohort readiness neither waits for absent peers nor crosses an intervening FIFO job", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = Array.from({ length: 4 }, () => cohortReserve(grant));
+  const barrier = new ExclusiveBarrier();
+  let delivered = 0, laterDelivered = false, held, later, blocked;
+  const first = messages.slice(0, 2).map((message) => coordinator.handle(message)
+    .then((response) => { delivered++; return response; }));
+  await new Promise((resolve) => setImmediate(() => {
+    first.push(coordinator.handle(messages[2]).then((response) => { delivered++; return response; }));
+    held = coordinator.store.exclusive(() => barrier.hold());
+    later = coordinator.handle(messages[3]).then((response) => { laterDelivered = true; return response; });
+    resolve();
+  }));
+  let responses, last;
+  try {
+    await barrier.entered;
+    blocked = { delivered, laterDelivered,
+      current: ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0] };
+    responses = await Promise.all(first);
+  } finally {
+    barrier.release();
+    await held;
+    last = await later;
+  }
+  await revokeCohortIntents(coordinator, grant);
+  assert.equal((await coordinator.handle(new ManagedProcessMessage(grant, "close", { grant, data: {} }))).payload.ok, true);
+  assert.equal((await coordinator.handle(new ManagedProcessMessage(grant, "release-root", { grant, data: {} }))).payload.ok, true);
+  assert.equal(blocked.delivered, 3, "the underfilled earlier group must deliver before work requiring a later peer");
+  assert.equal(blocked.laterDelivered, false);
+  assert.deepEqual(blocked.current.requests.map((request) => request.requestId), messages.slice(0, 3).map((message) => message.requestId));
+  assert.equal(blocked.current.calls.length, 3);
+  for (const [index, response] of [...responses, last].entries()) {
+    assert.equal(response.respondsTo(messages[index]), true);
+    assert.equal(response.payload.ok, true);
+  }
+});
+
+test("cohort publication rejects a globally invalid save input and retains only pending acceptances", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const ids = messages.map((message) => message.requestId);
+  let changed = false;
+  cohortPublicationObserver(t, coordinator, root, ids, (record) => {
+    if (record.requests.filter((request) => ids.includes(request.requestId) && request.response?.ok).length !== 2) return;
+    record.hostConnected = false;
+    changed = true;
+  });
+  const results = await Promise.allSettled(messages.map((message) => coordinator.handle(message)));
+  assert.equal(changed, true);
+  assert.equal(results.every((result) => result.status === "rejected" && result.reason.code === "PROCESS_EXECUTION_REGISTRY_FAILED"), true);
+  const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(cold.hostConnected, true);
+  assert.deepEqual(cold.calls, []);
+  assert.deepEqual(cold.events, []);
+  assert.deepEqual(cold.requests.map((request) => request.requestId), ids);
+  assert.equal(cold.requests.every((request) => request.response === null), true);
+});
+
+test("logical request coalescing preserves a successful request beside a lawful refusal and accepts subsequent work", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant, { timeoutMs: -1 })];
+  const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(responses[0].payload.ok, true);
+  assert.equal(responses[1].payload.ok, false);
+  const failure = ProcessExecutionControlFailure.fromStored(responses[1].payload.error);
+  assert.equal(failure.code, "PROCESS_EXECUTION_CONTROL_FAILED");
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(current.requests.map((request) => request.requestId), messages.map((message) => message.requestId));
+  assert.deepEqual(current.requests.map((request) => request.response), responses.map((response) => response.payload));
+  assert.equal(current.calls.length, 1); assert.equal(current.calls[0].callId, responses[0].payload.value.callId);
+  assert.deepEqual((await coordinator.handle(messages[1])).payload, responses[1].payload);
+  const later = await coordinator.handle(cohortReserve(grant));
+  assert.equal(later.payload.ok, true);
+  assert.equal(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0].calls.length, 2);
+  await revokeCohortIntents(coordinator, grant);
+});
+
+test("logical request coalescing retains all accepted requests without granting results when completion publication fails", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const ids = messages.map((message) => message.requestId);
+  let injected = false;
+  const observed = cohortPublicationObserver(t, coordinator, root, ids, (record) => {
+    const requests = record.requests.filter((request) => ids.includes(request.requestId));
+    if (!injected && requests.length === 2 && requests.every((request) => request.response?.ok)) {
+      injected = true; throw new Error("injected coalesced completion publication failure");
+    }
+  });
+  const results = await Promise.allSettled(messages.map((message) => coordinator.handle(message)));
+  assert.equal(injected, true);
+  assert.equal(observed.some((entry) => entry.requests.length === 2 && entry.requests.every((request) => request.response === null)), true);
+  for (const result of results) {
+    assert.equal(result.status, "rejected");
+    assert.equal(result.reason.code, "PROCESS_EXECUTION_REGISTRY_FAILED");
+  }
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(current.calls, []); assert.deepEqual(current.events, []);
+  assert.deepEqual(current.requests.map((request) => request.requestId), ids);
+  assert.equal(current.requests.every((request) => request.response === null), true);
+  const digest = executionValueDigest(current);
+  for (const message of messages) await assert.rejects(coordinator.handle(message), { code: "PROCESS_EXECUTION_REQUEST_UNCONFIRMED" });
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+});
+
+test("logical request coalescing leaves no accepted identity after failed acceptance and permits a fresh same-ID attempt", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const ids = messages.map((message) => message.requestId);
+  let injected = false;
+  cohortPublicationObserver(t, coordinator, root, ids, (record) => {
+    if (!injected && record.requests.filter((request) => ids.includes(request.requestId)).length === 2) {
+      injected = true; throw new Error("injected coalesced acceptance publication failure");
+    }
+  });
+  const failed = await Promise.allSettled(messages.map((message) => coordinator.handle(message)));
+  assert.equal(injected, true);
+  assert.equal(failed.every((result) => result.status === "rejected" && result.reason.code === "PROCESS_EXECUTION_REGISTRY_FAILED"), true);
+  const unchanged = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(unchanged.requests, []); assert.deepEqual(unchanged.calls, []); assert.deepEqual(unchanged.events, []);
+  const retried = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(retried.every((response) => response.payload.ok), true);
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(current.requests.map((request) => request.requestId), ids);
+  assert.equal(current.calls.length, 2);
+  await revokeCohortIntents(coordinator, grant);
+});
+
+test("logical request coalescing cannot cross an intervening Store FIFO admission or delay its first committed response", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const following = new ExclusiveBarrier();
+  const messages = [cohortReserve(grant), cohortReserve(grant)];
+  const jobs = [];
+  let first, second, winner;
+  try {
+    first = coordinator.handle(messages[0]); jobs.push(first);
+    jobs.push(coordinator.store.exclusive(() => following.hold()));
+    second = coordinator.handle(messages[1]); jobs.push(second);
+    winner = await Promise.race([first.then((response) => ({ response })), following.entered.then(() => null)]);
+  } finally {
+    following.release();
+    const settled = await Promise.allSettled(jobs);
+    for (const result of settled) assert.equal(result.status, "fulfilled", result.reason?.message);
+  }
+  assert.notEqual(winner, null, "the first real response must be delivered before the next FIFO body may block");
+  assert.equal(winner.response.payload.ok, true);
+  assert.equal((await second).payload.ok, true);
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(current.requests.map((request) => request.requestId), messages.map((message) => message.requestId));
+  assert.equal(current.calls.length, 2);
+  await revokeCohortIntents(coordinator, grant);
+});
+
+test("logical request coalescing claims actual executors and preserves their native exit receipts through reload", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const reserved = await Promise.all([cohortReserve(grant), cohortReserve(grant)].map((message) => coordinator.handle(message)));
+  assert.equal(reserved.every((response) => response.payload.ok), true);
+  const calls = reserved.map((response) => ({ callId: response.payload.value.callId,
+    capability: response.payload.value.capability, bindingDigest: grant.bindingDigest }));
+  const executors = calls.map(() => new ProcessExecutorIdentity({ executorId: randomUUID(), executorSession: randomUUID(), launchClaim: randomUUID() }));
+  const messages = calls.map((call, index) => new ManagedProcessMessage(grant, "claim-launch", {
+    grant, data: { call, executor: executors[index].toJSON() },
+  }));
+  const ids = messages.map((message) => message.requestId);
+  const observed = cohortPublicationObserver(t, coordinator, root, ids);
+  const permits = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(permits.every((response) => response.payload.ok), true);
+  const pending = observed.find((entry) => entry.requests.length === 2 && entry.requests.every((request) => request.response === null));
+  assert.ok(pending);
+  assert.equal(pending.calls.every((call) => call.status === "intent" && call.executor === null && call.permit === null), true);
+  const claimed = observed.at(-1);
+  assert.equal(claimed.calls.every((call) => call.status === "claimed"), true);
+  assert.deepEqual(claimed.calls.map((call) => call.executor), executors.map((executor) => executor.toJSON()));
+  assert.deepEqual(claimed.requests.map((request) => request.response), permits.map((response) => response.payload));
+  assert.deepEqual(claimed.calls.map((call) => call.permit), permits.map((response) => response.payload.value));
+  const observations = await Promise.all(calls.map(async (call, index) => {
+    const effect = path.join(root, `executor-${index}.effect`);
+    const child = spawn(process.execPath, ["-e", `require('node:fs').appendFileSync(${JSON.stringify(effect)},'effect\\n')`], { stdio: ["ignore", "pipe", "pipe"] });
+    const exited = once(child, "exit"), closed = once(child, "close");
+    const bytes = { stdout: [], stderr: [] };
+    for (const stream of ["stdout", "stderr"]) child[stream].on("data", (part) => bytes[stream].push(part));
+    await once(child, "spawn");
+    const started = await coordinator.handle(new ManagedProcessMessage(grant, "observe", { grant,
+      data: { call, type: "started", executor: executors[index].toJSON(), startedAt: new Date().toISOString() } }));
+    assert.equal(started.payload.ok, true);
+    const [code, signal] = await exited; await closed;
+    assert.equal(code, 0); assert.equal(signal, null);
+    assert.equal(fs.readFileSync(effect, "utf8"), "effect\n");
+    assert.equal(Buffer.concat(bytes.stdout).length, 0); assert.equal(Buffer.concat(bytes.stderr).length, 0);
+    const observation = new ChildExitObservation({ executor: executors[index], kind: "exited", code, signal, observedAt: new Date().toISOString() });
+    const stopped = await coordinator.handle(new ManagedProcessMessage(grant, "observe", { grant,
+      data: { call, type: "exit", observation: observation.toJSON() } }));
+    assert.equal(stopped.payload.ok, true);
+    return observation;
+  }));
+  const receipts = [];
+  for (const [index, call] of calls.entries()) {
+    const output = { maximum: 0 };
+    for (const stream of ["stdout", "stderr"]) {
+      const snapshot = ManagedOutputSnapshot.capture(Buffer.alloc(0), 0);
+      const persisted = await coordinator.handle(new ManagedProcessMessage(grant, "persist-call-output", { grant, data: {
+        call, executor: executors[index].toJSON(), stream, maximum: 0,
+        snapshot: snapshot.toJSON(), offset: 0, bytes: "",
+      } }));
+      assert.equal(persisted.payload.ok, true); assert.equal(persisted.payload.value.complete, true);
+      assert.deepEqual(persisted.payload.value.snapshot, snapshot.toJSON()); output[stream] = snapshot.toJSON();
+    }
+    const completed = await coordinator.handle(new ManagedProcessMessage(grant, "finish", { grant, data: {
+      call, observation: observations[index].toJSON(), outcome: { code: 0, signal: null, output },
+      output: new ProcessOutputState({ stdoutBytes: 0, stderrBytes: 0, completion: "complete", cutoffAt: new Date().toISOString() }).toJSON(),
+    } }));
+    assert.equal(completed.payload.ok, true);
+    const receipt = new ProcessExecutionStopReceipt(completed.payload.value);
+    assert.equal(receipt.callId, call.callId); assert.deepEqual(receipt.executor.toJSON(), executors[index].toJSON());
+    assert.equal(receipt.stopEvidence.status, "confirmed"); assert.equal(receipt.observation.code, 0);
+    receipts.push(receipt);
+  }
+  const reloaded = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(reloaded.calls.length, 2);
+  assert.deepEqual(reloaded.calls.map((call) => call.receipt), receipts.map((receipt) => receipt.toJSON()));
+  const digest = executionValueDigest(reloaded);
+  for (const [index, message] of messages.entries()) assert.deepEqual(await coordinator.handle(message), permits[index]);
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+  for (let index = 0; index < calls.length; index++) assert.equal(fs.readFileSync(path.join(root, `executor-${index}.effect`), "utf8"), "effect\n");
+});
+
+test("logical request coalescing preserves serial first admission at the unchanged physical capacity boundary", async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  // Each binding and its future private receipt individually fits the original
+  //16MiB sink. Two such call bindings plus required framing cannot share one
+  // canonical registry. This is ordinary input through the real capacity API.
+  const binding = { content: "x".repeat(8 * 1024 * 1024) };
+  const messages = [cohortReserve(grant, { binding }), cohortReserve(grant, { binding })];
+  const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(responses[0].payload.ok, true, "group preparation must preserve the lawful first serial reservation");
+  assert.equal(responses[1].payload.ok, false);
+  assert.equal(ProcessExecutionControlFailure.fromStored(responses[1].payload.error).code, "PROCESS_EXECUTION_RECORD_CAPACITY");
+  const reloaded = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(reloaded.calls.length, 1); assert.equal(reloaded.calls[0].callId, responses[0].payload.value.callId);
+  assert.deepEqual(reloaded.calls[0].binding, binding);
+  assert.deepEqual(reloaded.requests.map((request) => request.requestId), messages.map((message) => message.requestId));
+  assert.deepEqual(reloaded.requests.map((request) => request.response), responses.map((response) => response.payload));
+  await revokeCohortIntents(coordinator, grant);
+  const revoked = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0].calls[0];
+  assert.equal(revoked.status, "revoked"); assert.equal(revoked.receipt, null);
+  assert.equal(revoked.revocation.callId, responses[0].payload.value.callId);
+});
+
+
+// Native children supply these observations and bytes. No internal call,
+// observation, sealed output, receipt or authority is manufactured as a seed.
+async function nativeCohortLeaves(coordinator, grant, root, count = 2) {
+  const reserved = await Promise.all(Array.from({ length: count }, () => cohortReserve(grant)).map((message) => coordinator.handle(message)));
+  assert.equal(reserved.every((response) => response.payload.ok), true);
+  const calls = reserved.map((response) => ({ callId: response.payload.value.callId,
+    capability: response.payload.value.capability, bindingDigest: grant.bindingDigest }));
+  const executors = calls.map(() => new ProcessExecutorIdentity({ executorId: randomUUID(), executorSession: randomUUID(), launchClaim: randomUUID() }));
+  const claim = await Promise.all(calls.map((call, index) => coordinator.handle(new ManagedProcessMessage(grant, "claim-launch", {
+    grant, data: { call, executor: executors[index].toJSON() },
+  }))));
+  assert.equal(claim.every((response) => response.payload.ok), true);
+  const native = await Promise.all(calls.map(async (call, index) => {
+    const effect = path.join(root, `leaf-${index}.effect`);
+    const child = spawn(process.execPath, ["-e", `require('node:fs').appendFileSync(${JSON.stringify(effect)},'once');process.stdout.write('leaf-${index}');process.stderr.write('error-${index}')`], { stdio: ["ignore", "pipe", "pipe"] });
+    const exited = once(child, "exit"), closed = once(child, "close");
+    const bytes = { stdout: [], stderr: [] };
+    for (const stream of ["stdout", "stderr"]) child[stream].on("data", (part) => bytes[stream].push(part));
+    await once(child, "spawn");
+    const startedAt = new Date().toISOString();
+    const [code, signal] = await exited; await closed;
+    assert.equal(code, 0); assert.equal(signal, null);
+    assert.equal(fs.readFileSync(effect, "utf8"), "once");
+    const observation = new ChildExitObservation({ executor: executors[index], kind: "exited", code, signal, observedAt: new Date().toISOString() });
+    return { call, executor: executors[index], startedAt, observation, effect,
+      bytes: Object.fromEntries(Object.entries(bytes).map(([stream, parts]) => [stream, Buffer.concat(parts)])) };
+  }));
+  const message = (operation, leaf, data) => new ManagedProcessMessage(grant, operation, { grant, data: { call: leaf.call, ...data } });
+  return {
+    native,
+    started: native.map((leaf) => message("observe", leaf, { type: "started", executor: leaf.executor.toJSON(), startedAt: leaf.startedAt })),
+    exited: native.map((leaf) => message("observe", leaf, { type: "exit", observation: leaf.observation.toJSON() })),
+    async finishMessages() {
+      const messages = [];
+      for (const leaf of native) {
+        const output = { maximum: 1024 };
+        for (const stream of ["stdout", "stderr"]) {
+          const bytes = leaf.bytes[stream], snapshot = ManagedOutputSnapshot.capture(bytes, 1024);
+          const persisted = await coordinator.handle(message("persist-call-output", leaf, { executor: leaf.executor.toJSON(), stream,
+            maximum: 1024, snapshot: snapshot.toJSON(), offset: 0, bytes: bytes.toString("base64") }));
+          assert.equal(persisted.payload.ok, true); assert.equal(persisted.payload.value.complete, true);
+          assert.deepEqual(persisted.payload.value.snapshot, snapshot.toJSON()); output[stream] = snapshot.toJSON();
+        }
+        messages.push(message("finish", leaf, { observation: leaf.observation.toJSON(), outcome: { code: 0, signal: null, output },
+          output: new ProcessOutputState({ stdoutBytes: leaf.bytes.stdout.length, stderrBytes: leaf.bytes.stderr.length,
+            completion: "complete", cutoffAt: new Date().toISOString() }).toJSON() }));
+      }
+      return messages;
+    },
+  };
+}
+
+test("completed finish replays preserve the preceding independent shared publication and every real receipt", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const leaves = await nativeCohortLeaves(coordinator, grant, root, 3);
+  for (const messages of [leaves.started, leaves.exited]) {
+    const observed = await Promise.all(messages.map((message) => coordinator.handle(message)));
+    assert.equal(observed.every((response) => response.payload.ok), true);
+  }
+  const messages = await leaves.finishMessages();
+  const original = await coordinator.handle(messages[2]);
+  assert.equal(original.payload.ok, true);
+  const ids = messages.slice(0, 2).map((message) => message.requestId);
+  const observed = cohortPublicationObserver(t, coordinator, root, ids);
+  const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(responses.every((response) => response.payload.ok), true);
+  assert.deepEqual(responses[2], original);
+  const pending = observed.find((entry) => entry.requests.length === 2
+    && entry.requests.every((request) => request.response === null));
+  assert.ok(pending, "both new finish identities must be durable together before either receipt, despite a later exact replay");
+  assert.equal(pending.calls.slice(0, 2).every((call) => call.receipt === null && call.status === "exited"), true);
+  assert.deepEqual(pending.calls[2].receipt, original.payload.value);
+  assert.equal(observed.every((entry) => entry.requests.length === 0 || entry.requests.length === 2), true);
+  const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(cold.calls.map((call) => call.receipt), responses.map((response) => response.payload.value));
+  for (const [index, call] of cold.calls.entries()) {
+    const receipt = new ProcessExecutionStopReceipt(call.receipt), leaf = leaves.native[index];
+    assert.equal(receipt.stopEvidence.status, "confirmed");
+    assert.equal(receipt.callId, leaf.call.callId);
+    assert.deepEqual(receipt.observation.toJSON(), leaf.observation.toJSON());
+    assert.equal(fs.readFileSync(leaf.effect, "utf8"), "once");
+  }
+  const digest = executionValueDigest(cold);
+  for (const [index, message] of messages.entries()) {
+    assert.deepEqual(await coordinator.handle(ManagedProcessMessage.from(JSON.parse(JSON.stringify(message)))), responses[index]);
+  }
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+});
+
+
+test("leaf request coalescing preserves durable observation acceptances and every native finish receipt through cold reload", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const leaves = await nativeCohortLeaves(coordinator, grant, root);
+  const phases = [];
+  for (const messages of [leaves.started, leaves.exited]) {
+    const ids = messages.map((message) => message.requestId);
+    const observed = cohortPublicationObserver(t, coordinator, root, ids, (incoming) => {
+      if (!incoming.requests.some((request) => ids.includes(request.requestId))) return;
+      assert.equal(incoming.requests.filter((request) => ids.includes(request.requestId)).length, 2,
+        "a complete independent observation cohort is published together");
+      for (const id of ids) assert.equal(committedRequest(coordinator, id).response, null,
+        "every standalone acceptance is durable before the shared observed effect");
+    });
+    const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+    assert.equal(responses.every((response) => response.payload.ok), true);
+    assert.ok(observed.some((entry) => entry.requests.length === 2));
+    assert.equal(observed.every((entry) => entry.requests.length === 0 || entry.requests.length === 2), true);
+    phases.push({ messages, responses });
+  }
+  const messages = await leaves.finishMessages();
+  const ids = messages.map((message) => message.requestId);
+  const observed = cohortPublicationObserver(t, coordinator, root, ids);
+  const responses = await Promise.all(messages.map((message) => coordinator.handle(message)));
+  assert.equal(responses.every((response) => response.payload.ok), true);
+  const pending = observed.find((entry) => entry.requests.length === 2 && entry.requests.every((request) => request.response === null));
+  assert.ok(pending, "both canonical pending finish identities precede any private finish publication");
+  assert.equal(pending.calls.every((call) => call.receipt === null && call.status === "exited"), true);
+  const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.deepEqual(cold.calls.map((call) => call.receipt), responses.map((response) => response.payload.value));
+  for (const [index, call] of cold.calls.entries()) {
+    const receipt = new ProcessExecutionStopReceipt(call.receipt), leaf = leaves.native[index];
+    assert.equal(receipt.stopEvidence.status, "confirmed"); assert.equal(receipt.callId, leaf.call.callId);
+    assert.deepEqual(receipt.observation.toJSON(), leaf.observation.toJSON());
+    assert.equal(receipt.output.stdoutBytes, leaf.bytes.stdout.length); assert.equal(receipt.output.stderrBytes, leaf.bytes.stderr.length);
+    assert.equal(fs.readFileSync(leaf.effect, "utf8"), "once");
+  }
+  phases.push({ messages, responses });
+  const digest = executionValueDigest(cold);
+  for (const phase of phases) for (const [index, message] of phase.messages.entries()) {
+    assert.deepEqual(await coordinator.handle(ManagedProcessMessage.from(JSON.parse(JSON.stringify(message)))), phase.responses[index]);
+  }
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+});
+
+
+for (const phase of ["observation", "finish"]) {
+  test(`leaf request coalescing retains every ${phase} acceptance after failed publication and permits explicit fresh executor reports`, { timeout: 30000 }, async (t) => {
+    const { root, coordinator, grant } = fixture(t);
+    const leaves = await nativeCohortLeaves(coordinator, grant, root);
+    let messages;
+    if (phase === "observation") messages = leaves.started;
+    else {
+      for (const reports of [leaves.started, leaves.exited]) {
+        const responses = await Promise.all(reports.map((message) => coordinator.handle(message)));
+        assert.equal(responses.every((response) => response.payload.ok), true);
+      }
+      messages = await leaves.finishMessages();
+    }
+    const ids = messages.map((message) => message.requestId);
+    const sentinel = new Error(`injected ${phase} cohort completion publication failure`);
+    let injected = false;
+    cohortPublicationObserver(t, coordinator, root, ids, (incoming) => {
+      const completed = incoming.requests.filter((request) => ids.includes(request.requestId) && request.response !== null);
+      if (!injected && completed.length === messages.length) { injected = true; throw sentinel; }
+    });
+    const results = await Promise.allSettled(messages.map((message) => coordinator.handle(message)));
+    assert.equal(injected, true);
+    assert.equal(results.every((result) => result.status === "rejected" && result.reason.code === "PROCESS_EXECUTION_REGISTRY_FAILED"), true);
+    const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+    assert.equal(cold.calls.every((call) => call.receipt === null && call.status === (phase === "observation" ? "claimed" : "exited")), true);
+    assert.equal(cold.events.some((event) => event.type === (phase === "observation" ? "started" : "result-finalized")), false);
+    if (phase === "observation") {
+      assert.equal(cold.requests.some((request) => ids.includes(request.requestId)), false);
+      for (const id of ids) assert.equal(committedRequest(coordinator, id).response, null);
+    } else {
+      const accepted = cold.requests.filter((request) => ids.includes(request.requestId));
+      assert.deepEqual(accepted.map((request) => request.requestId), ids);
+      assert.equal(accepted.every((request) => request.response === null), true);
+    }
+    const digest = executionValueDigest(cold);
+    for (const message of messages) await assert.rejects(coordinator.handle(message), { code: "PROCESS_EXECUTION_REQUEST_UNCONFIRMED" });
+    assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+    // A separate explicit executor submission owns new request identities.
+    // The rejected requests never replay effects or gain a fabricated receipt.
+    const fresh = messages.map((message) => new ManagedProcessMessage(grant, message.operation, message.payload));
+    assert.equal(fresh.every((message, index) => message.requestId !== messages[index].requestId), true);
+    const completed = await Promise.all(fresh.map((message) => coordinator.handle(message)));
+    assert.equal(completed.every((response) => response.payload.ok), true);
+    if (phase === "observation") {
+      assert.equal((await Promise.all(leaves.exited.map((message) => coordinator.handle(message)))).every((response) => response.payload.ok), true);
+      const finishes = await leaves.finishMessages();
+      assert.equal((await Promise.all(finishes.map((message) => coordinator.handle(message)))).every((response) => response.payload.ok), true);
+    }
+    const settled = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+    assert.equal(settled.calls.every((call) => new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed"), true);
+    for (const leaf of leaves.native) assert.equal(fs.readFileSync(leaf.effect, "utf8"), "once");
+    for (const message of messages) await assert.rejects(coordinator.handle(message), { code: "PROCESS_EXECUTION_REQUEST_UNCONFIRMED" });
+  });
+}
+
+
+test("leaf request coalescing refuses a replaced earlier pending ledger generation and preserves exact request uncertainty", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const leaves = await nativeCohortLeaves(coordinator, grant, root);
+  const messages = leaves.started, ids = messages.map((message) => message.requestId);
+  let replaced = false;
+  cohortPublicationObserver(t, coordinator, root, ids, (incoming) => {
+    if (replaced || incoming.requests.filter((request) => ids.includes(request.requestId)).length !== 2) return;
+    const earlier = coordinator.store.requestFile(coordinator.executionId, ids[0]);
+    const bytes = earlier.read();
+    assert.notEqual(bytes, null);
+    earlier.write(bytes); // Same valid bytes; different actual atomic file generation.
+    assert.deepEqual(earlier.read(), bytes);
+    replaced = true;
+  });
+  const results = await Promise.allSettled(messages.map((message) => coordinator.handle(message)));
+  assert.equal(replaced, true);
+  assert.equal(results.every((result) => result.status === "rejected" && result.reason.code === "PROCESS_EXECUTION_AUTHORITY_MISMATCH"), true);
+  const cold = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(cold.calls.every((call) => call.status === "claimed" && call.observation === null && call.receipt === null), true);
+  assert.equal(cold.requests.some((request) => ids.includes(request.requestId)), false);
+  assert.equal(cold.events.some((event) => event.type === "started"), false);
+  for (const id of ids) assert.equal(committedRequest(coordinator, id).response, null);
+  const digest = executionValueDigest(cold);
+  for (const message of messages) await assert.rejects(coordinator.handle(message), { code: "PROCESS_EXECUTION_REQUEST_UNCONFIRMED" });
+  assert.equal(executionValueDigest(ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0]), digest);
+  const fresh = messages.map((message) => new ManagedProcessMessage(grant, message.operation, message.payload));
+  assert.equal((await Promise.all(fresh.map((message) => coordinator.handle(message)))).every((response) => response.payload.ok), true);
+  assert.equal((await Promise.all(leaves.exited.map((message) => coordinator.handle(message)))).every((response) => response.payload.ok), true);
+  const finishes = await leaves.finishMessages();
+  assert.equal((await Promise.all(finishes.map((message) => coordinator.handle(message)))).every((response) => response.payload.ok), true);
+  const completed = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  assert.equal(completed.calls.every((call) => new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed"), true);
+  for (const leaf of leaves.native) assert.equal(fs.readFileSync(leaf.effect, "utf8"), "once");
+});
+
+
+test("serial fallback publishes each committed response before the next request is admitted", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const messages = [cohortReserve(grant), cohortReserve(grant, { timeoutMs: -1 })];
+  let firstDelivered = false, retryDelivered = false, atSecondAdmission = null;
+  const save = coordinator.store.save.bind(coordinator.store);
+  t.mock.method(coordinator.store, "save", (registry, options) => {
+    const incoming = registry.executions.find((entry) => entry.executionId === coordinator.executionId);
+    if (atSecondAdmission === null && incoming.requests.some((request) => request.requestId === messages[1].requestId && request.response === null)) {
+      const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+      atSecondAdmission = { firstDelivered, retryDelivered, current };
+    }
+    return save(registry, options);
+  });
+  const first = coordinator.handle(messages[0]).then((response) => { firstDelivered = true; return response; });
+  const retry = coordinator.handle(ManagedProcessMessage.from(JSON.parse(JSON.stringify(messages[0]))))
+    .then((response) => { retryDelivered = true; return response; });
+  const second = coordinator.handle(messages[1]);
+  const responses = await Promise.all([first, retry, second]);
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  await revokeCohortIntents(coordinator, grant);
+  assert.ok(atSecondAdmission, "the later serial request must reach its real durable admission");
+  assert.equal(atSecondAdmission.firstDelivered, true, "a committed result must reach its consumer before later serial publication can block");
+  assert.equal(atSecondAdmission.retryDelivered, true, "the identical in-flight retry must receive the same committed result");
+  assert.deepEqual(atSecondAdmission.current.requests.map((request) => request.requestId), [messages[0].requestId]);
+  assert.deepEqual(atSecondAdmission.current.requests[0].response, responses[0].payload);
+  assert.equal(atSecondAdmission.current.calls.length, 1);
+  assert.deepEqual(responses[1], responses[0]);
+  assert.equal(responses[0].payload.ok, true); assert.equal(responses[2].payload.ok, false);
+  assert.deepEqual(current.requests.map((request) => request.response), [responses[0].payload, responses[2].payload]);
+});
+
+test("serial fallback preserves a completed replay when a later independent admission fails", { timeout: 30000 }, async (t) => {
+  const { root, coordinator, grant } = fixture(t);
+  const firstMessage = cohortReserve(grant);
+  const original = await coordinator.handle(firstMessage);
+  const secondMessage = cohortReserve(grant);
+  const sentinel = new Error("injected later serial acceptance failure");
+  let injected = false;
+  const save = coordinator.store.save.bind(coordinator.store);
+  t.mock.method(coordinator.store, "save", (registry, options) => {
+    const incoming = registry.executions.find((entry) => entry.executionId === coordinator.executionId);
+    if (!injected && incoming.requests.some((request) => request.requestId === secondMessage.requestId && request.response === null)) {
+      injected = true; throw sentinel;
+    }
+    return save(registry, options);
+  });
+  const settled = await Promise.allSettled([coordinator.handle(firstMessage), coordinator.handle(secondMessage)]);
+  const current = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions[0];
+  const replay = await coordinator.handle(firstMessage);
+  const later = await coordinator.handle(secondMessage);
+  await revokeCohortIntents(coordinator, grant);
+  assert.equal(injected, true);
+  assert.equal(settled[0].status, "fulfilled", "a later failure must not replace an earlier exact committed replay");
+  assert.deepEqual(settled[0].value, original);
+  assert.equal(settled[1].status, "rejected");
+  assert.equal(settled[1].reason.code, "PROCESS_EXECUTION_REGISTRY_FAILED");
+  assert.equal(settled[1].reason.cause, sentinel);
+  assert.deepEqual(current.requests.map((request) => request.requestId), [firstMessage.requestId]);
+  assert.deepEqual(current.requests[0].response, original.payload); assert.equal(current.calls.length, 1);
+  assert.deepEqual(replay, original); assert.equal(later.payload.ok, true);
+});

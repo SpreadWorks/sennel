@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { WorkerArtifactRepositoryEntry } from "../../../src/flow/lib/source-working-file.js";
 import fs from "node:fs";
 import { it } from "node:test";
 import { FreshFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
@@ -14,7 +16,7 @@ import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runt
 import path from "node:path";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { FlowExecutionInputBaseline } from "../../../src/flow/lib/flow-execution-input-baseline.js";
-import { SourceWorkerCanonicalObservationAdvance, SourceMutationBaseline, SourceMutationManifest } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { SourceWorkerCanonicalObservationAdvance, SourceMutationBaseline, SourceMutationManifest, WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { SourceExecutionObservationAppends, SourceExecutionObservationCatalogBaseline } from "../../../src/flow/lib/source-execution-observation-appends.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
@@ -142,9 +144,31 @@ it("keeps present digest mismatches and filesystem omissions invalid after canon
   const capture = () => SourceMutationManifest.capture({ baseline, executionObservations: appends });
   assert.equal(baseline.snapshot.mode, "filesystem");
   const factPath = path.relative(baseline.snapshot.root, factFile).split(path.sep).join("/");
-  assert.equal(capture().paths().includes(factPath), false, "authenticated observations are not source mutations");
+  const captured = capture();
+  assert.equal(captured.paths().includes(factPath), false, "authenticated observations are not source mutations");
+  assert.equal(captured.assertBinding(baseline, { executionObservations: appends }), captured);
+  assert.throws(() => captured.assertBinding(baseline), (error) => error.code === "FLOW_SOURCE_HANDOFF_MANIFEST_BINDING_INVALID",
+    "stored observations gain no implicit execution append exemption");
+  assert.equal(appends.matches(baseline.snapshot, captured.observations), true);
+  assert.equal(appends.matches(baseline.snapshot, baseline.snapshot.entries), false,
+    "a current inventory cannot omit a selected authenticated append");
+  assert.equal(appends.matchesRetainedEntries(baseline.snapshot, baseline.snapshot.entries), true,
+    "earlier observations may predate an immutable authenticated append");
+  const excluded = WorkerArtifactRepositoryMutationSnapshot.capture({ ...baseline.snapshot, ignoredDirectories: [factPath] });
+  assert.equal(appends.matches(excluded), false, "a new exclusion cannot silently rebind the authenticated append selector");
+  const factParent = path.posix.dirname(factPath);
+  const parentBefore = captured.observations.find((entry) => entry.path === factParent);
+  assert.equal(parentBefore.kind, "directory");
+  const replacementParent = captured.observations.find((entry) => entry.path === factPath);
+  const forgedParent = captured.observations.map((entry) => entry.path === factParent
+    ? new WorkerArtifactRepositoryEntry({ path: factParent, workingPath: factParent, working: replacementParent.working, git: replacementParent.git }) : entry);
+  assert.equal(appends.matchesRetainedEntries(baseline.snapshot, forgedParent), false,
+    "an approved append path cannot conceal a regular ancestor after-image");
+
   try {
     fs.appendFileSync(factFile, "\n");
+    const altered = SourceMutationManifest.capture({ baseline });
+    assert.equal(appends.matchesRetainedEntries(baseline.snapshot, altered.observations), false, "present retained append bytes must still match");
     assert.throws(capture, /Execution observation appends differ from their cataloged bytes/,
       "a recorded digest mismatch cannot borrow canonical authentication");
     assert.throws(() => manager.readCanonicalTransitionView({ specId: "001-observations",
@@ -160,11 +184,11 @@ it("keeps present digest mismatches and filesystem omissions invalid after canon
 });
 
 it("refuses observation tampering and protected artifact changes beside a valid observation append", async (t) => {
-  const changeMode = (file) => fs.chmodSync(file, (fs.statSync(file).mode & 0o777) ^ 0o100);
+  const replaceGeneration = file => new AtomicFile(file).write(fs.readFileSync(file));
   const cases = [
     ["existing observation bytes", (_location, factFile) => fs.appendFileSync(factFile, "\n")],
-    ["existing observation metadata", (_location, factFile) => changeMode(factFile)],
-    ["protected semantic artifact", (location) => changeMode(location.specFile)],
+    ["existing observation generation", (_location, factFile) => replaceGeneration(factFile)],
+    ["protected semantic artifact generation", (location) => replaceGeneration(location.specFile)],
     ["existing catalog authority metadata", (location) => {
       const value = JSON.parse(fs.readFileSync(location.catalogFile));
       const descriptor = value.artifacts.find((entry) => entry.logicalKey === "spec.record");

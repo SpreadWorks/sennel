@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { FlowAtStepFixture, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { DraftRefineWorkerRequiredResult } from "../../../src/flow/engine/step-result.js";
+import { settleDraftStepResult, DraftWorkerExecutionClaim } from "../../../src/flow/definition.js";
+import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
+import { LegacyArtifactPromptConsumptionPublication } from "../../../src/flow/lib/canonical-prompt-execution.js";
+import { FlowProcessExecutionBinding, withFlowProcessRuntime } from "../../../src/flow/lib/process-runtime-admission.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
+
+const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+
+test("previous producer publishes physical-accounted history after actual child completion and exports canonical data only", async t => {
+  const root = createTmpDir("previous-physical-accounting-");
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
+  setupFlowConfig(root);
+  const specId = "001-physical-accounting";
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+  new FlowAtStepFixture({ flowManager: manager, specId, runId: "previous-physical-accounting",
+    request: "Retain completed physical execution evidence after explicit migration", targetStep: "draft-refine" }).create();
+  const state = manager.canonicalState(specId);
+  const binding = { runId: state.runId, specId, stepId: "draft-refine", attempt: state.attempt };
+  const required = new DraftRefineWorkerRequiredResult();
+  const settlement = settleDraftStepResult(required.stepId, required);
+  const executionBinding = manager.draftStepExecutionState({ binding }).workerBinding({ inputDigest: "a".repeat(64), inputRevision: "b".repeat(64) });
+  manager.checkpointDraftStepExecution({ binding, stepResult: required, settlement, executionBinding });
+  const contract = FlowExecutionContract.fromBinding({ binding, generation: executionBinding.executionGeneration,
+    inputRevision: executionBinding.inputRevision, promptDigest: "c".repeat(64), schemaDigest: "d".repeat(64) });
+  const claim = new DraftWorkerExecutionClaim({ dispatchInvocationId: "physical-accounting-producer",
+    generatedAt: "2026-11-04T00:00:00.000Z", actionDigest: "e".repeat(64), requestDigest: "f".repeat(64) });
+  manager.claimDraftStepExecution({ binding, stepResult: required, settlement, executionBinding, executionClaim: claim, executionContract: contract });
+  const context = { root, mainRoot: root, executionRoot: root, specId,
+    flowManager: manager, flowState: manager.loadReadOnly(specId) };
+  const child = await withFlowProcessRuntime(context, () => executeManagedProcess(new NativeExecutableInvocation({
+    executable: process.execPath, args: ["-e", "process.stdout.write('physical-proof')"], cwd: root,
+  }), undefined, { timeoutMs: 20000 }));
+  assert.equal(child.code, 0);
+  assert.equal(child.stdout.toString(), "physical-proof");
+  const inventory = ProcessExecutionRuntime.inspect({ mainRoot: root });
+  assert.equal(inventory.version, 9);
+  assert.equal(inventory.slot, null);
+  assert.ok(inventory.executions.length > 0);
+  for (const execution of inventory.executions) assert.equal(execution.status, "closed");
+
+  await ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: root,
+    binding: FlowProcessExecutionBinding.forEpisode(contract) }, physicalEvidence => {
+    assert.equal(physicalEvidence.calls.length, 1);
+    assert.notEqual(physicalEvidence.calls[0].receipt, null);
+    const publication = new LegacyArtifactPromptConsumptionPublication({ contract, physicalEvidence,
+      operationId: "genuine-previous-physical-accounting" });
+    const prepared = manager.prepareArtifactWorkerPromptConsumption({ publication });
+    assert.equal(prepared.document.record.event, "physical-accounted");
+    manager.publishArtifacts({ specId, nodeId: contract.nodeId, artifactWrites: prepared.writes, admission: publication });
+  });
+  const fresh = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  const episode = fresh.readStoredPromptExecutionEpisode({ executionContract: contract });
+  assert.equal(episode.budget.providerCallCount, 0, "ordinary managed child cannot consume provider budget");
+  const location = fresh.specLocation(specId);
+  const descriptors = fresh.readCanonicalTransitionView({ specId, read: view => [...view.catalog.artifacts] });
+  const physical = descriptors.find(entry => entry.logicalKey === "prompt.execution.event"
+    && JSON.parse(fs.readFileSync(location.resolve(entry.relativePath))).record.event === "physical-accounted");
+  assert.notEqual(physical, undefined);
+  const physicalDocument = JSON.parse(fs.readFileSync(location.resolve(physical.relativePath)));
+  assert.equal(physicalDocument.record.physicalEvidence.schemaVersion, 3);
+  assert.equal(typeof physicalDocument.record.physicalEvidence.checkoutIdentity.mainDevice, "number");
+
+  const exportRoot = fileURLToPath(new URL(`../../../../canonical-export-${process.version}/`, import.meta.url));
+  fs.mkdirSync(exportRoot);
+  const names = [...new Set(["artifact-catalog.json", "activities.jsonl", ...descriptors.map(entry => entry.relativePath)])].sort();
+  const records = [];
+  for (const name of names) {
+    const bytes = fs.readFileSync(location.resolve(name));
+    const relativePath = path.posix.join(location.relativeDirectory, name);
+    const target = path.join(exportRoot, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, bytes, { flag: "wx" });
+    records.push({ relativePath, bytes: bytes.length, sha256: hash(bytes) });
+  }
+  const provenance = { fixtureKind: "authentic-previous-physical-accounting-canonical-data",
+    specId, producerNode: process.version, sourceRuntimeRecordVersion: inventory.version,
+    sourceFlowSchemaRevision: state.schemaRevision, sourceManifestRevision: 1,
+    executionContract: contract.toJSON(), savedBudget: episode.budget,
+    originalOwnerReleased: true, normalCoordinatorClosed: true, notPhysicalRuntimeOwnershipFixture: true,
+    physicalDocumentPath: path.posix.join(location.relativeDirectory, physical.relativePath),
+    physicalDocumentDigest: physicalDocument.digest,
+    originalChildReceipt: physicalDocument.record.calls[0].receipt, records };
+  fs.writeFileSync(path.join(exportRoot, "provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`, { flag: "wx" });
+});

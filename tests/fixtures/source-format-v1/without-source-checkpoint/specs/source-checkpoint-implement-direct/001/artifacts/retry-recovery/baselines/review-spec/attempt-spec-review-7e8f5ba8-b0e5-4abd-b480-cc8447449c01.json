@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "review",
+    "phase": "spec",
+    "taskId": null
+  },
+  "attemptId": "attempt-spec-review-7e8f5ba8-b0e5-4abd-b480-cc8447449c01",
+  "attempt": 1,
+  "runId": "run-source-checkpoint-implement-direct",
+  "specId": "source-checkpoint-implement-direct",
+  "issue": null,
+  "projectDigest": "9c3b0a9f45ff1bab3fd15cec9ecc96c8a6e20dda22065709a2c4117e5cc67988",
+  "runtimeDigest": "5ad6a60a969b5186977b0768f7f35533b305180d1ba027c0133173be6a332534",
+  "targetDigest": "9c3b0a9f45ff1bab3fd15cec9ecc96c8a6e20dda22065709a2c4117e5cc67988"
+}

@@ -28,7 +28,11 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { SourceExecutionObservationAppends } from "../../../src/flow/lib/source-execution-observation-appends.js";
-import { SourceMutationManifest } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { SourceMutationManifest, SourceMutationBaseline, SourceWorkerCanonicalObservationAdvance,
+  WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { SourceWorkingFile, GitSourceEntry, SourceGitState, SourceGitControlFiles,
+  WorkerArtifactRepositoryEntry } from "../../../src/flow/lib/source-working-file.js";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
 
 function contract() {
   return new ReviewProtocolContract({
@@ -67,6 +71,106 @@ class SourceObserver {
 }
 
 describe("Task Review protocol", () => {
+  it("authenticates captured canonical advances without masking source, Git, or provenance changes", async (t) => {
+    const scenario = new TaskReviewScenario(t);
+    const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");
+    const previousOutput = process.env[outputVariable];
+    process.env[outputVariable] = path.join(scenario.root, ".tmp", "review-output");
+    try {
+      const observer = new TaskReviewSourceEffectObserver({ root: scenario.root, flowManager: scenario.manager,
+        specId: scenario.specId,
+        executionIdentity: TaskReviewExecutionIdentity.fromCanonicalState({ state: scenario.state(),
+          taskId: scenario.taskId, reviewAttempt: 1 }) });
+      const before = observer.capture({ number: 1 });
+      scenario.manager.appendMetric({ phase: "impl", counter: "docsRead", delta: 1 });
+      const after = observer.capture({ number: 1 });
+      const metadataPaths = before.canonicalObservation.mutablePaths.map((entry) =>
+        before.executionObservations.relativePath(entry, before.baseline.snapshot.root));
+      const changed = observer.describe(before, after).detail.changedPaths;
+      assert.ok(metadataPaths.every((entry) => changed.includes(entry)), "raw canonical metadata stays in source observations");
+      assert.equal(observer.hasEffect(before, after), false, "a real canonical metric advance is not a provider source effect");
+
+      // Model only the captured native Unicode boundary, not macOS filesystem behavior.
+      const logicalDirectory = "caf\u00e9";
+      const nativeDirectory = "cafe\u0301";
+      const unicodeObservation = (observation) => {
+        const canonical = observation.canonicalObservation;
+        const rootEntry = observation.baseline.snapshot.entries.find((entry) => entry.kind === "directory"
+          && entry.working.generation.equals(canonical.canonicalSnapshot.generation));
+        assert.ok(rootEntry);
+        const entries = [new WorkerArtifactRepositoryEntry({ ...rootEntry,
+          path: logicalDirectory, workingPath: nativeDirectory }), ...canonical.mutablePaths.map((relativePath) => {
+          const sourcePath = observation.executionObservations.relativePath(relativePath, observation.baseline.snapshot.root);
+          const entry = observation.baseline.snapshot.entries.find((value) => value.path === sourcePath);
+          return new WorkerArtifactRepositoryEntry({ ...entry, path: `${logicalDirectory}/${relativePath}`,
+            workingPath: `${nativeDirectory}/${relativePath}` });
+        })];
+        return new observation.constructor({ ...observation,
+          baseline: new SourceMutationBaseline({ attempt: observation.baseline.attempt,
+            snapshot: new WorkerArtifactRepositoryMutationSnapshot({ ...observation.baseline.snapshot, entries }) }),
+          canonicalObservation: new SourceWorkerCanonicalObservationAdvance({ ...canonical,
+            activityPrefix: canonical.activityPrefix.map((entry) => JSON.parse(entry)),
+            canonicalSnapshot: new WorkerArtifactRepositoryMutationSnapshot({ ...canonical.canonicalSnapshot,
+              root: path.join(observation.baseline.snapshot.root, nativeDirectory) }) }),
+        });
+      };
+      const unicodeBefore = unicodeObservation(before);
+      const unicodeAfter = unicodeObservation(after);
+      assert.equal(unicodeBefore.canonicalObservation.coversSourceMetadataChange(unicodeAfter.canonicalObservation, {
+        before: unicodeBefore.baseline.snapshot, after: unicodeAfter.baseline.snapshot,
+        relativePath: `${logicalDirectory}/flow.json`,
+      }), true, "logical NFC keys bind native NFD metadata through captured directory identity and workingPath");
+
+      const observedSnapshot = (changes) => new after.constructor({ ...after,
+        baseline: new SourceMutationBaseline({ attempt: after.baseline.attempt,
+          snapshot: new WorkerArtifactRepositoryMutationSnapshot({ ...after.baseline.snapshot, ...changes }) }) });
+      const replacedEntry = (relativePath, change) => after.baseline.snapshot.entries.map((entry) =>
+        entry.path === relativePath ? new WorkerArtifactRepositoryEntry({ ...entry, ...change(entry) }) : entry);
+      const differentDigest = (value) => value === "0".repeat(64) ? "1".repeat(64) : "0".repeat(64);
+      assert.equal(observer.hasEffect(before, observedSnapshot({ entries: replacedEntry("README.md", (entry) => ({
+        working: new SourceWorkingFile({ ...entry.working, digest: differentDigest(entry.digest) }),
+      })) })), true, "an ordinary source delta remains visible beside valid canonical advancement");
+      const metadataPath = metadataPaths.find((entry) => entry.endsWith("/flow.json"));
+      assert.ok(metadataPath);
+      assert.equal(observer.hasEffect(before, observedSnapshot({ entries: replacedEntry(metadataPath, (entry) => ({
+        git: new GitSourceEntry({ ...entry.git, worktreeMode: entry.git.worktreeMode === "100755" ? "100644" : "100755" }),
+      })) })), true, "canonical metadata publication cannot authorize a source Git mode change");
+      assert.equal(observer.hasEffect(before, observedSnapshot({ entries: replacedEntry(metadataPath, (entry) => ({
+        working: new SourceWorkingFile({ ...entry.working,
+          generation: new FileIdentity({ dev: entry.working.generation.dev, ino: entry.working.generation.ino + 1n }) }),
+      })) })), true, "metadata must bind the same physical after-image as the canonical proof");
+      const git = after.baseline.snapshot.gitState;
+      assert.equal(observer.hasEffect(before, observedSnapshot({ gitState: new SourceGitState({ ...git,
+        controlFiles: new SourceGitControlFiles({ ...git.controlFiles,
+          head: new SourceWorkingFile({ ...git.controlFiles.head, digest: differentDigest(git.controlFiles.head.digest) }) }),
+      }) })), true, "canonical observations cannot authorize changed Git control facts");
+
+      const forgedPrefix = after.canonicalObservation.activityPrefix.map((entry) => JSON.parse(entry));
+      forgedPrefix[0] = { ...forgedPrefix[0], id: `${forgedPrefix[0].id}-foreign` };
+      const forged = new SourceWorkerCanonicalObservationAdvance({ ...after.canonicalObservation,
+        activityPrefix: forgedPrefix, prefixIdentity: null });
+      assert.equal(observer.hasEffect(before, new after.constructor({ ...after, canonicalObservation: forged })), true,
+        "a changed historical Activity prefix is an observed effect, even beside authentic metadata bytes");
+      let calls = 0;
+      await assert.rejects(new ReviewProtocolController({ contract: contract() }).execute({
+        observer: {
+          capture: () => new after.constructor({ ...after, canonicalObservation: null }),
+          hasEffect: (left, right) => observer.hasEffect(left, right),
+        },
+        callAgent: async () => { calls += 1; return JSON.stringify({ priorRepairInsufficiency: null, repairStrategy: null }); },
+      }), (error) => error instanceof ReviewProtocolFailure && error.kind === "observation_unavailable");
+      assert.equal(calls, 0, "missing paired canonical provenance cannot admit a provider call");
+
+      scenario.manager.addNote("a provider must not make a canonical semantic change");
+      const noted = observer.capture({ number: 1 });
+      assert.equal(observer.hasEffect(after, noted), true,
+        "validly stored non-observation canonical transitions remain source effects");
+    } finally {
+      if (previousOutput === undefined) delete process.env[outputVariable];
+      else process.env[outputVariable] = previousOutput;
+    }
+  });
+
   it("keeps shared canonical observations outside a linked checkout from masking checkout source edits", async (t) => {
     const scenario = new TaskReviewScenario(t);
     const checkout = path.join(scenario.root, ".tmp", "linked-checkout");
@@ -672,8 +776,8 @@ describe("Task Review protocol", () => {
         root,
         executionIdentity: taskReviewExecution({ taskId: "task-1" }),
       });
-      const before = observer.capture({ number: 1 });
       fs.mkdirSync(path.join(root, "specs", "task-1"), { recursive: true });
+      const before = observer.capture({ number: 1 });
       fs.writeFileSync(path.join(root, "specs", "task-1", "canonical.json"), "{\"changed\":true}\n");
       const after = observer.capture({ number: 1 });
       assert.equal(observer.hasEffect(before, after), true);

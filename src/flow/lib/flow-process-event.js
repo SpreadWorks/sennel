@@ -1,6 +1,6 @@
 import { ProcessExecutionEvent, PROCESS_EXECUTION_EVENT_TYPES, ProcessExecutionControlFailure,
   ProcessExecutionCanonicalAcknowledgement, ProcessExecutionRuntimeOnlyDisposition,
-  ProcessExecutionEventBatchWriter } from "../../lib/process-execution-values.js";
+  ProcessExecutionAtomicEventWriter, ProcessExecutionEventGroup } from "../../lib/process-execution-values.js";
 import { ProcessExecutionFinalizationBarrier } from "../../lib/process-execution-finalization.js";
 
 export const PROCESS_EVENT_OPERATION = "record_process_event";
@@ -96,14 +96,22 @@ export class FlowProcessEvent {
 }
 
 /** The process runtime invokes this port; it never imports canonical Flow storage. */
-export class FlowProcessEventWriter extends ProcessExecutionEventBatchWriter {
+export class FlowProcessEventWriter extends ProcessExecutionAtomicEventWriter {
   constructor(flowManager) { super(); this.flowManager = flowManager; }
   write(event) {
-    if (!(event instanceof ProcessExecutionEvent)) throw new TypeError("Process event writer requires a typed event");
-    if (event.binding.value?.flowVersionId == null) return ProcessExecutionRuntimeOnlyDisposition.fromEvent(event);
-    if (this.flowManager.recordProcessEvent(event) !== event.eventId) {
-      throw new ProcessExecutionControlFailure("observation-save-failed", "Canonical process publication did not confirm its exact event identity");
+    return this.#publish(new ProcessExecutionEventGroup([event]), () => [this.flowManager.recordProcessEvent(event)])[0];
+  }
+  writeGroup(group) {
+    if (!(group instanceof ProcessExecutionEventGroup)) throw new TypeError("Process event writer requires a typed event group");
+    return this.#publish(group, () => this.flowManager.recordProcessEvents(group));
+  }
+  #publish(group, save) {
+    const events = group.events;
+    if (events[0].binding.value?.flowVersionId == null) return events.map((event) => ProcessExecutionRuntimeOnlyDisposition.fromEvent(event));
+    const identities = save();
+    if (identities.length !== events.length || identities.some((id, index) => id !== events[index].eventId)) {
+      throw new ProcessExecutionControlFailure("observation-save-failed", "Canonical process publication did not confirm its exact event identities");
     }
-    return ProcessExecutionCanonicalAcknowledgement.fromEvent(event);
+    return events.map((event) => ProcessExecutionCanonicalAcknowledgement.fromEvent(event));
   }
 }

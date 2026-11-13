@@ -190,7 +190,12 @@ export class ProcessLock {
   }
 
   inspect() {
-    if (this.location !== null) {
+    return this.#inspect(true);
+  }
+
+  #inspect(resolveLocation) {
+    if (!resolveLocation && this.location !== null) this.location.authority.assertStable();
+    if (resolveLocation && this.location !== null) {
       this.directoryAuthority = this.location.resolve({ errorFactory: this.errorFactory });
       if (this.directoryAuthority === null) return null;
     }
@@ -231,7 +236,10 @@ export class ProcessLock {
   release() {
     if (this.#owner == null) return;
     this.directoryAuthority.assertStable();
-    const current = this.inspect();
+    // Releasing the exact held token grants no new admission. A migration may
+    // have moved a former lock namespace; retain the pinned current namespace
+    // and leave any newly visible legacy evidence to subsequent admission.
+    const current = this.#inspect(false);
     if (
       !current
       || !sameFile(current.stat, this.lockIdentity)
@@ -244,7 +252,7 @@ export class ProcessLock {
     try {
       removeRegularFile(this.lockPath, { expectedIdentity: current.stat, maxBytes: MAX_LOCK_BYTES,
         directoryAuthority: this.directoryAuthority, commitGuard: () => {
-          const visible = this.inspect();
+          const visible = this.#inspect(false);
           if (!visible || visible.owner.ownerToken !== this.ownerToken || visible.owner.ownerSession !== this.ownerSession) {
             throw this.#error("ownership-changed", "lock owner changed before release");
           }

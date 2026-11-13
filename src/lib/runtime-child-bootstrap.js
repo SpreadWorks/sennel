@@ -4,6 +4,7 @@ import * as nodeModule from "node:module";
 import { MessageChannel } from "node:worker_threads";
 import { readSync, closeSync, openSync, lstatSync, fstatSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 const configuration = JSON.parse(Buffer.from(new URL(import.meta.url).hash.slice(1), "base64url"));
@@ -41,7 +42,11 @@ try {
 if (bytes.length !== configuration.byteLength || createHash("sha256").update(bytes).digest("hex") !== configuration.digest) {
   throw new Error("RUNTIME_DELIVERY_DIGEST_MISMATCH: inherited delivery bytes differ from the parent proof");
 }
-const delivery = JSON.parse(bytes);
+const decoded = gunzipSync(bytes, { maxOutputLength: configuration.decodedByteLength });
+if (decoded.length !== configuration.decodedByteLength) {
+  throw new Error("RUNTIME_DELIVERY_INVALID: decoded delivery length differs from the parent proof");
+}
+const delivery = JSON.parse(decoded);
 if (delivery.identity.revision !== configuration.revision) {
   throw new Error("RUNTIME_REVISION_MISMATCH: inherited runtime differs from its execution contract");
 }

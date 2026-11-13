@@ -1,0 +1,71 @@
+{
+  "contractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+  "sequence": 1,
+  "previousDigest": null,
+  "eventId": "29877ea0-56a8-4319-84b1-32186a7b41e8",
+  "digest": "30bebee49f3c15e466e00a6838c4259bb35d53467b9733b2c009b60bae737d73",
+  "record": {
+    "scope": {
+      "stage": "artifact-worker",
+      "round": 0
+    },
+    "event": "planned",
+    "snapshot": {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "8d2f83960e4ab1cc3029e83296d3beb82b06be7d0f0c35c3d5ca9e95bac93ad2",
+        "collectionDigest": "b5fd12a59db863809f2a3e81db08bafb3d770a8d9af2a75dba629b69e6b6a79b",
+        "batches": [
+          {
+            "digest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+                "start": 0,
+                "end": 35,
+                "sourceLength": 35,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 0,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 0,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 0
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "54e6779f1ddab56e2d87fef7647ebdab9cba82210871232d7e5996b446a69b89",
+          "batchCalls": 0,
+          "transportOrdinal": 0,
+          "claim": null,
+          "responses": [],
+          "transportFailures": [],
+          "completion": null
+        }
+      ]
+    }
+  }
+}

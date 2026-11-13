@@ -1,0 +1,144 @@
+{
+  "entries": [
+    {
+      "step": "draft-gate",
+      "phase": "draft",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "draft.json",
+            "locator": "goal"
+          },
+          "observed": "State the selected behavior precisely.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ]
+        }
+      ],
+      "reason": "The draft needs a retained behavior made explicit.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-11-04T03:17:18.540Z",
+      "issueLogId": "draft-gate-result-0841ed2d40c65fe1313b61985da400378aa04b84fa3951099ac033b5fd510dd4"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "draft.json",
+            "locator": "goal"
+          },
+          "observed": "State the selected behavior precisely.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "R-1"
+          },
+          "rootCause": null,
+          "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea"
+        }
+      ],
+      "timestamp": "2026-11-04T03:17:46.771Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "artifact-worker-recovery-run",
+        "specId": "artifact-worker-recovery",
+        "issue": null,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-b9b7f51b-d190-4d77-9139-eba61e5a1dff",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "456a179fb50be9cabe8e4766b53e816eddff4875260985b83cd2ae65df23dff2",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-b9b7f51b-d190-4d77-9139-eba61e5a1dff",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "plan-gate-repaired-6c1d999d-c684-4afc-b570-6312eb784a0f",
+          "catalogFingerprint": "456a179fb50be9cabe8e4766b53e816eddff4875260985b83cd2ae65df23dff2",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-b9b7f51b-d190-4d77-9139-eba61e5a1dff",
+              "sequence": 1
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-b9b7f51b-d190-4d77-9139-eba61e5a1dff",
+              "sequence": 1
+            },
+            "sourceFingerprint": "499acabf0c0bad826a05813459eba70f46e6765fae289f9a3eb5dd9e90fde3d8",
+            "canonicalFingerprint": "456a179fb50be9cabe8e4766b53e816eddff4875260985b83cd2ae65df23dff2",
+            "sourceRevisionFingerprint": "8471e8364b8872f9b754f8a5df267f9f77e158a94e8b13417d66408577cdd2dd",
+            "canonicalRevisionFingerprint": "8471e8364b8872f9b754f8a5df267f9f77e158a94e8b13417d66408577cdd2dd"
+          }
+        },
+        "sourceIssueLogId": "draft-gate-result-0841ed2d40c65fe1313b61985da400378aa04b84fa3951099ac033b5fd510dd4",
+        "sourceEntryDigest": "f5dbaf0b63f5b1e25fe7d13562411d241a672c707ebc894f9788e5fb54b5c904",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "R-1",
+            "where": {
+              "file": "draft.json",
+              "locator": "goal"
+            },
+            "observed": "State the selected behavior precisely.",
+            "severity": "blocking",
+            "refs": [
+              "R-1"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "R-1"
+            },
+            "rootCause": null,
+            "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea"
+          }
+        ],
+        "observationFingerprints": [
+          "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-11-04T03:17:46.771Z"
+      },
+      "issueLogId": "plan-gate-repair-6db58b85c9869d0f87ea227b211803ff302948eb03b21975d036022a5dac969c"
+    }
+  ]
+}

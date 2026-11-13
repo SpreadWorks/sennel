@@ -9,12 +9,13 @@ import { executionValueDigest } from "../../../src/lib/process-execution-values.
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
-function fixture(t) {
+function fixture(t, { cleanupRunId } = {}) {
   const mainRoot = createTmpDir("process-history-");
   const executionRoot = path.join(mainRoot, "checkout");
-  t.after(() => removeQuiescentRuntimeFixture({ mainRoot, executionRoot }));
+  const runId = "history-run", specId = "history-spec";
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot, executionRoot, runId: cleanupRunId ?? runId, specId }));
   fs.mkdirSync(executionRoot);
-  return { mainRoot, executionRoot, runId: "history-run", specId: "history-spec" };
+  return { mainRoot, executionRoot, runId, specId };
 }
 
 function savedBytes(directory) {
@@ -190,7 +191,8 @@ test("an output barrier exposes the registered start without writes, then the sa
 });
 
 test("historical archives survive owner turnover, newer run and deleted checkout with exact source identity", async (t) => {
-  const options = fixture(t);
+  const successorRunId = "newer-run";
+  const options = fixture(t, { cleanupRunId: successorRunId });
   const runtime = await ProcessExecutionRuntime.acquire(options);
   const checkoutIdentity = runtime.checkoutIdentity;
   const completed = await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", ""], {
@@ -199,7 +201,7 @@ test("historical archives survive owner turnover, newer run and deleted checkout
   const receipt = completed.processExecutionStopReceipt;
   assert.equal(receipt.observation.kind, "exited");
   await runtime.close();
-  const successor = await ProcessExecutionRuntime.acquire({ ...options, runId: "newer-run" });
+  const successor = await ProcessExecutionRuntime.acquire({ ...options, runId: successorRunId });
   await successor.close();
   fs.rmdirSync(options.executionRoot);
   const before = savedBytes(path.join(options.mainRoot, ".sennel"));

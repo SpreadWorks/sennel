@@ -181,8 +181,7 @@ describe("migration executable attribution", () => {
     assert.deepEqual(snapshot(root), before);
     assert.deepEqual(snapshot(worktree), worktreeBefore);
     const records = logRecords(root).filter((record) => record.entryCommand.startsWith("migrate "));
-    assert.ok(records.some((record) => record.name === "config-loaded"));
-    assert.ok(records.every((record) => record.specId == null && record.flowPhase == null && record.taskId === null));
+    assert.deepEqual(records, [], "pure migration planning must not initialize diagnostic storage");
     const help = invoke(root, ["--help"], { cli: path.join(root, "src/sennel.js"), cwd: worktree });
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /--spec <specId>/);
@@ -242,7 +241,7 @@ describe("migration executable attribution", () => {
     authorityBefore.assertUnchanged();
     assert.equal(fs.existsSync(path.join(worktree, ".sennel/flow-identity.json")), false);
     assert.equal(fs.existsSync(path.join(worktree, ".sennel/.active-flow")), false);
-    assert.ok(logRecords(root).filter((record) => record.entryCommand.startsWith("migrate "))
-      .every((record) => record.specId == null && record.flowPhase == null && record.taskId === null));
+    assert.deepEqual(logRecords(root).filter((record) => record.entryCommand.startsWith("migrate ")), [],
+      "migration bootstrap does not create ambient Flow diagnostics");
   });
 });

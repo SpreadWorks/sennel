@@ -10,6 +10,7 @@ import { NodeScriptInvocation } from "../../../src/lib/command-invocation.js";
 import { ManagedOutputSnapshot } from "../../../src/lib/managed-process-output.js";
 import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
 import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
 import { RegisteredChildObservation } from "../../support/infrastructure/registered-child-observation.js";
 import { RuntimeRequestEffectFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
@@ -77,6 +78,9 @@ class OutputRequestScenario {
   }
   ledger() { return this.runtime.store.requestFile(this.runtime.executionId, this.requestId); }
   record() { return JSON.parse(this.ledger().read()); }
+  storedRecord(envelope) {
+    return RuntimeStandaloneRequestDocument.fromEnvelope(this.runtime.executionId, this.requestId, envelope).requestRecord();
+  }
   async finish() {
     if (this.receipt !== undefined) return this.receipt;
     const stdout = await this.runtime.persistCallOutput(this.call, { executor: this.executor, stream: "stdout", maximum: this.maximum, bytes: this.bytes });
@@ -122,8 +126,9 @@ test("output chunks retain exact durable acknowledgements across fresh same-epoc
   const acknowledged = await scenario.request(first);
   assert.deepEqual(acknowledged, { snapshot: ManagedOutputSnapshot.capture(bytes.subarray(0, 6), maximum).toJSON(), complete: false });
   const ledgerBytes = scenario.ledger().read(), stored = scenario.record();
-  assert.equal(stored.digest, executionValueDigest(stored.payload));
-  assert.equal(stored.payload.operation, "persist-call-output"); assert.equal(stored.payload.requestId, scenario.requestId);
+  assert.equal(stored.payload.version, 9);
+  assert.equal(scenario.storedRecord(stored).requestId, scenario.requestId);
+  assert.equal(stored.payload.operation, "persist-call-output");
   assert.equal(stored.payload.payloadDigest, executionValueDigest({ grant: runtime.remoteGrant(), data: first }));
   assert.match(stored.payload.authorizationDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(stored.payload.response, { ok: true, value: acknowledged });
@@ -169,7 +174,7 @@ for (const [mode, phase, expectedCode, effect] of [
     await assert.rejects(scenario.request(), error => { firstFailure = error; return error.code === expectedCode; });
     scenario.assertWitness(phase);
     const record = scenario.record();
-    assert.equal(record.digest, executionValueDigest(record.payload)); assert.equal(record.payload.response, null);
+    assert.equal(scenario.storedRecord(record).requestId, scenario.requestId); assert.equal(record.payload.response, null);
     assert.deepEqual(scenario.runtime.store.file.read(), before);
     assert.equal(fs.existsSync(scenario.stdoutFile), effect);
     const prefix = effect ? fs.readFileSync(scenario.stdoutFile) : null;
@@ -199,7 +204,7 @@ test("a later spool publication failure keeps its typed acknowledgement, earlier
   scenario.assertWitness("later-spool-publication");
   const record = scenario.record();
   assert.equal(record.payload.response.ok, false); assert.equal(record.payload.response.error.code, "PROCESS_EXECUTION_RECORD_SAVE_FAILED");
-  assert.equal(record.digest, executionValueDigest(record.payload));
+  assert.equal(scenario.storedRecord(record).requestId, scenario.requestId);
   await assert.rejects(scenario.request(rest), { code: "PROCESS_EXECUTION_RECORD_SAVE_FAILED" });
   await assert.rejects(scenario.request(rest, { requestId: randomUUID() }), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
   assert.deepEqual(scenario.record(), record); assert.deepEqual(scenario.runtime.store.file.read(), before);

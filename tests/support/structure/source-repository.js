@@ -70,10 +70,12 @@ function inside(root, absolute) {
 }
 
 /** Filesystem boundary for source discovery, reads, and relative resolution.
- * Strict traversal uses lstat at every path component: links are never followed.
+ * Source traversal uses lstat at every component. Audit-only Markdown aliases
+ * resolve to regular owned resources and are revalidated before each read.
  * Filesystem injection permits portable failure tests without platform permissions.
  */
 export class SourceRepository {
+  #resourceAliases = new Set();
   constructor(root, { filesystem = fs } = {}) {
     this.root = path.resolve(root);
     this.filesystem = filesystem;
@@ -107,8 +109,33 @@ export class SourceRepository {
     }
     return stat;
   }
-  #sourceEntry(absolute, sourceOnly) {
+  #resourceTarget(absolute) {
+    this.#checked(path.dirname(absolute));
+    if (path.extname(absolute).toLowerCase() !== ".md" || !this.#stat(absolute).isSymbolicLink()) {
+      throw new SourceRepositoryError("SYMLINK_SOURCE", this.#relative(absolute), "resource alias must remain a Markdown file link");
+    }
+    let canonicalRoot;
+    let canonical;
+    try {
+      canonicalRoot = this.filesystem.realpathSync(this.root);
+      canonical = this.filesystem.realpathSync(absolute);
+    } catch (error) {
+      throw new SourceRepositoryError("UNREADABLE_SOURCE", this.#relative(absolute), "cannot resolve resource alias", error);
+    }
+    if (!inside(canonicalRoot, canonical)) throw new SourceRepositoryError("ROOT_ESCAPE", this.#relative(absolute), "resource alias escapes repository");
+    const target = this.#absolute(path.relative(canonicalRoot, canonical));
+    if (path.extname(target).toLowerCase() !== ".md" || !this.#checked(target).isFile()) {
+      throw new SourceRepositoryError("SYMLINK_SOURCE", this.#relative(absolute), "resource alias target must be a regular Markdown file");
+    }
+    return target;
+  }
+  #sourceEntry(absolute, sourceOnly, allowResourceAliases = false) {
     const stat = this.#stat(absolute);
+    if (allowResourceAliases && stat.isSymbolicLink() && path.extname(absolute).toLowerCase() === ".md") {
+      const target = this.#resourceTarget(absolute);
+      this.#resourceAliases.add(absolute);
+      return this.#checked(target);
+    }
     // Flow's lexical index owns JavaScript, while the whole-source inventory
     // owns every asset. A non-code file link is irrelevant to the former only
     // when its target is proven to be a regular file; directory links still fail.
@@ -124,7 +151,8 @@ export class SourceRepository {
     }
     return this.#checked(absolute);
   }
-  #discover(relative, { allowMissing = false, onError = null, sourceOnly = false, maxDepth = Infinity } = {}) {
+  #discover(relative, { allowMissing = false, onError = null, sourceOnly = false, maxDepth = Infinity,
+    allowResourceAliases = false } = {}) {
     traversalDepth(maxDepth);
     const failed = discoveryFailure(onError);
     const files = [];
@@ -133,7 +161,7 @@ export class SourceRepository {
     let canonicalRoot;
     try {
       absolute = this.#absolute(relative);
-      stat = this.#sourceEntry(absolute, sourceOnly);
+      stat = this.#sourceEntry(absolute, sourceOnly, allowResourceAliases);
       if (stat === null) return [];
       try { canonicalRoot = this.filesystem.realpathSync(this.root); }
       catch (error) { throw new SourceRepositoryError("UNREADABLE_SOURCE", ".", "cannot resolve source root", error); }
@@ -163,7 +191,7 @@ export class SourceRepository {
         try {
           full = path.join(entry, child.name);
           if (!inside(this.root, full) || path.dirname(full) !== entry) throw new SourceRepositoryError("ROOT_ESCAPE", child.name, "invalid source entry name");
-          childStat = this.#sourceEntry(full, sourceOnly);
+          childStat = this.#sourceEntry(full, sourceOnly, allowResourceAliases);
         } catch (error) { failed(error); continue; }
         if (childStat !== null) walk(full, childStat, depth + 1);
       }
@@ -171,14 +199,15 @@ export class SourceRepository {
     walk(absolute, stat, 0);
     return files.sort();
   }
-  inventory(relative = ".", { allowMissing = false, onError = null, maxDepth = Infinity } = {}) {
-    return this.#discover(relative, { allowMissing, onError, maxDepth });
+  inventory(relative = ".", { allowMissing = false, onError = null, maxDepth = Infinity, allowResourceAliases = false } = {}) {
+    return this.#discover(relative, { allowMissing, onError, maxDepth, allowResourceAliases });
   }
   list(relative = ".", { strict = false } = {}) {
     return this.#discover(relative, { allowMissing: !strict, sourceOnly: !strict }).filter((file) => sourceFile(file, strict));
   }
   read(file) {
-    const absolute = this.#absolute(file);
+    let absolute = this.#absolute(file);
+    if (this.#resourceAliases.has(absolute)) absolute = this.#resourceTarget(absolute);
     if (!this.#checked(absolute).isFile()) throw new SourceRepositoryError("UNSUPPORTED_SOURCE", file, "source is not a regular file");
     try { return this.filesystem.readFileSync(absolute, "utf8"); }
     catch (error) { throw new SourceRepositoryError("UNREADABLE_SOURCE", file, "cannot read source", error); }

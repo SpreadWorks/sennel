@@ -1,0 +1,66 @@
+{
+  "schemaRevision": 2,
+  "artifacts": [
+    {
+      "logicalKey": "flow.activities",
+      "kind": "activity-ledger",
+      "relativePath": "activities.jsonl",
+      "hash": "1c9b64b4c12cf8ef8d2f7d57e3ec6f1091267fa79d65cebca2c0063867119970",
+      "size": 889,
+      "mediaType": "application/x-ndjson",
+      "authority": "canonical-flow-artifacts",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "system",
+      "retention": "permanent",
+      "activityId": "flow-created-1e1b0012ecb0c7d42f51f3c67a224db4dbcd79bf082049c2ef5527b517191747",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": "flow.state",
+      "kind": "flow-state",
+      "relativePath": "flow.json",
+      "hash": "cf23524fbeda1c568fba83d2a104a83d5a48bbb630cbc23a2eb1cb015aec64bb",
+      "size": 10506,
+      "mediaType": "application/json",
+      "authority": "repository-metadata",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "system",
+      "retention": "permanent",
+      "activityId": "flow-created-1e1b0012ecb0c7d42f51f3c67a224db4dbcd79bf082049c2ef5527b517191747",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": "spec.snapshot",
+      "kind": "spec-snapshot",
+      "relativePath": "revisions/001/spec.json",
+      "hash": "8133af23f49e3661da2db07ade80e9832adb84f40a9f63049eefb0ad5d02013a",
+      "size": 55,
+      "mediaType": "application/json",
+      "authority": "repository-metadata",
+      "cardinality": "collection",
+      "memberId": "66408e198a2f21dee35046cc5d1a514f6fe60137ec1361a3aea15ee405c7f8e9",
+      "publicationStep": "system",
+      "retention": "permanent",
+      "activityId": "flow-created-1e1b0012ecb0c7d42f51f3c67a224db4dbcd79bf082049c2ef5527b517191747",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": "spec.record",
+      "kind": "spec-record",
+      "relativePath": "spec.json",
+      "hash": "8133af23f49e3661da2db07ade80e9832adb84f40a9f63049eefb0ad5d02013a",
+      "size": 55,
+      "mediaType": "application/json",
+      "authority": "repository-metadata",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "system",
+      "retention": "permanent",
+      "activityId": "flow-created-1e1b0012ecb0c7d42f51f3c67a224db4dbcd79bf082049c2ef5527b517191747",
+      "migrationMaterialization": false
+    }
+  ],
+  "hash": "6a2ea7982a8d416975f967d606bca714d434152a0bbf2196da635b7b5c9c4d68"
+}

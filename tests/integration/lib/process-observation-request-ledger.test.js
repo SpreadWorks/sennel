@@ -9,7 +9,8 @@ import { ProcessExecutorIdentity, ProcessOutputState, executionValueDigest } fro
 import { NodeScriptInvocation } from "../../../src/lib/command-invocation.js";
 import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
 import { RegisteredChildObservation } from "../../support/infrastructure/registered-child-observation.js";
-import { RuntimeRequestEffectFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
+import { RuntimeRequestEffectFailure, readPhysicalRuntimeCompletion } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import { testTemporaryRoot } from "../../test-environment.js";
@@ -136,7 +137,9 @@ test("observation acceptance readback failure preserves pending identity without
     return error.code === "PROCESS_EXECUTION_DURABILITY_UNCERTAIN";
   });
   scenario.assertWitness("pending-visible-before-readback");
-  const pending = scenario.ledgerRecord(); assert.equal(pending.digest, executionValueDigest(pending.payload));
+  const pending = scenario.ledgerRecord();
+  const accepted = RuntimeStandaloneRequestDocument.fromEnvelope(scenario.runtime.executionId, scenario.requestId, pending).requestRecord();
+  assert.equal(accepted.requestId, scenario.requestId);
   assert.equal(pending.payload.operation, "observe"); assert.equal(pending.payload.response, null);
   assert.deepEqual(scenario.runtime.store.file.read(), before); scenario.assertUnobservedExit();
   await scenario.assertPendingReplay(failure);
@@ -166,10 +169,14 @@ test("a published observation and inline response remain paired when physical re
   assert.equal(envelope.digest, executionValueDigest(envelope.payload));
   const execution = envelope.payload.executions.find(entry => entry.executionId === scenario.runtime.executionId);
   const call = execution.calls.find(entry => entry.callId === scenario.call.callId);
-  assert.deepEqual(call.observation, scenario.observation.toJSON()); assert.equal(call.status, "exited");
+  const completed = readPhysicalRuntimeCompletion(scenario.runtime.store, execution.executionId, call.exitObservation);
+  assert.equal(completed.acceptance.requestId, scenario.requestId);
+  assert.equal(completed.acceptance.operation, "observe");
+  assert.equal(completed.observation.callId, call.callId);
+  assert.deepEqual(completed.observation.observation.toJSON(), scenario.observation.toJSON());
+  assert.equal(call.observation, null); assert.equal(call.status, "exited");
   assert.equal(call.receipt, null); assert.equal(call.output, null); assert.equal(call.outcome, null);
-  assert.deepEqual(execution.requests.find(request => request.requestId === scenario.requestId).response,
-    { ok: true, value: { status: "exited" } });
+  assert.deepEqual(completed.response, { ok: true, value: { status: "exited" } });
   assert.equal(execution.events.filter(event => event.callId === call.callId && event.type === "exited").length, 1);
   const pending = scenario.ledgerRecord(); assert.equal(pending.payload.response, null);
   assert.throws(() => scenario.runtime.inspect(), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
@@ -232,6 +239,8 @@ test("the post-dispatch fresh guard refuses changed registry bytes without publi
 
 test("an observation publication failure before visibility leaves the original call and pending identity without an acknowledgement", { timeout: 120000 }, async (t) => {
   const scenario = await ObservationRequestScenario.create(t, "observation-publication");
+  const original = scenario.execution();
+  assert.equal(original.requests.some(request => request.requestId === scenario.requestId), false);
   const before = scenario.runtime.store.file.read();
   await assert.rejects(scenario.request(), { code: "PROCESS_EXECUTION_REGISTRY_FAILED" });
   scenario.assertWitness("observation-effect-and-response-before-publication");
@@ -242,7 +251,9 @@ test("an observation publication failure before visibility leaves the original c
   assert.equal(envelope.digest, executionValueDigest(envelope.payload));
   const execution = envelope.payload.executions.find(entry => entry.executionId === scenario.runtime.executionId);
   scenario.assertUnobservedExit(execution);
-  assert.equal(execution.requests.some(request => request.requestId === scenario.requestId), false);
+  // The unchanged root retains the exact pre-operation chain heads. Staged
+  // sections do not become canonical history without that root publication.
+  assert.equal(original.requests.some(request => request.requestId === scenario.requestId), false);
   const pending = scenario.ledgerRecord(); assert.equal(pending.payload.response, null);
   assert.throws(() => scenario.runtime.inspect(), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
   await assert.rejects(scenario.request(), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });

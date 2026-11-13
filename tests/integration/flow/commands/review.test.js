@@ -1,3 +1,5 @@
+import { ProcessExecutionControlFailure, ProcessExecutionCommunicationDiagnostic, ProcessExecutionCommunicationAttempt } from "../../../../src/lib/process-execution-values.js";
+import { WorkerArtifactHandoffError } from "../../../../src/flow/lib/worker-artifact-handoff-error.js";
 import { loadConfig } from "../../../../src/lib/config.js";
 import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec } from "../../../support/infrastructure/worker-artifact.js";
 import { ImplPhaseScenario, implementationFinding } from "../../../support/impl-phase-scenario.js";
@@ -1674,13 +1676,11 @@ describe("normal no-diff canonical review", () => {
 
     let capturedPrompt = "";
     let capturedExecutionWorkDir = null;
-    let capturedWaitForProcessTree = null;
     const agent = {
       resolve: () => ({ provider: "fixture" }),
       call: async (userPrompt, options) => {
         capturedPrompt = `${options.systemPrompt || ""}\n${userPrompt}`;
         capturedExecutionWorkDir = options.executionWorkDir;
-        capturedWaitForProcessTree = options.waitForProcessTree;
         return JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] });
       },
     };
@@ -1696,7 +1696,6 @@ describe("normal no-diff canonical review", () => {
     assert.equal(capturedExecutionWorkDir, executionWorkDir);
     assert.equal(capturedExecutionWorkDir, noDiffRoot);
     assert.equal(fs.existsSync(path.join(outputDirectory, "checkout")), false);
-    assert.equal(capturedWaitForProcessTree, true);
     assert.equal(JSON.parse(fs.readFileSync(path.join(outputDirectory, "impl-review.json"), "utf8")).verdict, "PASS");
     assert.equal(fs.existsSync(path.join(fixture.location().directory, "file-map.json")), false);
   });
@@ -4092,4 +4091,56 @@ describe("Task Review outer subprocess retry boundary", () => {
     assert.equal(calls, 1);
     assert.equal(ReviewFailure.fromSubprocessResult({ phase: "impl", result }).classification, "schema_failure");
   });
+});
+
+
+it("preserves wrapped process control cause and communication facts when Draft Review admission refuses", async () => {
+  const root = createTmpDir("draft-review-wrapped-control-cause-");
+  const specId = "524-draft-review-wrapped-control-cause";
+  const originalConnect = DraftReviewConnector.prototype.connect;
+  try {
+    const { manager } = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-wrapped-control-cause", phase: "draft-questions",
+    });
+    const before = manager.canonicalState(specId).toJSON();
+    const activities = manager.activityLedger(specId);
+    const communication = new ProcessExecutionCommunicationDiagnostic({
+      operation: "read-control", budgetMs: 14000, elapsedMs: 14001, cutoff: "budget-exhausted",
+      attempts: [new ProcessExecutionCommunicationAttempt({
+        ordinal: 1, responseDeadlineMs: 14000, elapsedMs: 14001, outcome: "timeout",
+      })],
+    });
+    const control = new ProcessExecutionControlFailure("endpoint-unavailable", "Managed launcher did not respond", { communication });
+    const refusal = new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_AUTHORITY_UNAVAILABLE",
+      "worker artifact repository authority could not be captured: Managed launcher did not respond", { cause: control });
+    let admissionCalls = 0;
+    // Inject the external authority failure at the existing admission connector.
+    // This checks response/state propagation, not a native transport timeout.
+    DraftReviewConnector.prototype.connect = async function () { admissionCalls += 1; throw refusal; };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40), resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({ root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {} });
+    assert.equal(admissionCalls, 1);
+    assert.equal(result.ok, false);
+    const wire = JSON.parse(JSON.stringify(result));
+    assert.equal(wire.errors[0].code, "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(wire.data.failureKind, "step-admission");
+    assert.equal(wire.guidance.cause.kind, "process_control");
+    assert.equal(wire.guidance.cause.code, control.code);
+    assert.equal(wire.guidance.currentState.operation, "read-control");
+    assert.equal(wire.guidance.currentState.budgetMs, 14000);
+    assert.equal(wire.guidance.currentState.elapsedMs, 14001);
+    assert.equal(wire.guidance.currentState.acceptance, "unconfirmed");
+    assert.equal(wire.guidance.currentState.stop, "unconfirmed");
+    assert.deepEqual(wire.guidance.currentState.communicationAttempts, communication.toJSON().attempts);
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+    assert.deepEqual(manager.activityLedger(specId), activities);
+  } finally {
+    DraftReviewConnector.prototype.connect = originalConnect;
+    removeTmpDir(root);
+  }
 });

@@ -1,5 +1,6 @@
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactSpecReviewActivityEvidenceDocument } from "../lib/flow-artifact-contract.js";
 import { QueryError, canonicalJson, canonicalDigest, publicArtifactId, publicArtifactKey, ReferenceResolver } from "./query-values.js";
+import { FlowArtifactReadSnapshot } from "../lib/flow-version.js";
 import { QueryArtifactCapture, QueryDetailArtifactRequired } from "./query-artifact-capture.js";
 export { QueryDetailArtifactRequired } from "./query-artifact-capture.js";
 import { CanonicalSpecReview } from "./lib/spec-review-artifacts.js";
@@ -426,7 +427,8 @@ export class QueryDetailIndex {
     const retained = this.catalog.artifacts.filter((entry) => entry.logicalKey === "activity.evidence"
       && entry.activityId === activity.id).map((descriptor) => {
         const document = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence").contentContract.assertCatalogAssociation({
-          bytes: this.readCatalogedArtifact(descriptor), descriptor, activity });
+          bytes: this.readCatalogedArtifact(descriptor), descriptor, activity,
+          processEvidence: this.processEvidenceFor(descriptor) });
         if (!(document instanceof FlowArtifactSpecReviewActivityEvidenceDocument)) return null;
         document.assertActivity(activity, { specId: this.state.specId });
         if (document.source.path !== publicationPath) {
@@ -446,7 +448,8 @@ export class QueryDetailIndex {
     if (descriptor?.logicalKey !== "spec.review") return null;
     if (descriptor.activityId !== activity.id) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
       "The Spec Review generation for this Activity is not retained");
-    const review = new CanonicalSpecReview(this.read(descriptor));
+    const review = CanonicalSpecReview.fromBytes(this.readCatalogedArtifact(descriptor),
+      { processEvidence: this.processEvidenceFor(descriptor) });
     this.assertSpecReviewProcessStop(review, activity);
     if (activity.reviewPublication.generation !== review.generation
       || activity.reviewPublication.reviewDigest !== review.digest) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
@@ -521,6 +524,15 @@ export class QueryDetailIndex {
   }
   readCatalogedArtifact(descriptor) {
     return new QueryArtifactCapture(this.artifactBytes).read(descriptor);
+  }
+  processEvidenceFor(descriptor) {
+    if (!this.catalog.hasProcessStopProofs) return null;
+    return this.catalog.processStopEncodingFromCaptured(descriptor.logicalKey,
+      [this.readCatalogedArtifact(descriptor)], proof => this.readCatalogedArtifact(proof));
+  }
+  readArtifactSnapshot(descriptor) {
+    return FlowArtifactReadSnapshot.fromCapturedBytes({ descriptor,
+      bytes: this.readCatalogedArtifact(descriptor), processEvidence: this.processEvidenceFor(descriptor) });
   }
   forActivity(activity) {
     activity = FlowActivity.canonical(activity);
@@ -870,8 +882,9 @@ export class QueryDetailIndex {
     }
     const record = this.attemptRecord(activity, descriptor);
     requireRetainedText(record.payload, activity.id);
-    this.assertReviewProcessStop(record.payload.processStop, activity);
-    const review = new CanonicalDraftReviewObservation({ payload: record.payload, state: this.state, route });
+    const review = new CanonicalDraftReviewObservation({ payload: record.payload, state: this.state, route,
+      processEvidence: this.processEvidenceFor(descriptor) });
+    this.assertReviewProcessStop(review.processStop, activity);
     review.assertTarget(new ReviewWorkUnitTarget(lifecycle.binding.target.toJSON()));
     if (review.settlementPublication(record).digest !== activity.result.draftSettlementReceipt.publicationDigest) {
       unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review payload does not match its saved publication receipt");

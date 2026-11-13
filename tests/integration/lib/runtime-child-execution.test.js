@@ -107,17 +107,18 @@ test("worker first boot uses the fixed runtime while the parent event loop is bl
   assert.equal(await exited, 0);
 });
 
-test("missing delivery and mismatched expected revision refuse entrypoint evaluation", async (t) => {
+test("missing delivery, mismatched expected revision and decoded bounds refuse entrypoint evaluation", async (t) => {
   const root = createTestDirectory("runtime-refusal-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  for (const failure of ["missing", "revision"]) {
+  for (const failure of ["missing", "revision", "decoded-short", "decoded-long"]) {
     const delivery = new RuntimeChildExecution({ root });
     const options = delivery.options({ encoding: "utf8" });
     const [prefix, encoded] = options.env.NODE_OPTIONS.split("#");
     const configuration = JSON.parse(Buffer.from(encoded, "base64url"));
     if (failure === "missing") fs.renameSync(configuration.file, `${configuration.file}.retained`);
     else {
-      configuration.revision = "0".repeat(64);
+      if (failure === "revision") configuration.revision = "0".repeat(64);
+      else configuration.decodedByteLength += failure === "decoded-short" ? -1 : 1;
       options.env = { ...options.env, NODE_OPTIONS: `${prefix}#${Buffer.from(JSON.stringify(configuration)).toString("base64url")}` };
     }
     if (failure === "missing") {
@@ -135,7 +136,8 @@ test("missing delivery and mismatched expected revision refuse entrypoint evalua
       const result = spawnSync(process.execPath, ["--input-type=module", "-e", 'console.log("entrypoint ran")'], options);
       assert.notEqual(result.status, 0);
       assert.equal(result.stdout, "");
-      assert.match(result.stderr, /RUNTIME_REVISION_MISMATCH/);
+      assert.match(result.stderr, failure === "revision" ? /RUNTIME_REVISION_MISMATCH/
+        : failure === "decoded-short" ? /ERR_BUFFER_TOO_LARGE/ : /decoded delivery length differs/);
       assert.equal(delivery.close(), false);
       assert.throws(() => delivery.closeAfterExecution(), /RUNTIME_DELIVERY_COMPLETION_UNKNOWN/);
       assert.equal(fs.existsSync(configuration.file), true);

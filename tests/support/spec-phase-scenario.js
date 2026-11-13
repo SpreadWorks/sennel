@@ -781,7 +781,9 @@ export class SpecPhaseScenario {
         assert.equal(fs.existsSync(interruptedArchivePath), true, "the stopped execution must have transferred to its archive");
         const archive = JSON.parse(fs.readFileSync(interruptedArchivePath, "utf8"));
         assert.equal(archive.payload.execution.executionId, stoppedExecution.executionId);
-        assert.deepEqual(archive.payload.execution.calls.find((entry) => entry.callId === call.callId).receipt, call.receipt);
+        const archived = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root })
+          .executions.find((execution) => execution.executionId === stoppedExecution.executionId);
+        assert.deepEqual(archived.calls.find((entry) => entry.callId === call.callId).receipt, call.receipt);
         assert.equal(ProcessExecutionRuntime.current(), null);
         const stops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
           .filter((evidence) => evidence.receipt.binding.includes(sourceBinding));
@@ -1230,11 +1232,22 @@ export class SpecPhaseScenario {
       assert.equal(approvedSnapshot.bytes.length, plan.specRevision.byteLength);
     } catch (error) {
       testTemporaryRoot().retainOnUnconfirmedExecution(error);
-      if (error instanceof ProcessExecutionControlFailure) {
+      const boundaryFailures = error?.cause instanceof AggregateError ? error.cause.errors
+        : error instanceof AggregateError ? error.errors : [];
+      for (const [index, failure] of [error, ...boundaryFailures].entries()) {
+        console.error(JSON.stringify({ specPhaseBoundaryFailure: {
+          boundaryFailureIndex: index === 0 ? null : index - 1,
+          name: typeof failure?.name === "string" ? failure.name.slice(0, 80) : null,
+          code: typeof failure?.code === "string" ? failure.code.slice(0, 160) : null,
+          messageHead: typeof failure?.message === "string" ? failure.message.slice(0, 512) : null,
+          frames: typeof failure?.stack === "string" ? failure.stack.split("\n").slice(1, 7).map((line) => line.slice(0, 512)) : [],
+        } }));
+        if (!(failure instanceof ProcessExecutionControlFailure)) continue;
         console.error(JSON.stringify({ specPhaseProcessFailure: {
-          code: error.code, executionId: error.executionId, callId: error.callId,
-          primaryCauseCode: error.primaryCause.code,
-          communication: error.communication?.toJSON() ?? null,
+          boundaryFailureIndex: index === 0 ? null : index - 1,
+          code: failure.code, executionId: failure.executionId, callId: failure.callId,
+          primaryCauseCode: failure.primaryCause.code,
+          communication: failure.communication?.toJSON() ?? null,
         } }));
       }
       throw error;

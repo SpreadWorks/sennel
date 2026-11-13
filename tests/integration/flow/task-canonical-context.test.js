@@ -21,9 +21,11 @@ import {
   captureCurrentTaskSource,
 } from "../../../src/flow/lib/task-mutation-lineage.js";
 import {
+  SourceMutationBaseline,
   SourceMutationManifest,
   SourceWorkerEffect,
   WorkerArtifactHandoffCoordinator,
+  WorkerArtifactRepositoryMutationSnapshot,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
@@ -646,14 +648,17 @@ describe("canonical Task context", () => {
     fs.mkdirSync(path.join(root, "src"));
     fs.writeFileSync(path.join(root, "src/one.js"), "export const one = 1;\n");
     fs.writeFileSync(path.join(root, "src/two.js"), "export const two = 2;\n");
+    const observed = WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"] });
+    const source = observed.entries.find((entry) => entry.path === "src/one.js");
     const attempt = { id: "attempt-1", nodeId: "T-1-impl", sequence: 1 };
     const manifest = new SourceMutationManifest({
       attempt,
       baselineDigest: digest,
+      observations: observed.entries,
       mutations: [{
-        mutationId: "b".repeat(64), path: "src/one.js", changeKind: "content",
-        beforeKind: "file", beforeMode: 0o100644, beforeDigest: digest,
-        afterKind: "file", afterMode: 0o100644, afterDigest: "c".repeat(64),
+        mutationId: SourceMutationManifest.mutationId(attempt, "src/one.js"), path: "src/one.js", changeKind: "content",
+        beforeKind: "file", beforeMode: null, beforeDigest: digest, beforeGeneration: source.working.generation,
+        afterKind: "file", afterMode: null, afterDigest: source.digest, afterGeneration: source.working.generation,
       }],
     });
     const lineage = new TaskMutationLineage({
@@ -666,7 +671,8 @@ describe("canonical Task context", () => {
     assert.deepEqual(selection.entries.map((file) => file.path), ["src/one.js"]);
     assert.doesNotMatch(JSON.stringify(selection.toJSON()), /src\/two\.js/);
     const taskBAttempt = { id: "attempt-b", nodeId: "T-2-impl", sequence: 1 };
-    const taskBManifest = new SourceMutationManifest({ attempt: taskBAttempt, baselineDigest: digest, mutations: [] });
+    const taskBManifest = new SourceMutationManifest({ attempt: taskBAttempt, baselineDigest: digest,
+      mutations: [], observations: observed.entries });
     const taskBLineage = new TaskMutationLineage({
       runId: "run-1", specId: "spec-1", taskId: "T-2", role: "implementation", attempt: taskBAttempt,
       budget: new TaskExecutionBudget({ round: 1, reviewAttemptSequenceAtStart: 0, gateAttemptSequenceAtStart: 0 }),
@@ -680,6 +686,48 @@ describe("canonical Task context", () => {
     assert.throws(() => new TaskMutationLineageSet({
       runId: "run-1", specId: "spec-1", taskId: "T-2", lineages: [lineage],
     }), /another Task/);
+  });
+
+  it("retains raw binary Task authority through persisted source reload and repair carry comparison", (t) => {
+    const root = createTestDirectory("sennel-task-binary-source-");
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const source = path.join(root, "asset.bin");
+    fs.writeFileSync(source, Buffer.from([0x00]));
+    const attempt = { id: "binary-attempt", nodeId: "T-1-impl", sequence: 1 };
+    const baseline = SourceMutationBaseline.capture({ root, attempt });
+    fs.writeFileSync(source, Buffer.from([0x80]));
+    const manifest = SourceMutationManifest.capture({ baseline });
+    manifest.assertBinding(baseline);
+    const lineage = new TaskMutationLineage({ runId: "binary-run", specId: "binary-spec", taskId: "T-1",
+      role: "implementation", attempt,
+      budget: new TaskExecutionBudget({ round: 1, reviewAttemptSequenceAtStart: 0, gateAttemptSequenceAtStart: 0 }),
+      sourceFingerprint: manifest.digest, manifest: manifest.toJSON() });
+    const lineageSet = new TaskMutationLineageSet({ runId: "binary-run", specId: "binary-spec", taskId: "T-1", lineages: [lineage] });
+    const captured = CurrentTaskSourceSnapshot.capture({ root, lineageSet });
+    assert.equal(captured.assertMatchesLineages(lineageSet), captured, "certified binary bytes must satisfy the existing carry comparison");
+    assert.equal(captured.entries[0].digest, manifest.mutations[0].afterDigest);
+    fs.mkdirSync(path.join(root, ".tmp"), { recursive: true });
+    const stored = path.join(root, ".tmp", "task-source.json");
+    fs.writeFileSync(stored, JSON.stringify(captured.toJSON()));
+    const document = JSON.parse(fs.readFileSync(stored, "utf8"));
+    assert.equal(document.version, 2);
+    const restored = CurrentTaskSourceSnapshot.fromStored(document, { lineageSet });
+    assert.deepEqual(restored.toJSON(), captured.toJSON());
+    assert.equal(restored.assertMatchesLineages(lineageSet), restored, "Gate carry compares the certified raw bytes");
+
+    fs.writeFileSync(source, Buffer.from([0x81]));
+    const changed = CurrentTaskSourceSnapshot.capture({ root, lineageSet });
+    assert.equal(changed.entries[0].content, restored.entries[0].content, "UTF8 presentation alone cannot distinguish these bytes");
+    assert.notEqual(changed.fingerprint, restored.fingerprint, "the current-source fingerprint includes the raw digest");
+    assert.throws(() => changed.assertMatchesLineages(lineageSet), /no longer matches/);
+
+    const digestless = structuredClone(document); delete digestless.entries[0].digest;
+    assert.throws(() => CurrentTaskSourceSnapshot.fromStored(digestless, { lineageSet }), /raw source digest/);
+    const previous = structuredClone(document); delete previous.version; delete previous.entries[0].digest;
+    assert.throws(() => CurrentTaskSourceSnapshot.fromStored(previous, { lineageSet }), /invalid schema/);
+    assert.throws(() => CurrentTaskSourceSnapshot.fromStored({ ...document, version: 1 }, { lineageSet }), /version is unsupported/);
+    const normalized = structuredClone(document); normalized.entries[0].unexpected = true;
+    assert.throws(() => CurrentTaskSourceSnapshot.fromStored(normalized, { lineageSet }), /Task source snapshot/);
   });
 
   it("keeps Task A dirty while Task B executes against only its own current source", async (t) => {

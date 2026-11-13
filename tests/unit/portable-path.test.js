@@ -108,3 +108,13 @@ test("masking root and drive prefixes preserve ordinary text and drive-relative 
   const value = "file=/trusted (data)/a.txt";
   assert.equal(maskSensitive(value, { trustedRoots: ["/trusted (data)"] }), value);
 });
+
+
+test("portable spelling lookup preserves retained names and implicit ancestor spelling", () => {
+  const paths = new LogicalPathSet(["Café/é.bin", "Café/other"]);
+  assert.equal(paths.spellingFor("CAFE\u0301"), "Café");
+  assert.equal(paths.spellingFor("cafe\u0301/e\u0301.BIN"), "Café/é.bin");
+  assert.equal(paths.spellingFor("Café/missing"), null);
+  assert.throws(() => paths.spellingFor("Café/../escape"), { code: "PORTABLE_PATH_INVALID" });
+  assert.throws(() => new LogicalPathSet(["Café/é.bin", "Cafe\u0301/other"]), { code: "PORTABLE_PATH_COLLISION" });
+});

@@ -1,0 +1,60 @@
+{
+  "version": 8,
+  "root": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-source/.tmp/e799/layout-v8-producer-QCVgW6",
+  "sourceName": ".senti",
+  "stagingRelative": ".tmp/runtime/migrate-layout/sennel-migrate-layout-QA2bNN",
+  "sourceIdentity": {
+    "dev": 2049,
+    "ino": 10999379
+  },
+  "sourceSnapshot": {
+    "rootIdentity": {
+      "dev": 2049,
+      "ino": 10999379
+    },
+    "rootMode": 509,
+    "entries": [
+      {
+        "path": "config.json",
+        "targetPath": "config.json",
+        "kind": "file",
+        "dev": 2049,
+        "ino": 10999380,
+        "mode": 436,
+        "hash": "a3beb9660a02bf12936706af2ae35a122cb61811f405bee96e313d698b98f29a",
+        "transformedHash": "a3beb9660a02bf12936706af2ae35a122cb61811f405bee96e313d698b98f29a"
+      }
+    ]
+  },
+  "sourceSnapshotFingerprint": "d634494fc636637731e90f703d4482b943e9ae028a926fd82525b0ad0e7b0ab9",
+  "stagedManagedIdentity": {
+    "dev": 2049,
+    "ino": 11557239
+  },
+  "stagedSnapshotFingerprint": "07a73d96e45e5f6280a45059f34f5627a3fb388bd754cd837a409b16eea5ade3",
+  "metadata": [
+    {
+      "name": ".gitignore",
+      "existed": false,
+      "original": "",
+      "planned": "Ci5zZW5uZWwvKgohLnNlbm5lbC9jb25maWcuanNvbgohLnNlbm5lbC90ZW1wbGF0ZXMvCiEuc2VubmVsL291dHB1dC8KIS5zZW5uZWwvcHJlc2V0cy8KLnNlbm5lbC9vdXRwdXQvYWNjZXB0YW5jZS1yZXBvcnQtKi5qc29uCg=="
+    },
+    {
+      "name": ".gitattributes",
+      "existed": false,
+      "original": "",
+      "planned": "LnNlbm5lbC9vdXRwdXQvYW5hbHlzaXMuanNvbiBtZXJnZT1vdXJzCg=="
+    }
+  ],
+  "owner": {
+    "ownerToken": "a1dcc940-56eb-4ec5-90c8-592ab4215462",
+    "ownerSession": "e5274d89-3e00-48d9-88ec-7b5e37f61e57",
+    "released": true
+  },
+  "tempRootCreated": true,
+  "tempRootIdentity": {
+    "dev": 2049,
+    "ino": 11297919
+  },
+  "phase": "staged"
+}

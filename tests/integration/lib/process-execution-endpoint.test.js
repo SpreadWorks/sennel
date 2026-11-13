@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import { test } from "node:test";
 import { ProcessExecutionControlEndpoint } from "../../../src/lib/process-execution-endpoint.js";
 import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocation-workspace.js";
 import { isNativePathWithin } from "../../../src/lib/portable-path.js";
 import { ProcessExecutionRuntime, ProcessExecutionGrant } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
-import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
+import { managedRequest, ManagedProcessFrameReader } from "../../../src/lib/managed-process-protocol.js";
+import { ManagedControlPolicy } from "../../../src/lib/managed-control-policy.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
@@ -35,6 +37,82 @@ async function runtimeFixture(t) {
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root });
   return { root, runtime };
 }
+
+/** External transport fault only: forward authenticated bytes, drop TCP replies. */
+class ReplyDroppingProxy {
+  constructor(endpoint) {
+    this.endpoint = endpoint;
+    this.sockets = new Set();
+    this.requests = [];
+    this.droppedReplies = 0;
+    this.errors = [];
+    this.server = net.createServer(client => {
+      const upstream = net.createConnection({ host: endpoint.host, port: endpoint.port });
+      const requestFrames = new ManagedProcessFrameReader();
+      const responseFrames = new ManagedProcessFrameReader();
+      for (const socket of [client, upstream]) {
+        this.sockets.add(socket);
+        socket.once("close", () => this.sockets.delete(socket));
+        socket.on("error", error => { this.errors.push(error.code); client.destroy(); upstream.destroy(); });
+      }
+      client.once("close", () => upstream.destroy());
+      client.on("data", bytes => {
+        for (const frame of requestFrames.read(bytes)) {
+          const message = JSON.parse(frame);
+          this.requests.push({ requestId: message.requestId, payloadDigest: message.payloadDigest });
+        }
+        upstream.write(bytes);
+      });
+      upstream.on("data", bytes => {
+        for (const frame of responseFrames.read(bytes)) {
+          assert.ok(JSON.parse(frame).requestId);
+          this.droppedReplies += 1;
+        }
+      });
+    });
+  }
+
+  static async create(t, endpoint) {
+    const proxy = new this(endpoint);
+    t.after(async () => {
+      for (const socket of proxy.sockets) socket.destroy();
+      await new Promise((resolve, reject) => proxy.server.close(error => error ? reject(error) : resolve()));
+    });
+    await new Promise((resolve, reject) => {
+      proxy.server.once("error", reject);
+      proxy.server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+    });
+    return proxy;
+  }
+}
+
+test("a late TCP response-slot timeout still prepares mailbox replay within the original communication budget", { timeout: 60000 }, async t => {
+  const { root, runtime } = await runtimeFixture(t);
+  const grant = runtime.remoteGrant();
+  const proxy = await ReplyDroppingProxy.create(t, grant.endpoint);
+  // Only the carrier route changes. The message's authenticated grant keeps
+  // the real endpoint and all original checkout/owner/request authority.
+  const route = { ...grant, endpoint: { ...grant.endpoint, port: proxy.server.address().port } };
+  const policy = new ManagedControlPolicy();
+  const pauses = [];
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  const timers = policy.responseDeadlinesMs.slice(0, -1).map(deadline => setTimeout(() => {
+    pauses.push(deadline);
+    Atomics.wait(waitBuffer, 0, 0, 250);
+  }, deadline - 25));
+  let response;
+  try { response = await managedRequest(route, "authenticate", { grant, data: {} }, { policy }); }
+  finally { for (const timer of timers) clearTimeout(timer); }
+  assert.ok(pauses.length >= 1, "the actual first response timer fires after its slot cutoff");
+  assert.equal(response.ok, true);
+  assert.equal(response.value.grant.executionId, runtime.executionId);
+  assert.equal(response.value.checkout.executionRoot, root);
+  assert.ok(proxy.droppedReplies >= 1, "the real coordinator committed and replied through the blackholed TCP route");
+  assert.ok(proxy.requests.length <= policy.attemptCount);
+  assert.equal(new Set(proxy.requests.map(message => message.requestId)).size, 1);
+  assert.equal(new Set(proxy.requests.map(message => message.payloadDigest)).size, 1);
+  assert.deepEqual(proxy.errors, []);
+});
 
 test("retained endpoint decoding is structural while a live endpoint requires its minted physical storage", (t) => {
   const root = createTmpDir("endpoint-history-structure-");

@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { SourceMutationManifest } from "./worker-artifact-handoff.js";
+import { DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { SourceWorkingFileCapture } from "./source-working-file-capture.js";
+import { exactKeys } from "./source-effect-fields.js";
+import { assertWorkerArtifactStoredValue } from "./worker-artifact-input-format.js";
+import { SourceMutationManifestValue } from "./source-mutation-manifest.js";
 import { TaskExecutionBudget } from "./task-execution-policy.js";
+import { TaskSourceFilePresentation, TaskSourceDirectoryPresentation, TaskSourceDeletionPresentation } from "./task-source-presentation.js";
 
 const SHA = /^[a-f0-9]{64}$/;
+const CURRENT_TASK_SOURCE_VERSION = 2;
 const text = (value, field) => {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
   return value.trim();
@@ -30,7 +35,7 @@ export class TaskMutationLineage {
     if (!Number.isSafeInteger(this.attempt.sequence) || this.attempt.sequence < 1) throw new Error("Task mutation lineage Attempt sequence is invalid");
     this.budget = budget instanceof TaskExecutionBudget ? budget : new TaskExecutionBudget(budget);
     this.sourceFingerprint = digest(sourceFingerprint, "Task mutation lineage sourceFingerprint");
-    const parsedManifest = SourceMutationManifest.fromStored(manifest);
+    const parsedManifest = SourceMutationManifestValue.fromStored(manifest);
     if (parsedManifest.attempt.id !== this.attempt.id || parsedManifest.attempt.sequence !== this.attempt.sequence) {
       throw new Error("Task mutation lineage manifest does not bind its Attempt");
     }
@@ -125,32 +130,34 @@ export class TaskReviewSourceEffectRejection extends Error {
   }
 }
 
-class CurrentTaskSourceEntry {
-  constructor(relativePath) {
-    if (new.target === CurrentTaskSourceEntry) throw new Error("CurrentTaskSourceEntry is abstract");
-    const normalized = text(relativePath, "Task source path").split(path.sep).join("/");
-    if (path.posix.isAbsolute(normalized) || normalized.split("/").some((part) => part === ".." || part === "")) {
-      throw new Error(`Task source path is unsafe: ${relativePath}`);
-    }
-    this.path = normalized;
-  }
-}
-
-export class CurrentTaskSourceFile extends CurrentTaskSourceEntry {
-  constructor({ path: relativePath, content } = {}) {
-    super(relativePath);
-    if (typeof content !== "string") throw new Error(`Task source content must be text: ${this.path}`);
-    this.content = content;
+export class CurrentTaskSourceFile extends TaskSourceFilePresentation {
+  constructor({ path: relativePath, content, digest: rawDigest } = {}) {
+    super({ path: relativePath, content });
+    this.digest = digest(rawDigest, "Task raw source digest");
     Object.freeze(this);
   }
-  toJSON() { return { path: this.path, status: "present", content: this.content }; }
+  get sourceKind() { return "file"; }
+  get contentDigest() { return this.digest; }
+  toJSON() { return { path: this.path, status: "present", content: this.content, digest: this.digest }; }
 }
 
-export class CurrentTaskSourceDeletion extends CurrentTaskSourceEntry {
+export class CurrentTaskSourceDirectory extends TaskSourceDirectoryPresentation {
   constructor({ path: relativePath } = {}) {
-    super(relativePath);
+    super({ path: relativePath });
     Object.freeze(this);
   }
+  get sourceKind() { return "directory"; }
+  get contentDigest() { return null; }
+  toJSON() { return { path: this.path, status: "directory" }; }
+}
+
+export class CurrentTaskSourceDeletion extends TaskSourceDeletionPresentation {
+  constructor({ path: relativePath } = {}) {
+    super({ path: relativePath });
+    Object.freeze(this);
+  }
+  get sourceKind() { return "missing"; }
+  get contentDigest() { return null; }
   toJSON() { return { path: this.path, status: "deleted" }; }
 }
 
@@ -164,7 +171,8 @@ export class CurrentTaskSourceSnapshot {
     this.lineageFingerprints = Object.freeze(lineageSet.lineages.map((lineage) => lineage.fingerprint));
     this.noChangeReasons = lineageSet.noChangeReasons();
     this.entries = Object.freeze(entries.map((entry) => {
-      if (entry instanceof CurrentTaskSourceFile || entry instanceof CurrentTaskSourceDeletion) return entry;
+      if (entry instanceof CurrentTaskSourceFile || entry instanceof CurrentTaskSourceDirectory || entry instanceof CurrentTaskSourceDeletion) return entry;
+      if (entry?.status === "directory") return new CurrentTaskSourceDirectory(entry);
       return entry?.status === "deleted"
         ? new CurrentTaskSourceDeletion(entry)
         : new CurrentTaskSourceFile(entry);
@@ -181,16 +189,23 @@ export class CurrentTaskSourceSnapshot {
     if (!(lineageSet instanceof TaskMutationLineageSet)) throw new Error("Task source capture requires a lineage set");
     const repositoryRoot = path.resolve(text(root, "Task source root"));
     const entries = lineageSet.paths.map((relativePath) => {
-      const absolute = path.resolve(repositoryRoot, relativePath);
-      if (absolute === repositoryRoot || !absolute.startsWith(`${repositoryRoot}${path.sep}`)) {
-        throw new Error(`Task source path escapes repository: ${relativePath}`);
-      }
-      if (!fs.existsSync(absolute)) return new CurrentTaskSourceDeletion({ path: relativePath });
-      const stat = fs.lstatSync(absolute);
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Task source is not a regular file: ${relativePath}`);
-      return new CurrentTaskSourceFile({ path: relativePath, content: fs.readFileSync(absolute, "utf8") });
+      const captured = SourceWorkingFileCapture.capture(repositoryRoot, relativePath, {
+        maxBytes: DEFAULT_MAX_FILE_BYTES, retainBytes: true,
+      });
+      if (captured.working.kind === "missing") return new CurrentTaskSourceDeletion({ path: relativePath });
+      if (captured.working.kind === "directory") return new CurrentTaskSourceDirectory({ path: relativePath });
+      return new CurrentTaskSourceFile({ path: relativePath, content: captured.snapshot.bytes.toString("utf8"),
+        digest: captured.working.digest });
     });
     return new CurrentTaskSourceSnapshot({ lineageSet, entries });
+  }
+
+  static fromStored(value, { lineageSet } = {}) {
+    exactKeys(value, ["version", "runId", "specId", "taskId", "lineageFingerprints", "noChangeReasons", "entries", "fingerprint"], "Task source snapshot");
+    if (value.version !== CURRENT_TASK_SOURCE_VERSION) throw new Error("Task source snapshot version is unsupported");
+    const snapshot = new this({ lineageSet, entries: value.entries });
+    assertWorkerArtifactStoredValue(value, snapshot.toJSON(), "Task source snapshot");
+    return snapshot;
   }
 
   /** Compare only this Task's certified paths, after its last accepted mutation of each path. */
@@ -206,9 +221,7 @@ export class CurrentTaskSourceSnapshot {
     }
     for (const entry of this.entries) {
       const mutation = expected.get(entry.path);
-      const kind = entry instanceof CurrentTaskSourceDeletion ? "missing" : "file";
-      const contentDigest = kind === "missing" ? null : crypto.createHash("sha256").update(entry.content).digest("hex");
-      if (mutation.afterKind !== kind || mutation.afterDigest !== contentDigest) {
+      if (mutation.afterKind !== entry.sourceKind || mutation.afterDigest !== entry.contentDigest) {
         throw new TaskReviewSourceEffectRejection("Task Gate source no longer matches its certified Task Review repair lineage");
       }
     }
@@ -217,6 +230,7 @@ export class CurrentTaskSourceSnapshot {
 
   unsignedJSON() {
     return {
+      version: CURRENT_TASK_SOURCE_VERSION,
       runId: this.runId,
       specId: this.specId,
       taskId: this.taskId,

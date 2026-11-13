@@ -61,6 +61,24 @@ export class FileLockTimeoutError extends FileLockTerminalError {
   }
 }
 
+/** Lock construction and validation happen only when this acquisition is next. */
+export class FileLockAcquisition {
+  #createLock;
+  #onAcquired;
+  constructor(createLock, onAcquired = () => {}) {
+    if (typeof createLock !== "function" || typeof onAcquired !== "function") throw new TypeError("File lock acquisition requires factory and validation functions");
+    this.#createLock = createLock;
+    this.#onAcquired = onAcquired;
+    Object.freeze(this);
+  }
+  createLock() {
+    const lock = this.#createLock();
+    if (!(lock instanceof FileLock)) throw new TypeError("File lock acquisition factory must return a FileLock");
+    return lock;
+  }
+  onAcquired(lock) { return this.#onAcquired(lock); }
+}
+
 export class FileLock {
   constructor({ waitPolicy = new FileLockWaitPolicy(), ...lockOptions } = {}) {
     if (!(waitPolicy instanceof FileLockWaitPolicy)) {
@@ -119,6 +137,30 @@ export class FileLock {
     }
     this.#releaseAfter(bodyError);
     if (bodyError) throw bodyError;
+    return result;
+  }
+
+  /** Synchronous lazy acquisition with complete reverse-order unwinding. */
+  static runExclusiveGroup(acquisitions, body) {
+    if (typeof body !== "function") throw new TypeError("file lock exclusive body must be a function");
+    const acquired = [];
+    let result, failure;
+    let failed = false;
+    try {
+      for (const acquisition of acquisitions) {
+        if (!(acquisition instanceof FileLockAcquisition)) throw new TypeError("File lock group requires typed acquisitions");
+        const lock = acquisition.createLock();
+        lock.acquire();
+        acquired.push(lock);
+        acquisition.onAcquired(lock);
+      }
+      result = body();
+    } catch (error) { failed = true; failure = error; }
+    for (let index = acquired.length - 1; index >= 0; index--) {
+      try { acquired[index].#releaseAfter(failed ? failure : null); }
+      catch (error) { failed = true; failure = error; }
+    }
+    if (failed) throw failure;
     return result;
   }
 

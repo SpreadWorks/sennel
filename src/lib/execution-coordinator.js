@@ -6,13 +6,12 @@ import fs from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { ProcessExecutionCoordinator } from "./process-execution-runtime.js";
 import { ProcessExecutionControlFailure } from "./process-execution-values.js";
-import { ManagedProcessMessage } from "./managed-process-protocol.js";
+import { ManagedProcessMessage, ManagedProcessRequestBatch, ManagedProcessFrameReader, MANAGED_PROCESS_MESSAGE_MAX_BYTES as MAX_MESSAGE_BYTES } from "./managed-process-protocol.js";
 import { AtomicFile } from "./atomic-file.js";
 import { ReadOnlyProcessRuntimeStorage } from "./readonly-invocation-workspace.js";
 import { ProcessExecutionControlEndpoint } from "./process-execution-endpoint.js";
 import { captureRegularFile, RegularFileReadReceipt } from "./regular-file-snapshot.js";
 
-const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 let coordinator;
 let mailboxTimer;
 let server;
@@ -52,7 +51,7 @@ function shutdownIfReleased() {
   clearInterval(mailboxTimer);
   mailboxWatcher?.close();
   server.close(() => {});
-  for (const socket of sockets) socket.end();
+  for (const socket of sockets) socket.destroySoon();
   if (process.connected) process.disconnect();
 }
 async function dispatch(raw) {
@@ -71,6 +70,8 @@ function mailboxFailure(cause) {
 }
 async function scanMailbox() {
   if (!coordinator || coordinator.released) return;
+  let dispatched = 0;
+  let dispatchedBytes = 0;
   for (const name of requests.entries()) {
     // AtomicFile publishes only final .json names; producer stages are not requests.
     if (!name.endsWith(".json")) continue;
@@ -96,7 +97,17 @@ async function scanMailbox() {
       shutdownIfReleased();
     }).catch(mailboxFailure).finally(() => pendingMailboxRequests.delete(name));
     pendingMailboxRequests.set(name, pending);
-    await setImmediate();
+    // Admit a bounded run of already published requests before the Store seals
+    // its current cohort. Yielding after every member splits that same ready
+    // run across separate publications. Authentication, FIFO order and each
+    // original response budget still belong to the common request handler.
+    dispatched++;
+    dispatchedBytes += snapshot.byteLength;
+    if (dispatched >= ManagedProcessRequestBatch.maximumWidth || dispatchedBytes >= MAX_MESSAGE_BYTES) {
+      dispatched = 0;
+      dispatchedBytes = 0;
+      await setImmediate();
+    }
   }
 }
 async function start(configuration) {
@@ -108,21 +119,58 @@ async function start(configuration) {
   responses = mailbox.responseAuthority();
   server = net.createServer((socket) => {
     sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-    let input = Buffer.alloc(0);
+    const frames = new ManagedProcessFrameReader();
+    let receivedBytes = 0;
     let complete = false;
-    socket.on("error", () => socket.destroy());
+    let replies = [];
+    let remaining = 0;
+    let handedOff = false;
+    const handoffReplies = () => {
+      if (handedOff) return;
+      handedOff = true;
+      // These are the same authenticated responses, including work still in
+      // flight when TCP failed. Preserve them through the existing immutable
+      // publisher so fallback need not dispatch completed work a second time.
+      // Healthy TCP performs no mailbox I/O and retains no completed cache.
+      for (const reply of replies) reply.then((response) => {
+        if (response.payload.ok === true) publishResponse(response);
+        shutdownIfReleased();
+      }).catch(mailboxFailure);
+    };
+    socket.once("close", () => {
+      sockets.delete(socket);
+      if (remaining > 0 || !socket.writableFinished) handoffReplies();
+    });
+    socket.on("error", () => { handoffReplies(); socket.destroy(); });
     socket.on("data", (chunk) => {
       if (complete) return;
-      input = Buffer.concat([input, chunk]);
-      if (input.length > MAX_MESSAGE_BYTES) { socket.destroy(); return; }
-      const newline = input.indexOf(10);
-      if (newline < 0) return;
-      complete = true;
+      // Preserve the original whole-request carrier bound, including its LF
+      // and any trailing bytes in the final chunk, before accepting one frame.
+      receivedBytes += chunk.length;
+      if (receivedBytes > MAX_MESSAGE_BYTES) { socket.destroy(); return; }
       let raw;
-      try { raw = JSON.parse(input.subarray(0, newline).toString("utf8")); }
-      catch { socket.destroy(); return; }
-      dispatch(raw).then((response) => socket.end(`${JSON.stringify(response)}\n`, shutdownIfReleased), () => socket.destroy());
+      try {
+        const frame = frames.read(chunk).next();
+        if (frame.done) return;
+        raw = JSON.parse(frame.value);
+      } catch { socket.destroy(); return; }
+      complete = true;
+      let messages;
+      try {
+        messages = raw !== null && typeof raw === "object" && Object.hasOwn(raw, "messages")
+          ? ManagedProcessRequestBatch.fromEnvelope(raw).messages : [raw];
+      } catch { socket.destroy(); return; }
+      // Every original message enters the same coordinator handler in wire
+      // order. The carrier grants no acceptance, authentication or new retry.
+      replies = messages.map((message) => dispatch(message));
+      remaining = replies.length;
+      for (const reply of replies) reply.then((response) => {
+        remaining--;
+        if (handedOff || socket.destroyed) { handoffReplies(); return; }
+        const frame = `${JSON.stringify(response)}\n`;
+        if (remaining === 0) socket.end(frame, shutdownIfReleased);
+        else socket.write(frame);
+      }, () => { handoffReplies(); socket.destroy(); });
     });
   });
   const tcpAvailable = await new Promise((resolve) => {

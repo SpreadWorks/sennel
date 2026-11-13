@@ -66,6 +66,7 @@ import {
   CanonicalSourceRequirementScope,
 } from "../lib/canonical-file-map.js";
 import { CanonicalTaskContext } from "../lib/task-canonical-context.js";
+import { ProcessStopArtifactEncoding } from "../../lib/process-execution-values.js";
 import { CanonicalReviewInputDescriptor } from "../lib/review-work-unit-input.js";
 import {
   CanonicalSpecReview,
@@ -124,7 +125,7 @@ import {
   renderCanonicalTaskSource,
 } from "../lib/run-gate.js";
 import {
-  SourceMutationBaseline,
+  SourceMutationBaseline, SourceWorkerCanonicalObservationAdvance, WorkerArtifactHandoffError,
 } from "../lib/worker-artifact-handoff.js";
 import { TaskReviewExecutionIdentity } from "../lib/task-review-execution-identity.js";
 import { SourceExecutionObservationCatalog, SourceExecutionObservationAppends } from "../lib/source-execution-observation-appends.js";
@@ -323,11 +324,17 @@ async function synthesizeReviewFindings({
 }
 
 class TaskReviewSourceObservation {
-  constructor({ protocolAttempt, baseline, executionObservations = null } = {}) {
+  constructor({ protocolAttempt, baseline, executionObservations = null, canonicalObservation = null } = {}) {
     this.protocolAttempt = protocolAttempt;
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("Task Review source observation requires a source baseline");
+    if ((executionObservations === null) !== (canonicalObservation === null)
+      || executionObservations !== null && (!(executionObservations instanceof SourceExecutionObservationCatalog)
+        || !(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance))) {
+      throw new TypeError("Task Review canonical observations require paired catalog and provenance facts");
+    }
     this.baseline = baseline;
     this.executionObservations = executionObservations;
+    this.canonicalObservation = canonicalObservation;
     Object.freeze(this);
   }
 }
@@ -373,6 +380,7 @@ export class TaskReviewSourceEffectObserver {
             view.location.runtimeLock("runtime.lock.current-flow-state")],
         }),
         executionObservations: view === null ? null : new SourceExecutionObservationCatalog(view),
+        canonicalObservation: view === null ? null : SourceWorkerCanonicalObservationAdvance.captureTransitionView(view),
       });
     };
     return typeof this.flowManager?.readCanonicalTransitionView === "function"
@@ -380,12 +388,24 @@ export class TaskReviewSourceEffectObserver {
   }
 
   hasEffect(before, after) {
-    const changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
+    let changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
+    const canonical = before.canonicalObservation;
+    if (canonical !== null || after.canonicalObservation !== null) {
+      if (canonical === null || after.canonicalObservation === null) return true;
+      try {
+        canonical.assertCapturedAdvance(after.canonicalObservation, { executionObservations: after.executionObservations });
+      } catch (error) {
+        if (error instanceof WorkerArtifactHandoffError && error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID") return true;
+        throw error;
+      }
+      changed = changed.filter((relativePath) => !canonical.coversSourceMetadataChange(after.canonicalObservation, {
+        before: before.baseline.snapshot, after: after.baseline.snapshot, relativePath,
+      }));
+    }
     if (changed.length === 0) return false;
     if (before.executionObservations === null || after.executionObservations === null) return true;
     const appends = new SourceExecutionObservationAppends(after.executionObservations, before.baseline.snapshot);
-    return !appends.preservesCatalog(before.executionObservations)
-      || !appends.matches(after.baseline.snapshot)
+    return !appends.matches(after.baseline.snapshot)
       || !appends.explainsUnjournaled(changed);
   }
 
@@ -587,7 +607,12 @@ function canonicalSpecReviewInput() {
     logicalPath: "review.json",
     optional: true,
   });
-  return source === null ? null : source.readJsonObject();
+  if (source === null) return null;
+  const workUnit = canonicalReviewWorkerUnit();
+  const proofInput = workUnit?.manifestDocument.inputs.find(input => input.logicalKey === "process.stop.artifact.encoding");
+  const processEvidence = proofInput === undefined ? null : ProcessStopArtifactEncoding.fromJSON(JSON.parse(
+    assertReviewWorkUnitInputSnapshot(proofInput, workUnit.root).bytes.toString("utf8")));
+  return CanonicalSpecReview.fromBytes(source.readBytes(), { processEvidence });
 }
 
 function canonicalReviewFileMap(spec, { required = false } = {}) {
@@ -4704,11 +4729,10 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
   // Validate the immutable child input before loading context or resolving an
   // Agent. A missing, rebound, or modified descriptor must never reach the
   // reviewer or create a delta/seal side effect.
-  const canonicalReviewDocument = canonicalSpecReviewInput();
-  if (canonicalReviewDocument === null) {
+  const canonicalReview = canonicalSpecReviewInput();
+  if (canonicalReview === null) {
     throw new Error("spec-review requires an immutable revision-scoped canonical review input");
   }
-  const canonicalReview = new CanonicalSpecReview(canonicalReviewDocument);
 
   let analysisData = null;
   try {

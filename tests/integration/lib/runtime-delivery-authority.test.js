@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
+import { gunzipSync } from "node:zlib";
 import { RuntimeChildExecution, currentRuntimePackage } from "../../../src/lib/runtime-package.js";
 import { TemporaryPaths } from "../../../src/lib/temporary-paths.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -22,13 +23,16 @@ test("runtime delivery uses its selected temporary parent and releases its owned
     assert.equal(options.stdio.length, 3);
     const configuration = JSON.parse(Buffer.from(options.env.NODE_OPTIONS.split("#").at(-1), "base64url"));
     file = configuration.file;
-    const payload = JSON.parse(fs.readFileSync(file, "utf8"));
+    const compressed = fs.readFileSync(file);
+    const decoded = gunzipSync(compressed, { maxOutputLength: configuration.decodedByteLength });
+    assert.equal(decoded.length, configuration.decodedByteLength);
+    const payload = JSON.parse(decoded);
     assert.deepEqual(payload.identity, currentRuntimePackage().toJSON());
     assert.equal(payload.resources.some(([name]) => name === "src/lib/runtime-child-bootstrap.js"), true);
     const entries = fs.readdirSync(selected);
     assert.equal(entries.length, 1);
     assert.match(entries[0], /^child-/);
-    assert.deepEqual(fs.readdirSync(path.join(selected, entries[0])), ["delivery.json"]);
+    assert.deepEqual(fs.readdirSync(path.join(selected, entries[0])), ["delivery.json.gz"]);
     const child = spawnSync(process.execPath, ["-e", ""], options);
     assert.equal(child.status, 0, child.stderr.toString());
   } finally { delivery.close(); }
@@ -108,5 +112,5 @@ test("acknowledgement cleanup refuses a replaced owned directory without adoptin
   assert.throws(() => delivery.consumeAcknowledgement(), { code: "REAL_DIRECTORY_AUTHORITY_AUTHORITY_INVALID" });
   assert.throws(() => delivery.close(), /directory identity changed/);
   assert.equal(fs.readFileSync(path.join(owned, "sentinel"), "utf8"), "foreign owner");
-  assert.equal(fs.existsSync(path.join(retained, "delivery.json")), true);
+  assert.equal(fs.existsSync(path.join(retained, "delivery.json.gz")), true);
 });

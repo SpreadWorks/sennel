@@ -1,0 +1,70 @@
+{
+  "schemaRevision": 1,
+  "id": "04309f5bfb84895b26743161cc4185eb13c849499c05f2d5674351d78b36d196",
+  "flowVersionId": "flow-version-portable-state-created",
+  "runId": "run-portable-state-created",
+  "specId": "portable-state-created",
+  "recordingStartedAt": "2026-10-25T09:56:46.095Z",
+  "runtimeSourceId": "4271a6bf3672e64c1717bd19ff01dfd6d8415fc82c496bb6042e52338796252f",
+  "checkoutIdentity": {
+    "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-source/tests/fixtures/flow-telemetry-v4",
+    "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-source/tests/fixtures/flow-telemetry-v4",
+    "mainDevice": 2049,
+    "mainInode": 10999645,
+    "checkoutDevice": 2049,
+    "checkoutInode": 10999645
+  },
+  "checkoutNamespace": "4271a6bf3672e64c1717bd19ff01dfd6d8415fc82c496bb6042e52338796252f",
+  "retention": "permanent",
+  "producerCoverage": [
+    {
+      "producer": "agent-invocation",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "provider-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "outbox-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "process-call",
+      "status": "available",
+      "boundary": "managed-launcher-after-source-registration"
+    },
+    {
+      "producer": "synchronous-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "unmanaged-async-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "direct-spawn",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "provider-internal-tool",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "outer-agent",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    }
+  ],
+  "boundary": {
+    "confirmationOrder": 2,
+    "activityCount": 2
+  }
+}

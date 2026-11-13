@@ -14,8 +14,29 @@ export class InterruptedChildResult {
   }
 }
 
+export class ExitedChildResult {
+  constructor(exitCode, signal, stdout, stderr, pid) {
+    if (!Number.isSafeInteger(exitCode) || exitCode < 0 || signal !== null) throw new Error("checkpoint child did not finish normally");
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError("checkpoint child requires its actual process identity");
+    this.pid = pid;
+    this.exitCode = exitCode;
+    this.signal = signal;
+    this.stdout = stdout;
+    this.stderr = stderr;
+    Object.freeze(this);
+  }
+}
+
+export class FailedChildResult extends ExitedChildResult {
+  constructor(exitCode, signal, stdout, stderr, pid) {
+    if (exitCode === 0) throw new Error("checkpoint child completed instead of failing");
+    super(exitCode, signal, stdout, stderr, pid);
+  }
+  get failed() { return true; }
+}
+
 /** The caller owns this child and always waits for its resources to close. */
-export async function interruptChildAtCheckpoint(command, args, { cwd, env, checkpoint, timeout = 30_000 } = {}) {
+async function childAtCheckpoint(command, args, { cwd, env, checkpoint, timeout = 30_000 } = {}, interrupt, Result = FailedChildResult) {
   const child = spawn(command, args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
   const closed = once(child, "close");
   let stdout = "";
@@ -30,14 +51,30 @@ export async function interruptChildAtCheckpoint(command, args, { cwd, env, chec
         if (stdout.includes(checkpoint)) resolve();
       });
       child.once("error", reject);
-      child.once("exit", (code) => reject(new Error(`child exited before checkpoint (${code}): ${stderr}`)));
+      child.once(interrupt ? "exit" : "close", (code) => {
+        if (!interrupt && stdout.includes(checkpoint)) resolve();
+        else reject(new Error(`child exited before checkpoint (${code}): ${stderr}`));
+      });
     });
-    if (!child.kill("SIGKILL")) throw new Error("checkpoint child could not be interrupted");
-    const [exitCode] = await closed;
-    return new InterruptedChildResult(exitCode, stdout, stderr, child.pid);
+    if (interrupt && !child.kill("SIGKILL")) throw new Error("checkpoint child could not be interrupted");
+    const [exitCode, signal] = await closed;
+    return interrupt ? new InterruptedChildResult(exitCode, stdout, stderr, child.pid)
+      : new Result(exitCode, signal, stdout, stderr, child.pid);
   } finally {
     clearTimeout(timer);
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await closed;
   }
+}
+
+export function interruptChildAtCheckpoint(command, args, options) {
+  return childAtCheckpoint(command, args, options, true);
+}
+
+export function failedChildAtCheckpoint(command, args, options) {
+  return childAtCheckpoint(command, args, options, false);
+}
+
+export function exitedChildAtCheckpoint(command, args, options) {
+  return childAtCheckpoint(command, args, options, false, ExitedChildResult);
 }

@@ -766,3 +766,75 @@ test("reaudit Service member kind preserves receiver kind through inherited supe
     serviceSuccess(sample.check());
   }
 });
+
+test("Service static self construction inspects its actual instance constructor", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "export class Observer { constructor() {} static capture() { return new this(); } }\n";
+  sample.service("inspect() { return Observer.capture(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, "import fs from 'node:fs';\n" + pure.replace("constructor() {}", "constructor() { fs.existsSync('constructor'); }"));
+  serviceClosureViolation(sample.check(), file);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("Service static self construction preserves the derived receiver and instance initializers", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "class Parent { static capture() { return new this(); } } export class Observer extends Parent { marker = 1; }\n";
+  sample.service("inspect() { return Observer.capture(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, "import fs from 'node:fs';\n" + pure.replace("marker = 1;", "marker = fs.existsSync('initializer');"));
+  serviceClosureViolation(sample.check(), file);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+for (const body of [
+  "return new this().value();",
+  "const value = new this(); const alias = value; return alias.value();",
+]) {
+  test(`Service static self construction traces the created instance in ${body}`, () => {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const pure = `export class Observer { constructor() {} static capture() { ${body} } value() { return 1; } }\n`;
+    sample.service("inspect() { return Observer.capture(); }", "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, "import fs from 'node:fs';\n" + pure.replace("value() { return 1; }", "value() { return fs.existsSync('instance'); }"));
+    serviceClosureViolation(sample.check(), file);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+  });
+}
+
+for (const body of [
+  "capture() { return new this(); }",
+  "static capture() { function other() { return new this(); } return other(); }",
+]) {
+  test(`Service static self construction refuses an unresolved receiver in ${body}`, () => {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    sample.service(`inspect() { return ${body.startsWith("static") ? "Observer" : "new Observer()"}.capture(); }`,
+      "import { Observer } from '../lib/observe.js';");
+    sample.put(file, `export class Observer { ${body} }\n`);
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.message, "Service helper uses unresolved computed member or invocation");
+  });
+}
+
+for (const invoke of ["Observer.capture.call(Foreign)", "factory()"]) {
+  test(`Service static self construction refuses a detached receiver through ${invoke}`, () => {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    sample.put(file, "import fs from 'node:fs'; export class Observer { constructor() {} static capture() { return new this(); } } export class Foreign { constructor() { fs.existsSync('foreign'); } }\n");
+    const prefix = "import { Observer, Foreign } from '../lib/observe.js';";
+    sample.service("inspect() { return Observer.capture(); }", prefix);
+    serviceSuccess(sample.check());
+    sample.service(`inspect() { const factory = Observer.capture; return ${invoke}; }`, prefix);
+    serviceClosureViolation(sample.check(), file);
+  });
+}

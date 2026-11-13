@@ -1,10 +1,10 @@
-import { writeFileSync, chmodSync } from "fs";
+import { writeFileSync } from "fs";
 import { join } from "path";
 
 /**
  * Write a small Node.js script that echoes a deterministic JSON response on
  * stdout (ignoring any input), and return the config.agent section that
- * references it via the `echo` command pattern used by existing e2e tests.
+ * references it as a Node.js script through stubAgentConfig.
  *
  * The stub script writes `jsonResponse` to stdout so the Agent layer parses it
  * as the AI evaluation response (`{ evaluations: [...] }`). Because all flow
@@ -19,7 +19,6 @@ export function writeStubAgentScript(dir, relPath, jsonResponse) {
     "",
   ].join("\n");
   writeFileSync(scriptPath, body);
-  chmodSync(scriptPath, 0o755);
   return scriptPath;
 }
 
@@ -38,7 +37,6 @@ export function writeCapturingStubAgentScript(dir, relPath, capturePath, jsonRes
     "",
   ].join("\n");
   writeFileSync(scriptPath, body);
-  chmodSync(scriptPath, 0o755);
   return scriptPath;
 }
 
@@ -59,7 +57,6 @@ export function writeCapturingGateStubAgentScript(dir, relPath, capturePath, req
     "",
   ].join("\n");
   writeFileSync(scriptPath, body);
-  chmodSync(scriptPath, 0o755);
   return scriptPath;
 }
 
@@ -83,7 +80,6 @@ export function writePromptDispatchStubAgentScript(dir, relPath, cases, fallback
     "",
   ].join("\n");
   writeFileSync(scriptPath, body);
-  chmodSync(scriptPath, 0o755);
   return scriptPath;
 }
 

@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { once } from "node:events";
 import { test } from "node:test";
-import { ProcessExecutionRuntime, ProcessExecutionCall } from "../../../src/lib/process-execution-runtime.js";
-import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-values.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionControlFailure, executionValueDigest } from "../../../src/lib/process-execution-values.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
 import { ManagedControlPolicy } from "../../../src/lib/managed-control-policy.js";
@@ -33,13 +33,13 @@ async function fixture(t, mode) {
     net.Socket.prototype.end=function(bytes,...args){
       let message;try{message=JSON.parse(String(bytes).trim())}catch{return originalEnd.call(this,bytes,...args)}
       const operation=message.operation;
-      if((mode==='lost-claim'&&operation==='claim-launch')||(mode==='lost-stop'&&operation==='begin-stop')||(mode==='lost-control'&&operation==='read-control')){
-        fs.appendFileSync(audit,JSON.stringify({operation,requestId:message.requestId,payloadDigest:message.payloadDigest})+'\\n');
+      if((mode==='lost-claim'&&operation==='reserve-and-claim')||(mode==='lost-stop'&&operation==='begin-stop')||(mode==='lost-control'&&operation==='read-control')){
+        fs.appendFileSync(audit,JSON.stringify({operation,requestId:message.requestId,payloadDigest:message.payloadDigest,launchCallId:message.payload?.value?.callId??null,permitCallId:message.payload?.value?.permit?.callId??null})+'\\n');
         this.destroy();return this;
       }
       if(mode==='delayed-control'&&operation==='read-control'&&!delayed){
         delayed=true;const socket=this;
-        fs.appendFileSync(audit,JSON.stringify({operation,containsOutput:'stdout' in (message.payload?.value??{})})+'\\n');
+        fs.appendFileSync(audit,JSON.stringify({operation,containsOutput:[message.payload?.value,message.payload?.value?.control].some(value=>value&&typeof value==='object'&&('stdout'in value||'stderr'in value))})+'\\n');
         const deliver=()=>{if(!fs.existsSync(observed))return;watcher.close();originalEnd.call(socket,bytes,...args)};
         const watcher=fs.watch(path.dirname(observed),deliver);socket.once('close',()=>watcher.close());deliver();return this;
       }
@@ -85,19 +85,21 @@ test("lost launch reply replays one permit and never duplicates a real provider 
   assert.equal(fs.readFileSync(path.join(scope.root, "effects"), "utf8"), "one\n");
   const root = scope.runtime.store.read().executions.at(-1);
   assert.equal(root.calls.length, 1);
-  const request = root.requests.filter((entry) => entry.operation === "claim-launch");
+  const request = root.requests.filter((entry) => entry.operation === "reserve-and-claim");
   assert.equal(request.length, 1);
-  const call = new ProcessExecutionCall(scope.runtime, root.calls[0]);
+  const original = root.calls[0];
   const grant = scope.runtime.remoteGrant();
-  const replay = await managedRequest(grant, "claim-launch", { grant, data: {
-    call: call.controlTarget(), executor: root.calls[0].executor.toJSON(),
-  } }, { requestId: request[0].requestId });
+  const payload = { grant, data: { binding: original.binding.toJSON(), invocation: original.invocation,
+    timeoutMs: original.timeoutMs, graceMs: original.graceMs, executor: original.executor.toJSON() } };
+  assert.equal(executionValueDigest(payload), request[0].payloadDigest, "replay must use the exact original captured reservation, not reconstructed launch authority");
+  const replay = await managedRequest(grant, "reserve-and-claim", payload, { requestId: request[0].requestId });
   assert.deepEqual(replay, request[0].response);
   assert.equal(scope.runtime.inspect().executions.at(-1).calls.length, 1);
   assert.equal(result.processExecutionStopReceipt.observation.kind, "exited");
   const replies = scope.audit();
   assert.ok(replies.length > 0, "the fault must actually drop a launch response");
   assert.ok(replies.every((entry) => entry.requestId === request[0].requestId));
+  assert.ok(replies.every((entry) => entry.launchCallId === original.callId && entry.permitCallId === original.callId));
 });
 
 test("exhausted control delivery preserves all response slots and explicit unknown without a replacement spawn", async (t) => {

@@ -237,8 +237,9 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
         `IMPL_PHASE_ENTRY_BLOCKED: normal producer cannot reach ${stepId}; current=${this.current()}; ${JSON.stringify({
           directive: next.directive, outcome, attempt: this.state().attempt?.toJSON() ?? null,
         })}`);
-      assert.ok(outcome.ok !== false || outcome.errors?.every((entry) => entry.code === "FLOW_DISPATCH_LIMIT_REACHED"),
-        `normal producer must reach ${stepId}; current=${this.current()}; errors=${JSON.stringify(outcome.errors)}`);
+      const accepted = outcome.ok !== false || outcome.errors?.every((entry) => entry.code === "FLOW_DISPATCH_LIMIT_REACHED");
+      assert.ok(accepted, accepted ? undefined
+        : `normal producer must reach ${stepId}; current=${this.current()}; outcome=${JSON.stringify(outcome)}`);
     }
     assert.fail(`normal dispatcher did not reach ${stepId}; current=${this.current()}`);
   }

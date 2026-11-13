@@ -973,9 +973,9 @@ export class FlowArtifactContract {
     }
     return actor;
   }
-  assertContentPublication(previousBytes, nextBytes) {
+  assertContentPublication(previousBytes, nextBytes, options = {}) {
     if (!Buffer.isBuffer(nextBytes)) throw new Error("artifact publication content must be a Buffer");
-    return this.contentContract?.assertPublication(previousBytes, nextBytes) ?? null;
+    return this.contentContract?.assertPublication(previousBytes, nextBytes, options) ?? null;
   }
 }
 
@@ -1323,15 +1323,16 @@ export class FlowArtifactActivityEvidenceDocument {
 
 /** The exact canonical Review record retained by one Spec publication Activity. */
 export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifactActivityEvidenceDocument {
-  constructor(value = {}) {
+  constructor(value = {}, { processEvidence = null } = {}) {
     if (value === null || typeof value !== "object" || Array.isArray(value)
       || Object.keys(value).sort().join(",") !== "activityId,note,observedAt,owner,review,schemaRevision,source") {
       throw new Error("Spec Review Activity evidence has invalid fields");
     }
     const { review, ...observation } = value;
     super(observation);
-    this.review = new CanonicalSpecReview(review);
-    if (!isDeepStrictEqual(this.toJSON(), value)) {
+    this.review = review instanceof CanonicalSpecReview ? review : new CanonicalSpecReview(review, { processEvidence });
+    const expected = review instanceof CanonicalSpecReview ? { ...value, review: review.toJSON() } : value;
+    if (!isDeepStrictEqual(this.toJSON(), expected)) {
       throw new Error("Spec Review Activity evidence must preserve its exact canonical Review record");
     }
     const path = `revisions/${this.review.identity.revision.toString()}/review.json`;
@@ -1344,14 +1345,14 @@ export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifact
     Object.freeze(this);
   }
 
-  static fromJSON(value) { return new this(value); }
+  static fromJSON(value, options = {}) { return new this(value, options); }
 
   static forActivity({ activity, review, sourcePath, observedAt }) {
     if (!(review instanceof CanonicalSpecReview)) throw new TypeError("Spec Review Activity evidence requires a canonical Review");
     return new this({ schemaRevision: 1, activityId: activity.id,
       owner: { nodeId: activity.nodeId, nodeKey: activity.nodeKey },
       observedAt, source: { path: sourcePath, pointer: "", hash: review.digest },
-      note: "Canonical Spec Review publication.", review: review.toJSON() }).assertActivity(activity);
+      note: "Canonical Spec Review publication.", review }).assertActivity(activity);
   }
 
   assertActivity(activity, { specId = this.review.identity.specId } = {}) {
@@ -1373,21 +1374,21 @@ export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifact
 export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentContract {
   constructor() { super(); Object.freeze(this); }
 
-  parse(bytes) {
+  parse(bytes, { processEvidence = null } = {}) {
     if (!Buffer.isBuffer(bytes)) throw new Error("activity evidence content must be a Buffer");
     let value;
     try { value = JSON.parse(bytes.toString("utf8")); } catch (error) {
       throw new Error(`activity evidence must be valid JSON: ${error.message}`);
     }
     return Object.hasOwn(value ?? {}, "review")
-      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value)
+      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value, { processEvidence })
       : FlowArtifactActivityEvidenceDocument.fromJSON(value);
   }
 
-  assertPublication(previousBytes, nextBytes) {
-    const next = this.parse(nextBytes);
+  assertPublication(previousBytes, nextBytes, options = {}) {
+    const next = this.parse(nextBytes, options);
     if (previousBytes !== null) {
-      const previous = this.parse(previousBytes);
+      const previous = this.parse(previousBytes, options);
       if (JSON.stringify(previous.toJSON()) !== JSON.stringify(next.toJSON())) {
         throw new Error("immutable activity evidence cannot replace existing bytes");
       }
@@ -1395,8 +1396,8 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     return next;
   }
 
-  assertCatalogAssociation({ bytes, descriptor, activity } = {}) {
-    const document = this.parse(bytes);
+  assertCatalogAssociation({ bytes, descriptor, activity, processEvidence = null } = {}) {
+    const document = this.parse(bytes, { processEvidence });
     if (descriptor?.activityId === null || descriptor?.activityId === undefined) {
       throw new Error("activity evidence descriptor requires its Activity association");
     }

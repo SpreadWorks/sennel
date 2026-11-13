@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { finalRegressionWorktreeFingerprint } from "../../../src/flow/lib/test-artifacts.js";
+import { GitOutputObserver } from "../../support/infrastructure/git-output-observer.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -18,21 +19,11 @@ function useRepositoryTmpdir(t, root) {
   return directory;
 }
 
-function observeTemporaryDirectories(t) {
-  const directories = [];
-  const create = fs.mkdtempSync;
-  t.mock.method(fs, "mkdtempSync", (...args) => {
-    const directory = create(...args);
-    directories.push(directory);
-    return directory;
-  });
-  return directories;
-}
-
-function assertTemporaryOutputsRemoved(directories, repositoryTmpdir) {
-  assert.ok(directories.length > 0, "Git output used a temporary directory");
-  for (const directory of directories) assert.equal(fs.existsSync(directory), false);
-  assert.deepEqual(fs.readdirSync(repositoryTmpdir), []);
+function assertTemporaryOutputsRemoved(observer, repositoryTmpdir) {
+  observer.assertRemoved();
+  // Coordinator endpoint replies intentionally outlive their creator. This
+  // observer owns only the fingerprint's Git-output namespace.
+  assert.equal(fs.readFileSync(path.join(repositoryTmpdir, "caller-sentinel"), "utf8"), "caller bytes");
   assert.equal(process.env.TMPDIR, repositoryTmpdir);
 }
 
@@ -41,10 +32,11 @@ test("removes temporary Git output when an unborn HEAD prevents fingerprinting",
   t.after(() => removeTmpDir(root));
   initGitRepo(root);
   const temporary = useRepositoryTmpdir(t, root);
-  const directories = observeTemporaryDirectories(t);
+  const observer = new GitOutputObserver(t, root);
+  fs.writeFileSync(path.join(temporary, "caller-sentinel"), "caller bytes");
 
   assert.throws(() => finalRegressionWorktreeFingerprint(root), /final-regression git diff failed: exit=128/);
-  assertTemporaryOutputsRemoved(directories, temporary);
+  assertTemporaryOutputsRemoved(observer, temporary);
 });
 
 test("closes input descriptors and removes Git output when filesystem reading fails", (t) => {
@@ -55,23 +47,43 @@ test("closes input descriptors and removes Git output when filesystem reading fa
   commitAll(root, "Create read failure fixture");
   fs.writeFileSync(path.join(root, "tracked.txt"), "changed\n");
   const temporary = useRepositoryTmpdir(t, root);
-  const directories = observeTemporaryDirectories(t);
+  const observer = new GitOutputObserver(t, root);
+  fs.writeFileSync(path.join(temporary, "caller-sentinel"), "caller bytes");
   const descriptors = [];
+  const active = new Map();
   const open = fs.openSync;
+  const close = fs.closeSync;
+  const read = fs.readSync;
   t.mock.method(fs, "openSync", (file, flags, ...args) => {
     const descriptor = open(file, flags, ...args);
-    if (flags === "r") descriptors.push(descriptor);
+    // A visible path is still read inside AtomicFile publication. Inject only
+    // after its real publication method has returned the completed receipt.
+    // Runtime authority and publication readback continue using real reads.
+    if (observer.publications.some(publication => publication.path === file)) {
+      const observed = { descriptor, closed: false };
+      active.set(descriptor, observed);
+      descriptors.push(observed);
+    }
     return descriptor;
   });
+  t.mock.method(fs, "closeSync", (descriptor) => {
+    close(descriptor);
+    const observed = active.get(descriptor);
+    if (observed) { observed.closed = true; active.delete(descriptor); }
+  });
   const failure = Object.assign(new Error("filesystem read unavailable"), { code: "EIO" });
-  t.mock.method(fs, "readSync", () => { throw failure; });
+  t.mock.method(fs, "readSync", (descriptor, ...args) => {
+    if (active.has(descriptor)) throw failure;
+    return read(descriptor, ...args);
+  });
 
   assert.throws(() => finalRegressionWorktreeFingerprint(root), (error) => error === failure);
-  assert.ok(descriptors.length > 0, "A Git output file was opened before the read failure");
-  for (const descriptor of descriptors) {
-    assert.throws(() => fs.fstatSync(descriptor), { code: "EBADF" });
-  }
-  assertTemporaryOutputsRemoved(directories, temporary);
+  assert.ok(descriptors.length > 0, "A published Git output file was opened before the read failure");
+  // Record successful close of each opened lifetime. Its numeric descriptor
+  // may legitimately be reused by unrelated runtime work after that close.
+  assert.ok(descriptors.every(observed => observed.closed));
+  assert.equal(active.size, 0);
+  assertTemporaryOutputsRemoved(observer, temporary);
 });
 
 test("preserves the caller environment when temporary output cannot be created", (t) => {

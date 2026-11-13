@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, types } from "node:util";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { ManagedStopOperationValue } from "./managed-stop-operation-value.js";
 import { ProcessExecutionInvocationDisclosure } from "./process-execution-invocation.js";
 export { ProcessExecutionInvocationDisclosure } from "./process-execution-invocation.js";
 import { ProcessExecutionReservationRevocation, ProcessExecutionCallClosure } from "./process-execution-reservation-revocation.js";
+import { FileIdentity } from "./file-identity.js";
+import { ProcessCheckoutEvidenceEncoding } from "./process-checkout-evidence-encoding.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -14,26 +16,169 @@ export function executionUuid(value, name) {
   return value;
 }
 export function executionValueSnapshot(value) { return value == null ? null : JSON.parse(JSON.stringify(value)); }
-export function freezeExecutionValue(value) {
-  if (value !== null && typeof value === "object") {
-    for (const nested of Object.values(value)) freezeExecutionValue(nested);
-    Object.freeze(value);
+/** Require the complete restored JSON structure without imposing object-key order. */
+export function executionValueExact(value, restored) {
+  if (!isDeepStrictEqual(value, executionValueSnapshot(restored))) throw new TypeError("Runtime record has missing or unknown fields");
+  return restored;
+}
+// Only complete graphs frozen here through ordinary own data properties may
+// skip another traversal. A class prototype does not change Object.values'
+// own-property traversal. Accessors, proxies and cycles remain live on every
+// call; private and inherited fields are never visited by this operation.
+/** Recent completed freeze proofs. Expired graphs take the full traversal. */
+class FrozenExecutionDataCache {
+  #current = new WeakSet();
+  #previous = new WeakSet();
+  #entries = 0;
+
+  has(value) { return this.#current.has(value) || this.#previous.has(value); }
+
+  add(value) {
+    if (this.#entries === 16_384) {
+      this.#previous = this.#current;
+      this.#current = new WeakSet();
+      this.#entries = 0;
+    }
+    this.#current.add(value);
+    this.#entries++;
   }
+}
+
+const frozenExecutionData = new FrozenExecutionDataCache();
+export function freezeExecutionValue(value) {
+  const visited = new WeakMap();
+  const freeze = (current) => {
+    if (current === null || typeof current !== "object") return true;
+    if (frozenExecutionData.has(current)) return true;
+    if (visited.has(current)) return visited.get(current);
+    visited.set(current, false);
+    // Indexed native views have their own integrity and resize semantics.
+    let reusable = !types.isProxy(current) && !types.isTypedArray(current);
+    if (reusable) reusable = Object.keys(current).every((key) => Object.hasOwn(Object.getOwnPropertyDescriptor(current, key), "value"));
+    const nestedValues = Object.values(current);
+    for (const nested of nestedValues) if (!freeze(nested)) reusable = false;
+    Object.freeze(current);
+    visited.set(current, reusable);
+    if (reusable) frozenExecutionData.add(current);
+    return reusable;
+  };
+  freeze(value);
   return value;
 }
-function encodedExecutionValueDigest(text) { return crypto.createHash("sha256").update(text).digest("hex"); }
-export function executionValueDigest(value) { return encodedExecutionValueDigest(JSON.stringify(value)); }
 
+function encodedExecutionValueDigest(parts) {
+  const hash = crypto.createHash("sha256");
+  for (const part of parts) hash.update(part);
+  return hash.digest("hex");
+}
+export function executionValueDigest(value) { return encodedExecutionValueDigest([JSON.stringify(value)]); }
+
+/** A fresh control reply and a logical wakeup cursor, never authority or an exit proof. */
+export class ProcessExecutionControlObservation {
+  constructor(value) {
+    this.executionId = executionUuid(value.executionId, "control observation execution ID");
+    this.callId = executionUuid(value.callId, "control observation call ID");
+    if (value.control === null || typeof value.control !== "object" || Array.isArray(value.control)) throw new TypeError("Control observation requires its original control reply");
+    this.control = freezeExecutionValue(executionValueSnapshot(value.control));
+    if (typeof value.publicationDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.publicationDigest)) throw new TypeError("Control observation cursor is invalid");
+    this.publicationDigest = value.publicationDigest;
+    executionValueExact(value, this);
+    Object.freeze(this);
+  }
+  matches(executionId, callId) { return this.executionId === executionId && this.callId === callId; }
+  toJSON() { return { executionId: this.executionId, callId: this.callId,
+    control: executionValueSnapshot(this.control), publicationDigest: this.publicationDigest }; }
+  static fromStored(value) { return new this(value); }
+}
+
+const composedExecutionValueAuthority = Symbol("composed execution value encoding");
 /** One immutable JSON representation and the digest of those exact bytes. */
 export class ProcessExecutionValueEncoding {
   #text;
-  constructor(value) {
-    this.#text = JSON.stringify(value);
-    if (typeof this.#text !== "string") throw new TypeError("Execution value has no JSON representation");
-    this.digest = encodedExecutionValueDigest(this.#text);
+  #parts = null;
+  #decodedValue;
+  #digest;
+  constructor(value, authority = null) {
+    if (authority === composedExecutionValueAuthority) {
+      this.#parts = Object.freeze(value);
+      this.#text = null;
+    } else {
+      this.#text = JSON.stringify(value);
+      if (typeof this.#text !== "string") throw new TypeError("Execution value has no JSON representation");
+    }
+    // Comparisons need the captured JSON, not a checksum. Keep the original
+    // own enumerable digest projection while deriving it only when consumed.
+    Object.defineProperty(this, "digest", { enumerable: true,
+      get: () => this.#digest ??= encodedExecutionValueDigest([this.#render()]) });
     Object.freeze(this);
   }
-  text() { return this.#text; }
+  /** Compose captured values without invoking their original serializers again. */
+  static array(values) {
+    if (!Array.isArray(values)) throw new TypeError("Encoded array requires captured values");
+    const parts = ["["];
+    for (let index = 0; index < values.length; index++) {
+      const value = values[index];
+      if (!(value instanceof ProcessExecutionValueEncoding)) throw new TypeError("Encoded array requires captured values");
+      if (index !== 0) parts.push(",");
+      parts.push(value.#text === null ? value : value.#text);
+    }
+    parts.push("]");
+    return new ProcessExecutionValueEncoding(parts, composedExecutionValueAuthority);
+  }
+  static object(entries) {
+    if (!Array.isArray(entries)) throw new TypeError("Encoded object requires named captured values");
+    const fields = Object.create(null);
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      if (!Array.isArray(entry) || entry.length !== 2) throw new TypeError("Encoded object requires named captured values");
+      const name = entry[0], value = entry[1];
+      if (typeof name !== "string" || !(value instanceof ProcessExecutionValueEncoding)
+        || Object.hasOwn(fields, name)) throw new TypeError("Encoded object requires distinct string names and captured values");
+      fields[name] = value.#text === null ? value : value.#text;
+    }
+    // Object enumeration keeps JSON.stringify's numeric-key ordering, including
+    // keys such as __proto__ that must remain ordinary data properties.
+    const parts = ["{"];
+    for (const [name, value] of Object.entries(fields)) {
+      if (parts.length !== 1) parts.push(",");
+      parts.push(JSON.stringify(name), ":", value);
+    }
+    parts.push("}");
+    return new ProcessExecutionValueEncoding(parts, composedExecutionValueAuthority);
+  }
+  #appendTextParts(parts) {
+    if (this.#text !== null) parts.push(this.#text);
+    else for (const part of this.#parts) {
+      if (typeof part === "string") parts.push(part);
+      else part.#appendTextParts(parts);
+    }
+  }
+  #render() {
+    if (this.#text === null) {
+      const parts = [];
+      // Rendering a parent does not retain expanded text in its children.
+      // Large request sections keep only their captured value references.
+      this.#appendTextParts(parts);
+      this.#text = parts.join("");
+      this.#parts = null;
+    }
+    return this.#text;
+  }
+  text() { return this.#render(); }
+  // Callers split encoded JSON only at boundaries that cannot split a UTF-16 pair.
+  static digestParts(parts) { return encodedExecutionValueDigest(parts); }
+  matches(other) { return other instanceof ProcessExecutionValueEncoding && this.#render() === other.#render(); }
+  #decoded() {
+    if (this.#decodedValue === undefined) this.#decodedValue = JSON.parse(this.#render());
+    return this.#decodedValue;
+  }
+  #matchesJSON(value) { return isDeepStrictEqual(value, this.#decoded()); }
+  /** Compare decoded JSON without invoking or retaining its serializers. */
+  matchesJSON(value) { return this.#matchesJSON(value); }
+  hasSameValue(other) {
+    return other instanceof ProcessExecutionValueEncoding && (this.matches(other)
+      || this.#matchesJSON(other.#decoded()));
+  }
 }
 
 class ProcessExecutionCommandValue {
@@ -103,9 +248,10 @@ export class ProcessExecutionTiming {
   toJSON() { return { ...this }; }
 }
 
-const FAILURE_VERSION = 2;
-const DIAGNOSTIC_VERSION = 1;
+const FAILURE_VERSION = 3;
+const DIAGNOSTIC_VERSION = 2;
 const MAX_FAILURE_BYTES = 16 * 1024;
+export const PROCESS_RUNTIME_RECORD_MIGRATION_REQUIRED = "PROCESS_EXECUTION_RUNTIME_RECORD_MIGRATION_REQUIRED";
 
 function failureFields(value, fields, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)
@@ -230,14 +376,19 @@ export class ProcessExecutionCommunicationDiagnostic {
     }
     Object.freeze(this);
   }
-  toJSON() { return { ...this, attempts: this.attempts.map((attempt) => attempt.toJSON()) }; }
+  // Confirmation must not enlarge an already valid bounded failure. The
+  // versioned wire uses false -> true; semantic callers keep the named state.
+  toJSON() { return { schemaVersion: this.schemaVersion, operation: this.operation,
+    budgetMs: this.budgetMs, elapsedMs: this.elapsedMs, cutoff: this.cutoff, acceptance: this.acceptance,
+    stopConfirmed: this.stopConfirmation === "confirmed", attempts: this.attempts.map((attempt) => attempt.toJSON()) }; }
   withStopConfirmation(stopConfirmation) {
     if (this.stopConfirmation === "confirmed" && stopConfirmation !== "confirmed") throw new TypeError("Confirmed communication stop proof cannot be removed");
     return new this.constructor({ ...this, stopConfirmation });
   }
   static fromStored(value) {
-    failureFields(value, ["schemaVersion", "operation", "budgetMs", "elapsedMs", "cutoff", "acceptance", "stopConfirmation", "attempts"], "Communication diagnostic");
-    return new this(value);
+    failureFields(value, ["schemaVersion", "operation", "budgetMs", "elapsedMs", "cutoff", "acceptance", "stopConfirmed", "attempts"], "Communication diagnostic");
+    if (typeof value.stopConfirmed !== "boolean") throw new TypeError("Communication stop confirmation must be boolean");
+    return new this({ ...value, stopConfirmation: value.stopConfirmed ? "confirmed" : "unknown" });
   }
 }
 
@@ -328,12 +479,18 @@ export class ProcessExecutionControlFailure extends Error {
 
 /** Opaque semantic binding: the process layer stores and compares it, never interprets it. */
 export class ProcessExecutionBinding {
+  static #instances = new WeakSet();
   constructor(value = null) {
     this.value = freezeExecutionValue(executionValueSnapshot(value instanceof ProcessExecutionBinding ? value.value : value));
     if (this.value !== null && (typeof this.value !== "object" || Array.isArray(this.value))) {
       throw new TypeError("Process execution binding must be an object or null");
     }
     Object.freeze(this);
+    if (new.target === ProcessExecutionBinding) ProcessExecutionBinding.#instances.add(this);
+  }
+  /** Reuse only an immutable instance actually constructed by this class. */
+  static from(value) {
+    return this === ProcessExecutionBinding && ProcessExecutionBinding.#instances.has(value) ? value : new this(value);
   }
   toJSON() { return executionValueSnapshot(this.value); }
   matches(other) { return other instanceof ProcessExecutionBinding && isDeepStrictEqual(this.value, other.value); }
@@ -346,21 +503,25 @@ export class ProcessExecutionBinding {
 }
 
 export class ProcessExecutionCheckoutIdentity {
+  #mainIdentity;
+  #checkoutIdentity;
   constructor({ mainRoot, executionRoot, mainDevice, mainInode, checkoutDevice, checkoutInode }) {
     for (const value of [mainRoot, executionRoot]) {
       if (typeof value !== "string" || !path.isAbsolute(value) || path.resolve(value) !== value) throw new TypeError("Runtime authority must be an absolute path");
     }
-    for (const value of [mainDevice, mainInode, checkoutDevice, checkoutInode]) {
-      if (!Number.isSafeInteger(value) || value < 0) throw new TypeError("Runtime directory identity is invalid");
-    }
-    Object.assign(this, { mainRoot, executionRoot, mainDevice, mainInode, checkoutDevice, checkoutInode });
+    this.#mainIdentity = FileIdentity.fromStored({ dev: mainDevice, ino: mainInode });
+    this.#checkoutIdentity = FileIdentity.fromStored({ dev: checkoutDevice, ino: checkoutInode });
+    Object.assign(this, { mainRoot, executionRoot,
+      mainDevice: this.#mainIdentity.dev.toString(), mainInode: this.#mainIdentity.ino.toString(),
+      checkoutDevice: this.#checkoutIdentity.dev.toString(), checkoutInode: this.#checkoutIdentity.ino.toString() });
     Object.freeze(this);
   }
   matchesRepository(other) {
     return other instanceof ProcessExecutionCheckoutIdentity && this.mainRoot === other.mainRoot
-      && this.mainDevice === other.mainDevice && this.mainInode === other.mainInode;
+      && this.#mainIdentity.equals(other.#mainIdentity);
   }
-  matches(other) { return other instanceof ProcessExecutionCheckoutIdentity && isDeepStrictEqual(this.toJSON(), other.toJSON()); }
+  matches(other) { return this.matchesRepository(other) && this.executionRoot === other.executionRoot
+    && this.#checkoutIdentity.equals(other.#checkoutIdentity); }
   toJSON() { return { ...this }; }
 }
 
@@ -428,6 +589,7 @@ export const PROCESS_EXECUTION_EVENT_TYPES = Object.freeze([
 
 /** Immutable runtime fact; its injected consumer owns canonical publication. */
 export class ProcessExecutionEvent {
+  #encodingValue;
   constructor({ eventId, executionId, callId, parentCallId, rootCallId, sequence, type, binding, occurredAt, payload }) {
     this.eventId = executionUuid(eventId, "process event ID");
     this.executionId = executionUuid(executionId, "process event execution ID");
@@ -441,12 +603,17 @@ export class ProcessExecutionEvent {
     this.binding = new ProcessExecutionBinding(binding);
     this.occurredAt = occurredAt;
     this.payload = freezeExecutionValue(executionValueSnapshot(payload));
-    this.digest = executionValueDigest(this.toJSON());
+    // The payload has already been normalized and detached from its producer.
+    // Internal encoders can retain this immutable view without making another
+    // public, independently mutable payload copy on every serialization.
+    this.#encodingValue = freezeExecutionValue({ eventId: this.eventId, executionId: this.executionId, callId: this.callId,
+      parentCallId: this.parentCallId, rootCallId: this.rootCallId, sequence: this.sequence, type: this.type,
+      binding: this.binding.toJSON(), occurredAt: this.occurredAt, payload: this.payload });
+    this.digest = executionValueDigest(this.#encodingValue);
     Object.freeze(this);
   }
-  toJSON() { return { eventId: this.eventId, executionId: this.executionId, callId: this.callId,
-    parentCallId: this.parentCallId, rootCallId: this.rootCallId, sequence: this.sequence, type: this.type,
-    binding: this.binding.toJSON(), occurredAt: this.occurredAt, payload: executionValueSnapshot(this.payload) }; }
+  toEncodingValue() { return this.#encodingValue; }
+  toJSON() { return { ...this.#encodingValue, binding: this.binding.toJSON(), payload: structuredClone(this.payload) }; }
   static fromStored(value) {
     failureFields(value, ["eventId", "executionId", "callId", "parentCallId", "rootCallId", "sequence", "type", "binding", "occurredAt", "payload"], "Process execution event");
     return new this(value);
@@ -499,21 +666,59 @@ export class ProcessExecutionEventBatchWriter {
   write(_event) { throw new TypeError("Event batch writer must implement write"); }
 }
 
+/** Contiguous observations for one physical execution and exact semantic binding. */
+export class ProcessExecutionEventGroup {
+  constructor(events) {
+    if (!Array.isArray(events) || events.length === 0 || events.some((event) => !(event instanceof ProcessExecutionEvent))) {
+      throw new TypeError("Process event group requires typed events");
+    }
+    const first = events[0];
+    if (events.some((event) => event.executionId !== first.executionId || !event.binding.matches(first.binding))) {
+      throw new TypeError("Process event group requires one execution and exact binding");
+    }
+    this.events = Object.freeze([...events]);
+    Object.freeze(this);
+  }
+}
+
+/** Every returned publication belongs to one completed canonical transaction. */
+export class ProcessExecutionAtomicEventWriter extends ProcessExecutionEventBatchWriter {
+  constructor() {
+    super();
+    if (new.target === ProcessExecutionAtomicEventWriter) throw new TypeError("Atomic event writer requires a publication implementation");
+  }
+  write(event) {
+    const result = this.writeGroup(new ProcessExecutionEventGroup([event]));
+    return result?.then === undefined ? result[0] : result.then((publications) => publications[0]);
+  }
+  writeGroup(_group) { throw new TypeError("Atomic event writer must implement writeGroup"); }
+}
+
 export class ProcessExecutionStopReceipt {
+  #checkoutEncoding;
+  /** Artifact decoding requires an explicit, already acquired encoding proof. */
+  static fromArtifact(value, encoding = null) {
+    if (encoding !== null && !(encoding instanceof ProcessStopArtifactEncoding)) {
+      throw new TypeError("Stop artifact decoding requires a typed encoding");
+    }
+    if (value instanceof ProcessExecutionStopReceipt) return value;
+    return encoding === null ? new this(value) : encoding.receipt(value);
+  }
   constructor(value) {
     if (value instanceof ProcessExecutionStopReceipt) value = value.toJSON();
     failureFields(value, ["schemaVersion", "scope", "executionId", "callId", "ownerEpoch", "checkoutIdentity", "binding", "invocation", "invocationDigest",
       "executor", "observation", "output", "closureRevision", "descendants", "stopOperation", "outcomeDigest"], "Registered stop receipt");
     const { schemaVersion, scope, executionId, callId, ownerEpoch, checkoutIdentity, binding, invocation, invocationDigest,
       executor, observation, output, closureRevision, descendants, stopOperation, outcomeDigest } = value;
-    if (schemaVersion !== 3 || scope !== "registered-executions") throw new TypeError("Stop receipt requires the public invocation digest contract; older receipt formats require explicit maintenance");
+    if (schemaVersion !== 4 || scope !== "registered-executions") throw new TypeError("Stop receipt requires current evidence encoding; older receipt formats require explicit migration");
     this.schemaVersion = schemaVersion;
     this.scope = scope;
     this.executionId = executionUuid(executionId, "receipt executionId");
     this.callId = executionUuid(callId, "receipt callId");
     if (!Number.isSafeInteger(ownerEpoch) || ownerEpoch < 1) throw new TypeError("Receipt owner epoch is invalid");
     this.ownerEpoch = ownerEpoch;
-    this.checkoutIdentity = checkoutIdentity instanceof ProcessExecutionCheckoutIdentity ? checkoutIdentity : new ProcessExecutionCheckoutIdentity(checkoutIdentity);
+    this.#checkoutEncoding = new ProcessCheckoutEvidenceEncoding(executionValueSnapshot(checkoutIdentity));
+    this.checkoutIdentity = new ProcessExecutionCheckoutIdentity(this.#checkoutEncoding.decimals);
     this.binding = new ProcessExecutionBinding(binding);
     const disclosure = new ProcessExecutionInvocationDisclosure({ invocation, invocationDigest });
     this.invocation = disclosure.invocation; this.invocationDigest = disclosure.invocationDigest;
@@ -535,10 +740,84 @@ export class ProcessExecutionStopReceipt {
   }
   toJSON() { return { schemaVersion: this.schemaVersion, scope: this.scope,
     executionId: this.executionId, callId: this.callId, ownerEpoch: this.ownerEpoch,
-    checkoutIdentity: this.checkoutIdentity.toJSON(), binding: this.binding.toJSON(), invocation: executionValueSnapshot(this.invocation), invocationDigest: this.invocationDigest,
+    checkoutIdentity: this.#checkoutEncoding.toJSON(), binding: this.binding.toJSON(), invocation: executionValueSnapshot(this.invocation), invocationDigest: this.invocationDigest,
     executor: this.executor.toJSON(), observation: this.observation.toJSON(), output: this.output.toJSON(),
     closureRevision: this.closureRevision, descendants: this.descendants.map((entry) => entry.toJSON()),
     stopOperation: executionValueSnapshot(this.stopOperation), outcomeDigest: this.outcomeDigest }; }
+  /** Identity of the actual producer's exit fact, separate from current wire SHA. */
+  toEvidenceJSON() {
+    const value = this.toJSON();
+    if (this.#checkoutEncoding.retained) value.schemaVersion = 3;
+    return value;
+  }
+  get evidenceDigest() { return executionValueDigest(this.toEvidenceJSON()); }
+  /** Native artifacts use current wire; an explicit retained value keeps its producer. */
+  toArtifactJSON() { return this.toJSON(); }
+}
+
+/** Current typed exit observation with separately retained producer serialization. */
+class RetainedArtifactProcessStopReceipt extends ProcessExecutionStopReceipt {
+  constructor(value) {
+    super(value);
+    if (this.toEvidenceJSON().schemaVersion !== 3) {
+      throw new TypeError("Retained artifact encoding requires its exact previous numeric producer");
+    }
+  }
+  toArtifactJSON() { return this.toEvidenceJSON(); }
+}
+
+/** A lookup reference identifies a physical call, never its exit or permission. */
+export class ProcessStopArtifactReference {
+  constructor(value) {
+    this.executionId = executionUuid(value.executionId, "Artifact stop execution ID");
+    this.callId = executionUuid(value.callId, "Artifact stop call ID");
+    if (!Number.isSafeInteger(value.ownerEpoch) || value.ownerEpoch < 1) {
+      throw new TypeError("Artifact stop owner epoch is invalid");
+    }
+    this.ownerEpoch = value.ownerEpoch;
+    Object.freeze(this);
+  }
+  get digest() { return executionValueDigest([this.executionId, this.ownerEpoch, this.callId]); }
+}
+
+/** Pure current proof values acquired by the owning catalog or sealed input reader.
+ * This codec performs no IO or old conversion and grants no execution authority.
+ */
+export class ProcessStopArtifactEncoding {
+  #receipts = new Map();
+  constructor(receipts) {
+    if (!Array.isArray(receipts)) throw new TypeError("Stop artifact encoding requires current receipt proofs");
+    for (const value of receipts) {
+      const receipt = value instanceof RetainedArtifactProcessStopReceipt ? value
+        : new RetainedArtifactProcessStopReceipt(value);
+      const key = new ProcessStopArtifactReference(receipt).digest;
+      const previous = this.#receipts.get(key);
+      if (previous !== undefined && !isDeepStrictEqual(previous.toJSON(), receipt.toJSON())) {
+        throw new TypeError("Stop artifact encoding has conflicting producer identities");
+      }
+      this.#receipts.set(key, receipt);
+    }
+    Object.freeze(this);
+  }
+  receipt(value) {
+    if (value instanceof ProcessExecutionStopReceipt) return value;
+    if (value?.schemaVersion !== 3) return new ProcessExecutionStopReceipt(value);
+    // Artifact serializers may reorder object keys. The proof authenticates
+    // the complete JSON value; its producer evidence digest remains unchanged.
+    const receipt = this.#receipts.get(new ProcessStopArtifactReference(value).digest);
+    if (receipt === undefined || !isDeepStrictEqual(value, receipt.toArtifactJSON())) {
+      throw new TypeError("Previous artifact receipt lacks its exact current encoding proof");
+    }
+    return receipt;
+  }
+  get receipts() { return Object.freeze([...this.#receipts.values()]); }
+  toJSON() { return { version: 1, receipts: [...this.#receipts].sort(([a], [b]) => a.localeCompare(b))
+    .map(([, receipt]) => receipt.toJSON()) }; }
+  static fromJSON(value) {
+    failureFields(value, ["version", "receipts"], "Stop artifact encoding");
+    if (value.version !== 1) throw new TypeError("Stop artifact encoding version is unsupported");
+    return new this(value.receipts);
+  }
 }
 
 class ProcessExecutionRecoveryOwner {
@@ -580,19 +859,23 @@ export class ProcessExecutionRecoveryCall {
   toStored() { return { executionId: this.executionId, callId: this.callId, ownerEpoch: this.ownerEpoch,
     binding: this.binding.toJSON(), invocation: executionValueSnapshot(this.invocation), invocationDigest: this.invocationDigest, startPermitted: this.startPermitted,
     receipt: this.receipt?.toJSON() ?? null, revocation: this.revocation?.toJSON() ?? null }; }
+  toEvidenceStored() { return { ...this.toStored(), receipt: this.receipt?.toEvidenceJSON() ?? null,
+    revocation: this.revocation?.toEvidenceJSON() ?? null }; }
   toJSON() { return { executionId: this.executionId, callId: this.callId, ownerEpoch: this.ownerEpoch,
     binding: this.binding.toJSON(), invocation: executionValueSnapshot(this.invocation), invocationDigest: this.invocationDigest, startPermitted: this.startPermitted,
-    receiptDigest: this.receipt === null ? null : executionValueDigest(this.receipt),
-    revocationDigest: this.revocation === null ? null : executionValueDigest(this.revocation) }; }
+    receiptDigest: this.receipt?.evidenceDigest ?? null,
+    revocationDigest: this.revocation?.evidenceDigest ?? null }; }
 }
 
 /** Durable absence is meaningful only with a complete, exclusively observed inventory. */
 export class ProcessExecutionNonExecutionEvidence {
-  constructor({ schemaVersion = 1, checkoutIdentity, binding, invocation = null, inventoryDigest, ownerEpoch,
+  #checkoutEncoding;
+  constructor({ schemaVersion = 2, checkoutIdentity, binding, invocation = null, inventoryDigest, ownerEpoch,
     executions, reservationBeforeSpawn = true }) {
-    if (schemaVersion !== 1 || reservationBeforeSpawn !== true) throw new TypeError("Non-execution evidence requires the durable reservation-before-spawn contract");
+    if (schemaVersion !== 2 || reservationBeforeSpawn !== true) throw new TypeError("Non-execution evidence requires exact checkout identities and durable reservation-before-spawn evidence");
     this.schemaVersion = schemaVersion;
-    this.checkoutIdentity = checkoutIdentity instanceof ProcessExecutionCheckoutIdentity ? checkoutIdentity : new ProcessExecutionCheckoutIdentity(checkoutIdentity);
+    this.#checkoutEncoding = new ProcessCheckoutEvidenceEncoding(executionValueSnapshot(checkoutIdentity));
+    this.checkoutIdentity = new ProcessExecutionCheckoutIdentity(this.#checkoutEncoding.decimals);
     this.binding = new ProcessExecutionBinding(binding);
     if (this.binding.value === null || Object.keys(this.binding.value).length === 0) throw new TypeError("Non-execution evidence requires an exact semantic binding");
     this.invocation = new ProcessExecutionBinding(invocation);
@@ -610,13 +893,60 @@ export class ProcessExecutionNonExecutionEvidence {
     this.reservationBeforeSpawn = true;
     Object.freeze(this);
   }
-  toJSON() { return { schemaVersion: this.schemaVersion, checkoutIdentity: this.checkoutIdentity.toJSON(),
+  toJSON() { return { schemaVersion: this.schemaVersion, checkoutIdentity: this.#checkoutEncoding.toJSON(),
     binding: this.binding.toJSON(), invocation: this.invocation.toJSON(), inventoryDigest: this.inventoryDigest, ownerEpoch: this.ownerEpoch,
     executions: this.executions.map((execution) => execution.toJSON()), reservationBeforeSpawn: this.reservationBeforeSpawn }; }
+  toEvidenceJSON() {
+    const value = this.toJSON();
+    if (this.#checkoutEncoding.retained) value.schemaVersion = 1;
+    return value;
+  }
+  get evidenceDigest() { return executionValueDigest(this.toEvidenceJSON()); }
   static fromStored(value) {
     failureFields(value, ["schemaVersion", "checkoutIdentity", "binding", "invocation", "inventoryDigest", "ownerEpoch", "executions", "reservationBeforeSpawn"], "Non-execution evidence");
     return new this(value);
   }
+}
+
+/** Saved inventory observation only. This value has no current-owner or
+ * recovery capability; ProcessExecutionRecoveryEvidence owns those guarantees. */
+export class ProcessExecutionRecoveryEvidenceSummary {
+  #checkoutEncoding;
+  constructor(value) {
+    failureFields(value, ["schemaVersion", "checkoutIdentity", "binding", "invocation", "inventoryDigest", "ownerEpoch", "calls", "nonExecution"], "Recovery evidence summary");
+    if (value.schemaVersion !== 4 || !Number.isSafeInteger(value.ownerEpoch) || value.ownerEpoch < 1
+      || !/^[a-f0-9]{64}$/.test(value.inventoryDigest) || !Array.isArray(value.calls)) throw new TypeError("Recovery evidence summary requires its current exact identity contract");
+    this.schemaVersion = 4;
+    this.#checkoutEncoding = new ProcessCheckoutEvidenceEncoding(value.checkoutIdentity);
+    this.checkoutIdentity = new ProcessExecutionCheckoutIdentity(this.#checkoutEncoding.decimals);
+    this.binding = new ProcessExecutionBinding(value.binding);
+    this.invocation = new ProcessExecutionBinding(value.invocation);
+    this.inventoryDigest = value.inventoryDigest;
+    this.ownerEpoch = value.ownerEpoch;
+    this.calls = freezeExecutionValue(executionValueSnapshot(value.calls));
+    this.nonExecution = value.nonExecution === null ? null : ProcessExecutionNonExecutionEvidence.fromStored(value.nonExecution);
+    if ((this.calls.length === 0) !== (this.nonExecution !== null)) throw new TypeError("Recovery summary requires exact call or non-execution evidence");
+    if (this.nonExecution !== null && (!this.nonExecution.checkoutIdentity.matches(this.checkoutIdentity)
+      || !this.nonExecution.binding.matches(this.binding) || !this.nonExecution.invocation.matches(this.invocation)
+      || this.nonExecution.inventoryDigest !== this.inventoryDigest || this.nonExecution.ownerEpoch !== this.ownerEpoch)) throw new TypeError("Non-execution summary differs from its inventory");
+    executionValueExact(value, this);
+    Object.freeze(this);
+  }
+  static fromSaved(value) {
+    const { id, digest, ...summary } = value;
+    const restored = new this(summary);
+    if (id !== digest || digest !== restored.evidenceDigest) throw new TypeError("Saved recovery observation differs from its exact producer identity");
+    return restored;
+  }
+  toJSON() { return { schemaVersion: this.schemaVersion, checkoutIdentity: this.#checkoutEncoding.toJSON(), binding: this.binding.toJSON(), invocation: this.invocation.toJSON(),
+    inventoryDigest: this.inventoryDigest, ownerEpoch: this.ownerEpoch, calls: executionValueSnapshot(this.calls), nonExecution: this.nonExecution?.toJSON() ?? null }; }
+  toEvidenceJSON() {
+    const value = this.toJSON();
+    if (this.#checkoutEncoding.retained) value.schemaVersion = 3;
+    value.nonExecution = this.nonExecution?.toEvidenceJSON() ?? null;
+    return value;
+  }
+  get evidenceDigest() { return executionValueDigest(this.toEvidenceJSON()); }
 }
 
 export class ProcessExecutionStartPermit {
@@ -631,5 +961,6 @@ export class ProcessExecutionStartPermit {
     this.bindingDigest = bindingDigest;
     Object.freeze(this);
   }
+  matches(other) { return other instanceof ProcessExecutionStartPermit && isDeepStrictEqual(this.toJSON(), other.toJSON()); }
   toJSON() { return { ...this }; }
 }

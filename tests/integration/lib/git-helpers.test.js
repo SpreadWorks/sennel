@@ -679,3 +679,54 @@ describe("Git porcelain v2 difference authority", () => {
     );
   });
 });
+
+import { LoggedGitCommandExecution, GitPorcelainV2StatusExecution, runGitAsync } from "../../../src/lib/git-helpers.js";
+import { withReadOnlyManagedProcessScope } from "../../../src/lib/managed-process.js";
+
+it("records grouped and asynchronous native Git results once with distinct confirmed exit receipts", { timeout: 60000 }, async (t) => {
+  const root = createTestDirectory("logged-git-group-");
+  let logger, complete = false;
+  t.after(async () => {
+    try { if (logger) await logger.flush(); }
+    finally {
+      container.reset();
+      if (complete) fs.rmSync(root, { recursive: true, force: true });
+      else testTemporaryRoot().retainOnUnconfirmedExecution();
+    }
+  });
+  initRepo(root); logger = registerLogger(path.join(root, "logs"));
+  const malformed = runGitAsync(["status"], { cwd: root, gitPolicy: {} });
+  assert.equal(malformed instanceof Promise, true, "async argument rejection remains a promise");
+  await assert.rejects(malformed, TypeError);
+  let results, stored;
+  const commands = [
+    new GitPorcelainV2StatusExecution(root, { repositoryRoot: root, forceFileMode: false }),
+    new LoggedGitCommandExecution(["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: root, timeout: 10000 }),
+    new LoggedGitCommandExecution(["config", "--get", "fixture.missing"], { cwd: root, timeout: 10000 }),
+  ];
+  await withReadOnlyManagedProcessScope({ mainRoot: root }, async (runtime) => {
+    results = LoggedGitCommandExecution.runTogether(commands);
+    results.push(await runGitAsync(["rev-parse", "--verify", "HEAD"], { cwd: root, timeout: 10000 }));
+    stored = runtime.inspect().executions.find((execution) => execution.executionId === runtime.executionId);
+  });
+  assert.deepEqual(results.map((result) => result.status), [0, 0, 1, 0]);
+  assert.equal(Buffer.isBuffer(results[0].stdout), true);
+  assert.equal(typeof results[1].stdout, "string");
+  assert.equal(commands[0].parseResult(results[0]).entries.length, 0);
+  assert.equal(results[1].stdout.trim().split("\n")[0], results[3].stdout.trim());
+  const receipts = results.map((result) => result.processExecutionStopReceipt);
+  assert.equal(new Set(receipts.map((receipt) => receipt.callId)).size, 4);
+  assert.deepEqual(receipts.map((receipt) => receipt.observation.code), [0, 0, 1, 0]);
+  assert.equal(receipts.every((receipt) => receipt.stopEvidence.status === "confirmed"), true);
+  assert.equal(stored.calls.length, 4);
+  for (const receipt of receipts) assert.deepEqual(stored.calls.find((call) => call.callId === receipt.callId).receipt, receipt.toJSON());
+  await logger.flush();
+  const records = readJsonl(path.join(root, "logs", `sennel-${todayLocal()}.jsonl`)).filter((entry) => entry.type === "git");
+  assert.equal(records.length, 4);
+  assert.deepEqual(records.map((record) => record.exitCode), [0, 0, 1, 0]);
+  assert.equal(records.every((record) => record.cmd[0] === "git" && typeof record.stderr === "string"), true);
+  assert.deepEqual(records[1].cmd, ["git", "rev-parse", "HEAD", "HEAD^{tree}"]);
+  assert.deepEqual(records[2].cmd, ["git", "config", "--get", "fixture.missing"]);
+  assert.deepEqual(records[3].cmd, ["git", "rev-parse", "--verify", "HEAD"]);
+  complete = true;
+});

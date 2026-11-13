@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { RepairFindingMutations } from "./repair-mutation-contract.js";
+import { SourceMutationManifestValue } from "./source-mutation-manifest.js";
 
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskReviewAccounting } from "./task-review-accounting.js";
@@ -91,43 +92,10 @@ export class CanonicalImplementationRepairRecord {
     }
     this.recurrenceResolutions = deepFreeze(structuredClone(recurrenceResolutions));
 
-    const manifest = value.sourceMutationManifest;
-    exactKeys(manifest, new Set(["attempt", "baselineDigest", "mutations", "digest"]), "implementation repair mutation manifest");
-    exactKeys(manifest.attempt, new Set(["id", "nodeId", "sequence"]), "implementation repair Attempt");
-    if (manifest.attempt.nodeId !== "impl-repair"
-      || typeof manifest.attempt.id !== "string" || manifest.attempt.id === ""
-      || !Number.isSafeInteger(manifest.attempt.sequence) || manifest.attempt.sequence < 1
-      || !isFingerprint(manifest.baselineDigest) || !isFingerprint(manifest.digest)
-      || !Array.isArray(manifest.mutations)) {
-      throw new Error("implementation repair mutation manifest is invalid");
-    }
-    for (const mutation of manifest.mutations) {
-      exactKeys(mutation, new Set([
-        "mutationId", "path", "changeKind",
-        "beforeKind", "beforeMode", "beforeDigest",
-        "afterKind", "afterMode", "afterDigest",
-      ]), "implementation repair mutation");
-      if (!isFingerprint(mutation.mutationId) || typeof mutation.path !== "string" || mutation.path === ""
-        || !new Set(["added", "deleted", "content", "mode", "type"]).has(mutation.changeKind)
-        || !new Set(["missing", "symlink", "directory", "file", "other"]).has(mutation.beforeKind)
-        || !new Set(["missing", "symlink", "directory", "file", "other"]).has(mutation.afterKind)
-        || (mutation.beforeMode !== null && (!Number.isSafeInteger(mutation.beforeMode) || mutation.beforeMode < 0 || mutation.beforeMode > 0o7777))
-        || (mutation.afterMode !== null && (!Number.isSafeInteger(mutation.afterMode) || mutation.afterMode < 0 || mutation.afterMode > 0o7777))
-        || (mutation.beforeDigest !== null && !isFingerprint(mutation.beforeDigest))
-        || (mutation.afterDigest !== null && !isFingerprint(mutation.afterDigest))
-        || (mutation.beforeKind === mutation.afterKind && mutation.beforeMode === mutation.afterMode && mutation.beforeDigest === mutation.afterDigest)) {
-        throw new Error("implementation repair mutation is invalid");
-      }
-    }
-    const unsignedManifest = {
-      attempt: manifest.attempt,
-      baselineDigest: manifest.baselineDigest,
-      mutations: manifest.mutations,
-    };
-    const expectedDigest = crypto.createHash("sha256").update(stableStringify(unsignedManifest)).digest("hex");
-    if (expectedDigest !== manifest.digest) throw new Error("implementation repair mutation manifest digest is invalid");
+    const manifest = SourceMutationManifestValue.fromStored(value.sourceMutationManifest);
+    if (manifest.attempt.nodeId !== "impl-repair") throw new Error("implementation repair mutation manifest belongs to another Step");
     this.findingMutations.assertManifest(manifest);
-    this.sourceMutationManifest = deepFreeze(structuredClone(manifest));
+    this.sourceMutationManifest = deepFreeze(manifest.toJSON());
     Object.freeze(this);
   }
 

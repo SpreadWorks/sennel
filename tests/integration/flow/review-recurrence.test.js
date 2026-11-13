@@ -19,6 +19,9 @@ import {
   TaskMutationLineage,
 } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { SourceMutationManifest } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
+import { SourceWorkingFile, GitSourceEntry, WorkerArtifactRepositoryEntry } from "../../../src/flow/lib/source-working-file.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 
 const RUN_ID = "run-review-recurrence";
 const SPEC_ID = "spec-review-recurrence";
@@ -29,6 +32,14 @@ const FINGERPRINT_ONE = "1".repeat(64);
 const FINGERPRINT_TWO = "2".repeat(64);
 const FINGERPRINT_THREE = "3".repeat(64);
 const FINGERPRINT_FOUR = "4".repeat(64);
+const FILE_GENERATION = new FileIdentity({ dev: 1n, ino: 1n });
+
+function sourceObservation(path) {
+  return new WorkerArtifactRepositoryEntry({ path, workingPath: path,
+    working: new SourceWorkingFile({ kind: "file", digest: DIGEST_C, generation: FILE_GENERATION }),
+    git: new GitSourceEntry({ logicalMode: "100644", indexOid: "c".repeat(40),
+      assumeUnchanged: false, skipWorktree: false, worktreeMode: "100644" }) });
+}
 
 function implementationRepairRecord() {
   const attempt = { id: "impl-repair-attempt-1", nodeId: "impl-repair", sequence: 1 };
@@ -41,12 +52,13 @@ function implementationRepairRecord() {
     sourceMutationManifest: new SourceMutationManifest({
       attempt,
       baselineDigest: DIGEST_A,
+      observations: [sourceObservation("src/one.js")],
       mutations: [{
         mutationId,
         path: "src/one.js",
         changeKind: "content",
-        beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B,
-        afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C,
+        beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B, beforeGeneration: FILE_GENERATION,
+        afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C, afterGeneration: FILE_GENERATION,
       }],
     }).toJSON(),
   }).toJSON();
@@ -104,12 +116,13 @@ function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "impleme
   const manifest = new SourceMutationManifest({
     attempt,
     baselineDigest: DIGEST_A,
+    observations: [sourceObservation(path)],
     mutations: [{
       mutationId: SourceMutationManifest.mutationId(attempt, path),
       path,
       changeKind: "content",
-      beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B,
-      afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C,
+      beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B, beforeGeneration: FILE_GENERATION,
+      afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C, afterGeneration: FILE_GENERATION,
     }],
   });
   return new TaskMutationLineage({
@@ -205,26 +218,31 @@ describe("review recurrence projections", () => {
       suggestion: "Repair the required source behavior.", disposition: "must-fix",
       rationale: "The mapped requirement is mandatory.",
     };
-    for (let ordinal = 1; ordinal <= 4; ordinal += 1) {
-      assert.notEqual((await scenario.publishReview([recurringFinding])).ok, false);
-      assert.equal((await scenario.filter([])).ok, true);
-      const work = scenario.stageHandoff("repair");
-      const recurrence = work.request.inputs.find((input) => input.name === "task-review-recurrence.json").document;
-      fs.appendFileSync(scenario.sourcePath, `required source repair ${ordinal}\n`);
-      assert.equal(scenario.completeHandoff(work, {
-        version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null, triage: null,
-        repair: {
-          version: 1, findings: [{ findingKey: "same-key", paths: ["README.md"] }],
-          summary: "Repair the required source behavior.",
-          recurrenceResolutions: recurrence.entries.map(({ findingKey, fingerprint }) => ({
-            findingKey, fingerprint,
-            priorRepairInsufficiency: "The previous correction omitted this exact required behavior.",
-            repairStrategy: "Preserve the prior correction and implement the omitted requirement branch.",
-          })),
-        },
-        noChangeReason: null,
-      }).completed, true);
-      scenario.reload();
+    try {
+      for (let ordinal = 1; ordinal <= 4; ordinal += 1) {
+        assert.notEqual((await scenario.publishReview([recurringFinding])).ok, false);
+        assert.equal((await scenario.filter([])).ok, true);
+        const work = scenario.stageHandoff("repair");
+        const recurrence = work.request.inputs.find((input) => input.name === "task-review-recurrence.json").document;
+        fs.appendFileSync(scenario.sourcePath, `required source repair ${ordinal}\n`);
+        assert.equal(scenario.completeHandoff(work, {
+          version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null, triage: null,
+          repair: {
+            version: 1, findings: [{ findingKey: "same-key", paths: ["README.md"] }],
+            summary: "Repair the required source behavior.",
+            recurrenceResolutions: recurrence.entries.map(({ findingKey, fingerprint }) => ({
+              findingKey, fingerprint,
+              priorRepairInsufficiency: "The previous correction omitted this exact required behavior.",
+              repairStrategy: "Preserve the prior correction and implement the omitted requirement branch.",
+            })),
+          },
+          noChangeReason: null,
+        }).completed, true);
+        scenario.reload();
+      }
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      throw error;
     }
     const state = scenario.state();
     const stage = (role) => new TaskStageArtifact({ flowManager: scenario.manager, state, taskId, role }).document;
