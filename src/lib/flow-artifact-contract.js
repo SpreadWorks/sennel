@@ -448,6 +448,7 @@ export class FlowArtifactInventoryExclusion {
 
 export class FlowArtifactCanonicalPath {
   #matchExpression;
+  #overlapAutomaton;
 
   constructor(value) {
     this.value = safePathTemplate(value, "artifact canonical path");
@@ -474,6 +475,29 @@ export class FlowArtifactCanonicalPath {
   matches(value) {
     const candidate = FlowArtifactRelativePath.from(value, "artifact path").toString();
     return this.#matchExpression.test(candidate);
+  }
+  overlaps(other) {
+    const leftAutomaton = this.#overlapAutomaton ??= new FlowArtifactPathAutomaton(this);
+    const rightAutomaton = other.#overlapAutomaton ??= new FlowArtifactPathAutomaton(other);
+    const pending = [[leftAutomaton.epsilonClosure([0]), rightAutomaton.epsilonClosure([0])]];
+    const visited = new Set();
+    while (pending.length > 0) {
+      const [leftStates, rightStates] = pending.pop();
+      const key = `${[...leftStates].sort((a, b) => a - b).join(",")}|${[...rightStates].sort((a, b) => a - b).join(",")}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (leftStates.has(leftAutomaton.accepting) && rightStates.has(rightAutomaton.accepting)) return true;
+      for (const leftTransition of leftAutomaton.consumingTransitions(leftStates)) {
+        for (const rightTransition of rightAutomaton.consumingTransitions(rightStates)) {
+          if (!characterSetsOverlap(leftTransition.characters, rightTransition.characters)) continue;
+          pending.push([
+            leftAutomaton.epsilonClosure([leftTransition.to]),
+            rightAutomaton.epsilonClosure([rightTransition.to]),
+          ]);
+        }
+      }
+    }
+    return false;
   }
   #matchSource() {
     const expression = this.value.split("/").map((segment) => {
@@ -645,29 +669,6 @@ function characterSetsOverlap(left, right) {
   return [...smaller].some((character) => larger.has(character));
 }
 
-function canonicalPathsOverlap(left, right) {
-  const leftAutomaton = new FlowArtifactPathAutomaton(left);
-  const rightAutomaton = new FlowArtifactPathAutomaton(right);
-  const pending = [[leftAutomaton.epsilonClosure([0]), rightAutomaton.epsilonClosure([0])]];
-  const visited = new Set();
-  while (pending.length > 0) {
-    const [leftStates, rightStates] = pending.pop();
-    const key = `${[...leftStates].sort((a, b) => a - b).join(",")}|${[...rightStates].sort((a, b) => a - b).join(",")}`;
-    if (visited.has(key)) continue;
-    visited.add(key);
-    if (leftStates.has(leftAutomaton.accepting) && rightStates.has(rightAutomaton.accepting)) return true;
-    for (const leftTransition of leftAutomaton.consumingTransitions(leftStates)) {
-      for (const rightTransition of rightAutomaton.consumingTransitions(rightStates)) {
-        if (!characterSetsOverlap(leftTransition.characters, rightTransition.characters)) continue;
-        pending.push([
-          leftAutomaton.epsilonClosure([leftTransition.to]),
-          rightAutomaton.epsilonClosure([rightTransition.to]),
-        ]);
-      }
-    }
-  }
-  return false;
-}
 
 function patternIsEntirelyExcluded(pattern, excludedPrefixes) {
   const literalPrefix = pattern.path.toString().split(/:\{[A-Za-z0-9][A-Za-z0-9._-]*\}/, 1)[0];
@@ -683,7 +684,7 @@ function legacyEntriesOverlap(left, right) {
   if (!leftPattern && !rightPattern) return left.toString() === right.toString();
   if (!leftPattern) return right.matches(left.toString());
   if (!rightPattern) return left.matches(right.toString());
-  if (!canonicalPathsOverlap(left.path, right.path)) return false;
+  if (!left.path.overlaps(right.path)) return false;
   if (patternIsEntirelyExcluded(right, left.excludedPrefixes)) return false;
   if (patternIsEntirelyExcluded(left, right.excludedPrefixes)) return false;
   return true;
@@ -1475,7 +1476,7 @@ export class FlowArtifactRegistry {
       for (let right = left + 1; right < contracts.length; right += 1) {
         const leftPath = contracts[left].canonicalPath;
         const rightPath = contracts[right].canonicalPath;
-        if (canonicalPathsOverlap(leftPath, rightPath)) {
+        if (leftPath.overlaps(rightPath)) {
           throw new Error(`overlapping artifact canonical paths: ${leftPath} / ${rightPath}`);
         }
       }

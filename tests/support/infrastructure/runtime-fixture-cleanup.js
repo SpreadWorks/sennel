@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
@@ -30,4 +31,13 @@ export function removeQuiescentRuntimeFixture({ mainRoot, executionRoot = mainRo
   }
   cleanup();
   return true;
+}
+
+/** Test-owned control-child teardown only; no business stop receipt is supplied. */
+export async function terminateFixtureCoordinator(runtime) {
+  const child = runtime.control.child;
+  if (child.exitCode === null && child.signalCode === null) {
+    const stopped = once(child, "exit");
+    child.ref(); child.kill(); await stopped;
+  }
 }

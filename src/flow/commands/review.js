@@ -2149,7 +2149,8 @@ async function runImplReviewWithPersistence({
   }) : {};
   const artifact = new ImplReviewArtifact({ ...dispositioned, requirementIds, toolingObservation });
   const reviewJsonPath = path.join(specDir, "impl-review.json");
-  const fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot: root, specPath, state: flow });
+  const fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot: root, specPath,
+    state: flow, flowManager });
   const artifactJson = { ...artifact.toJSON(), repairFingerprint: fingerprint.hash };
   const reviewedHead = runGit(["rev-parse", "HEAD"], { cwd: executionRoot });
   artifactJson.reviewedTree = fingerprint.hash;

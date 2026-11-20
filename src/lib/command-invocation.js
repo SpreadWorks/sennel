@@ -1,3 +1,5 @@
+import { types } from 'node:util';
+
 /** Literal process arguments. Display text never grants execution authority. */
 export class CommandInvocationError extends TypeError {
   constructor(message, { source = 'command', language = 'en' } = {}) {
@@ -19,15 +21,32 @@ function tokens(value, label) {
 }
 export function immutableCommandEnvironment(value) {
   if (value === null) return null;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CommandInvocationError('env must be an object or null');
+  if (!value || typeof value !== 'object') throw new CommandInvocationError('env must be an object or null');
+  if (types.isProxy(value)) throw new CommandInvocationError('env must not be a Proxy');
+  if (Array.isArray(value)) throw new CommandInvocationError('env must be an object or null');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
   const names = new Set();
-  for (const [name, entry] of Object.entries(value)) {
-    if (!name || /[=\0]/.test(name) || names.has(name.toUpperCase())) throw new CommandInvocationError(`env key ${name} is invalid or duplicated ignoring case`);
-    names.add(name.toUpperCase());
-    token(entry, `env.${name}`, true);
+  const environment = {};
+  for (const name of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[name];
+    if (!descriptor.enumerable) continue;
+    if (!Object.hasOwn(descriptor, 'value')) throw new CommandInvocationError('env enumerable properties must be data properties');
+    const entry = descriptor.value;
+    if (typeof name === 'string') {
+      if (!name || /[=\0]/.test(name) || names.has(name.toUpperCase())) throw new CommandInvocationError(`env key ${name} is invalid or duplicated ignoring case`);
+      names.add(name.toUpperCase());
+      token(entry, `env.${name}`, true);
+    }
+    Object.defineProperty(environment, name, { value: entry, enumerable: true, writable: true, configurable: true });
   }
-  return Object.freeze({ ...value });
+  return Object.freeze(environment);
 }
+
+/** Native launchers add inherited variables; keep captured evidence detached. */
+export function nativeCommandEnvironment(environment) {
+  return environment === null ? null : { ...environment };
+}
+
 function stdioValue(value) {
   if (['pipe', 'ignore', 'inherit'].includes(value)) return value;
   if (!Array.isArray(value) || value.length < 3 || [...value].some((entry) => !['pipe', 'ignore', 'inherit', 'ipc', null].includes(entry) && !(Number.isSafeInteger(entry) && entry >= 0))) {
@@ -71,7 +90,7 @@ export class CommandInvocation {
     this.stdio = stdioValue(stdio);
   }
   toString() { return [this.executable, ...this.args].map((entry) => /^[A-Za-z0-9_./:=+-]+$/.test(entry) ? entry : JSON.stringify(entry)).join(' '); }
-  processOptions() { return { ...(this.cwd !== null && { cwd: this.cwd }), ...(this.env !== null && { env: this.env }), stdio: this.stdio }; }
+  processOptions() { return { ...(this.cwd !== null && { cwd: this.cwd }), ...(this.env !== null && { env: nativeCommandEnvironment(this.env) }), stdio: this.stdio }; }
   resolvedLaunch() {
     return new CommandLaunchDescriptor({ executable: this.executable, args: this.args, cwd: this.cwd, env: this.env,
       stdio: this.stdio, windowsVerbatimArguments: this.processOptions().windowsVerbatimArguments === true });

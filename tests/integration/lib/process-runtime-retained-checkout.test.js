@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
-import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { removeQuiescentRuntimeFixture, terminateFixtureCoordinator } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 const runtimeURL = pathToFileURL(path.resolve("src/lib/process-execution-runtime.js")).href;
 const bootstrapURL = pathToFileURL(path.resolve("src/sennel.js")).href;
@@ -145,11 +145,7 @@ test("a recreated checkout cannot release the actual sealed owner's reservation"
 test("a removed checkout with an unfinished physical intent cannot be treated as retained closed ownership", async (t) => {
   const options = fixture(t), runtime = await ProcessExecutionRuntime.acquire(options);
   t.after(async () => {
-    const child = runtime.control.child;
-    if (child.exitCode === null && child.signalCode === null) {
-      const stopped = once(child, "exit");
-      child.ref(); child.kill(); await stopped;
-    }
+    await terminateFixtureCoordinator(runtime);
     // This exact control handle is fixture-owned; its exit supplies no missing
     // business receipt and the uncertain namespace remains retained.
   });

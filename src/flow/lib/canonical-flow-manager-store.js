@@ -1359,6 +1359,7 @@ class CanonicalTransitionReader {
   artifactCatalog() { return this.view.catalog; }
   readCanonicalTransitionView({ read }) { return read(this.view); }
   specLocation() { return this.view.location; }
+  executionRoot(state) { return this.store.executionRoot(state); }
   readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
   readLatestSpecReview(input) { return this.store.readLatestSpecReview({ ...input, view: this.view }); }
   readCurrentSpecReview(input) { return this.store.readCurrentSpecReview({ ...input, view: this.view }); }
@@ -1856,6 +1857,10 @@ function projectDispatchApprovals(activities) {
     receipts.set(receipt.actionDigest, receipt);
   }
   return Object.freeze([...receipts.values()]);
+}
+
+function projectedActivityLedger(activities) {
+  return Object.freeze(activities.map((activity) => Object.freeze(activity.toJSON())));
 }
 
 function projectedState(state, specRecord, activities = []) {
@@ -3005,7 +3010,7 @@ export class CanonicalFlowManagerStore {
     if (resolved === null) return Object.freeze([]);
     const snapshot = this.runtime.loadSnapshot(resolved);
     if (snapshot === null) return Object.freeze([]);
-    return Object.freeze(snapshot.activities.map((activity) => Object.freeze(activity.toJSON())));
+    return projectedActivityLedger(snapshot.activities);
   }
 
   // Gate evidence readers share the public FlowManager catalog vocabulary;
@@ -4035,9 +4040,11 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("retro stale evidence recovery decision is stale or targets another Attempt");
     }
     const currentFingerprint = buildRepairFingerprint({
-      root: this.root,
-      artifactRoot: this.root,
+      root: this.executionRoot(state),
+      artifactRoot: this.mainRoot,
       specPath: this.location(resolved).relativeSpecFile,
+      state,
+      flowManager: this,
     });
     if (currentFingerprint.hash !== facts.currentFingerprint) {
       throw new CurrentFlowStateConflictError("retro stale evidence recovery repository fingerprint changed before apply");
@@ -4244,7 +4251,11 @@ export class CanonicalFlowManagerStore {
       retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization, taskReviewArchiveAdmission?.archives ?? []),
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
       admission: new CombinedAdmission(
-        recoveryAdmission?.bindPublication(typed, taskReviewRecoveryAuthorization) ?? null,
+        recoveryAdmission?.bindPublication(
+          typed,
+          taskReviewRecoveryAuthorization,
+          (view) => new CanonicalTransitionReader(this, view),
+        ) ?? null,
         taskReviewArchiveAdmission,
       ),
     });
@@ -6281,7 +6292,8 @@ export class CanonicalFlowManagerStore {
     }
     if (view !== null && (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved
       || !["spec-gate-repair", "test-generate", "test-repair"].includes(stepId))) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
-    const state = view?.state ?? this.runtime.load(resolved);
+    const snapshot = view === null ? this.runtime.loadSnapshot(resolved, { required: true }) : null;
+    const state = view?.state ?? snapshot.state;
     const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId) ? null
       : TaskStepIdentity.fromStateNode(state, stepId);
     const definitionStepId = materializedIdentity?.definitionId ?? stepId;
@@ -6310,7 +6322,9 @@ export class CanonicalFlowManagerStore {
       const expected = requestedReceipt?.binding ?? (completed && !activeFinalizationCompletion ? node?.result?.draftSettlementReceipt?.binding ?? null : {
         attemptId: state.attempt?.id, attemptSequence: state.attempt?.sequence });
       if (expected === null || !completed && state.attempt?.nodeId !== nodeId) return null;
-      const selected = this.activityLedger(resolved).findLast((entry) => entry.nodeId === nodeId
+      const activities = hasImplementationStepContract(definitionStepId)
+        ? projectedActivityLedger(snapshot.activities) : this.activityLedger(resolved);
+      const selected = activities.findLast((entry) => entry.nodeId === nodeId
         && entry.result?.draftSettlementReceipt?.binding.attemptId === expected.attemptId
         && entry.result?.draftSettlementReceipt?.binding.attemptSequence === expected.attemptSequence
         && entry.result?.stepResult != null && entry.result?.draftSettlementReceipt != null
@@ -9436,10 +9450,10 @@ export class CanonicalFlowManagerStore {
    * review-funnel connector in the same journal transaction.
    */
   #terminalReviewPublication({ resolved, stepId, nodeId, attemptId, sequence = null }) {
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     if (state.current?.at(-1) === nodeId && state.attempt?.id === attemptId
       && (sequence === null || state.attempt.sequence === sequence) && state.attempt.failure === null) return null;
-    const snapshot = this.runtime.loadSnapshot(resolved);
     const selected = snapshot.activities.findLast((activity) => activity.nodeId === nodeId
       && activity.attemptId === attemptId && (sequence === null || activity.sequence === sequence)
       && activity.result?.draftSettlementReceipt?.settlementKind === "target-connection");

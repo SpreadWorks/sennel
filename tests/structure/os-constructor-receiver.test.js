@@ -113,12 +113,28 @@ class Reader {
 new Reader('/proc/self/stat').read();`);
   sink(report, 4);
 });
-test("ordinary functions created by constructors do not capture this", () => {
-  safe(check(`const fs = require('node:fs');
+test("a detached ordinary constructor function has no proven property receiver", () => {
+  const report = check(`const fs = require('node:fs');
 class Reader {
   constructor(file) { this.file = file; this.read = function () { fs.readFileSync(this.file); }; }
 }
 const reader = new Reader('/proc/self/stat');
 const read = reader.read;
-read();`));
+read();`);
+  assert.equal(report.ok, false, report.diagnostics.join("\n"));
+  assert.equal(report.complete, false);
+  assert.ok(report.diagnostics.some(item => item.rule === "OS02" && item.file === entry
+    && item.line === 3 && item.column === 88 && item.classification === "incomplete"
+    && item.message.includes("receiver")), report.diagnostics.join("\n"));
+  assert.deepEqual(report.diagnostics.filter(item => ["OS01", "OS02"].includes(item.rule)
+    && item.classification === "violation"), []);
+});
+test("an ordinary constructor function uses its actual holder without capturing constructor this", () => {
+  safe(check(`const fs = require('node:fs');
+class Reader {
+  constructor(file) { this.file = file; this.read = function () { fs.readFileSync(this.file); }; }
+}
+const reader = new Reader('/proc/self/stat');
+const holder = { file: 'snapshot.json', read: reader.read };
+holder.read();`));
 });

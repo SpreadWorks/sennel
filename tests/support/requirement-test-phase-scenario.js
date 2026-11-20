@@ -282,7 +282,10 @@ export class RequirementTestPhaseScenario {
     return { root: this.root, executionRoot: this.root, mainRoot: this.root, specId: this.specId,
       flowManager: this.manager, flowState: this.manager.loadReadOnly(this.specId) };
   }
-  current() { return this.manager.canonicalState(this.specId).current?.at(-1) ?? this.manager.canonicalState(this.specId).nextAction().nodeId; }
+  current() {
+    const state = this.manager.canonicalState(this.specId);
+    return state.current?.at(-1) ?? state.nextAction().nodeId;
+  }
   async next() { return new GetNextActionCommand().execute(this.context()); }
   approve() {
     return new SetApprovalCommand().execute({ ...this.context(), approved: true,
@@ -385,8 +388,11 @@ export class RequirementTestPhaseScenario {
       .readPlan(this.current()).artifact.plan;
   }
   snapshot() {
-    return { state: this.manager.canonicalState(this.specId).toJSON(),
-      activities: this.manager.activityLedger(this.specId), catalog: this.manager.artifactCatalog(this.specId).toJSON() };
+    return this.manager.readCanonicalTransitionView({ specId: this.specId, read: (view) => ({
+      state: view.state.toJSON(),
+      activities: Object.freeze(view.activities.map((activity) => Object.freeze(activity.toJSON()))),
+      catalog: view.catalog.toJSON(),
+    }) });
   }
   close({ retainRoot = false } = {}) {
     this.reviewProcess?.mock.restore();

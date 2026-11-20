@@ -16,7 +16,8 @@ export class CliInvocationPolicy {
     const flags = new Set(schema.flags ?? []);
     const values = new Set(schema.options ?? []);
     const optional = new Set(schema.optionalOptions ?? []);
-    let dryRun = false;
+    const inspectionFlags = new Set(['--dry-run', ...(definition?.readOnlyFlags ?? [])]);
+    let inspection = false;
     let help = builtinHelp;
     let validOptions = true;
     for (let index = 0; index < arguments_.length; index += 1) {
@@ -25,10 +26,10 @@ export class CliInvocationPolicy {
       if (values.has(token)) { if (arguments_[++index] === undefined) validOptions = false; continue; }
       if (optional.has(token)) { if (arguments_[index + 1] !== undefined && !arguments_[index + 1].startsWith('-')) index += 1; continue; }
       if (token === '--help' || token === '-h') { help = definition !== null && arguments_.every((argument) => ['--help', '-h'].includes(argument)); continue; }
-      if (token === '--dry-run' && flags.has(token)) { dryRun = true; continue; }
+      if (inspectionFlags.has(token) && flags.has(token)) { inspection = true; continue; }
       if (token.startsWith('-') && !flags.has(token)) validOptions = false;
     }
-    this.readOnly = builtinHelp || definition?.readOnly === true || validOptions && (help || dryRun);
+    this.readOnly = builtinHelp || definition?.readOnly === true || validOptions && (help || inspection);
     this.definition = definition;
     this.help = help;
     this.inherited = head === 'command' && !help;

@@ -1,3 +1,4 @@
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
 import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 import { ProcessExecutionControlFailure } from "../../lib/process-execution-runtime.js";
 /**
@@ -393,8 +394,10 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
   });
   const fingerprint = buildRepairFingerprint({
     root: executionRoot,
-    artifactRoot: ctx.root,
+    artifactRoot: flowArtifactRoot(ctx),
     specPath: artifacts.location.relativeSpecFile,
+    state: ctx.flowState,
+    flowManager: ctx.flowManager,
   });
   const artifact = {
     version: "2",

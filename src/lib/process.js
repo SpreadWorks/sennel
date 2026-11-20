@@ -33,6 +33,8 @@ function commandResult(completed, options, error = null) {
     stderr: output(completed.stderr || error?.message || "", options.encoding),
     signal: completed.signal ?? error?.signal ?? null, killed: Boolean(error?.killed),
     errorCode: typeof error?.code === "string" ? error.code : null,
+    ...((completed.processExecutionHistory ?? error?.processExecutionHistory) && {
+      processExecutionHistory: completed.processExecutionHistory ?? error.processExecutionHistory }),
     ...(receipt && { processExecutionStopReceipt: receipt instanceof ProcessExecutionStopReceipt ? receipt : new ProcessExecutionStopReceipt(receipt),
       stopEvidence: receipt.stopEvidence ?? new ProcessExecutionStopReceipt(receipt).stopEvidence }),
   };
@@ -76,24 +78,42 @@ class SynchronousCommandCompletion {
     if (typeof failed !== "boolean" || !failed && failure !== undefined) throw new TypeError("Synchronous completion requires its exact operation outcome");
     this.value = value; this.failure = failure; this.failed = failed; Object.freeze(this);
   }
+  static capture(operation) {
+    try { return new SynchronousCommandCompletion(operation(), undefined, false); }
+    catch (error) { return new SynchronousCommandCompletion(undefined, error, true); }
+  }
+  publicationFailure(error, runtime, normalizeCompletion = () => {}) {
+    const completion = this.failed ? this.failure : this.value;
+    normalizeCompletion(completion);
+    return processExecutionPublicationFailure(error, completion, {
+      executionId: runtime?.executionId ?? null, role: runtime?.parentCallId == null ? "executor" : "descendant",
+    });
+  }
   unwrap() { if (this.failed) throw this.failure; return this.value; }
   toResult(options) { return this.failed ? commandFailureResult(this.failure, options) : commandResult(this.value, options); }
 }
 
 function withSynchronousCommandPublication(runtime, invoke, normalizeCompletion = () => {}, grant = currentCommandGrant(runtime)) {
-  let result, bodyFailure;
-  let failed = false;
-  try { result = invoke(grant); }
-  catch (error) { failed = true; bodyFailure = error; }
+  const completion = SynchronousCommandCompletion.capture(() => invoke(grant));
   try { runtime?.drainEventsSync(); }
-  catch (error) {
-    const completion = failed ? bodyFailure : result;
-    normalizeCompletion(completion);
-    throw processExecutionPublicationFailure(error, completion, {
-      executionId: runtime?.executionId ?? null, role: runtime?.parentCallId == null ? "executor" : "descendant",
+  catch (error) { throw completion.publicationFailure(error, runtime, normalizeCompletion); }
+  return completion;
+}
+
+/** Defer one synchronous command-producing unit while retaining normal control failures. */
+export function withDeferredSynchronousCommandPublication(operation) {
+  const runtime = ProcessExecutionRuntime.current();
+  if (runtime === null) return operation();
+  let completion;
+  try {
+    return runtime.withDeferredEventPublicationSync(() => {
+      completion = SynchronousCommandCompletion.capture(operation);
+      return completion.unwrap();
     });
+  } catch (error) {
+    if (completion.failed && error === completion.failure) throw error;
+    throw completion.publicationFailure(error, runtime);
   }
-  return new SynchronousCommandCompletion(result, bodyFailure, failed);
 }
 
 /** One normalized command, reusable by scoped execution groups. */
@@ -207,6 +227,7 @@ export async function runCmdAsync(command, args, opts = {}) {
   try {
     const completed = await executeManagedProcess(invocation, [], {
       runtime: ProcessExecutionRuntime.current(), repositoryRoot: options.repositoryRoot, readOnly: options.readOnly === true,
+      retainedControl: options.retainedControl === true,
       timeoutMs: options.timeout || new AgentTimeout().toMilliseconds(), maxBuffer: options.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
       encoding: options.encoding, stdinContent: options.input, abortSignal: options.signal,
       processExecutionBinding: options.processExecutionBinding, onProcessExecutionStop: options.onProcessExecutionStop,

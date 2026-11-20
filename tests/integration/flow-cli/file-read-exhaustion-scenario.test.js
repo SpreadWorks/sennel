@@ -19,7 +19,10 @@ import { dispatchContainer, fixtureRepository, installGateProviderFake,
   requestInput, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 for (const phase of ["draft", "spec"]) {
-it(`stops ${phase} after four file-read failures and rejects dispatcher restart after reload`, async () => {
+for (const providerBudget of [false, true]) {
+it(providerBudget
+  ? `stops ${phase} after its shared provider budget is exhausted and rejects dispatcher restart after reload`
+  : `stops ${phase} after four file-read failures and rejects dispatcher restart after reload`, async () => {
   const root = fixtureRepository(`${phase}-file-read-exhaustion-`);
   const specId = `904-${phase}-file-read-exhaustion`;
   let gateAgentLookup = null;
@@ -43,7 +46,7 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
     const attemptBindings = [];
     const semanticStates = [];
     const unavailableReason = "SECOND explicitly failed to open the referenced file.";
-    gateAgentLookup = installGateProviderFake((prompt, options) => {
+    gateAgentLookup = installGateProviderFake(async (prompt, options) => {
       const ids = options.jsonSchema?.properties?.observations?.items?.properties?.requirementRef?.enum ?? [];
       const state = manager.canonicalState(specId);
       assert.equal(state.current.at(-1), `${phase}-gate`);
@@ -57,6 +60,14 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
       gateCalls.push(ids[0]);
       if (ids[0] !== "FIRST" && ids[0] !== "SECOND") {
         return JSON.stringify({ observations: [], evaluationUnavailable: null });
+      }
+      if (providerBudget && ids[0] === "SECOND" && gateCalls.filter(id => id === "SECOND").length === 1) {
+        // Only the external provider's transport attempt is simulated. The
+        // production admission owns its shared budget across later retries.
+        await options.providerCallAdmission.beforeProviderAttempt({
+          attempt: 2, index: 1, maxAttempts: 2, providerKey: "fixture", profileKey: "fixture",
+        });
+        return "malformed";
       }
       return ids[0] === "FIRST"
         ? JSON.stringify({ observations: [{
@@ -138,12 +149,14 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
         mainRoot: root, authorityRoot: root }).serialize(),
       _envelopeType: "run", _envelopeKey: "dispatch",
     });
-    assert.deepEqual(gateCalls.slice(-5), ["FIRST", "SECOND", "SECOND", "SECOND", "SECOND"], JSON.stringify({
+    const expectedCalls = providerBudget ? ["FIRST", "SECOND", "SECOND", "SECOND"]
+      : ["FIRST", "SECOND", "SECOND", "SECOND", "SECOND"];
+    assert.deepEqual(gateCalls.slice(-expectedCalls.length), expectedCalls, JSON.stringify({
       attemptFailure: manager.canonicalState(specId).attempt.failure,
       settlement: manager.readCurrentStepSettlement({ specId, stepId: `${phase}-gate` }),
       artifacts: manager.artifactCatalog(specId).artifacts.map((entry) => entry.logicalKey),
     }));
-    assert.equal(gateCalls.filter((id) => id === "SECOND").length, 4);
+    assert.equal(gateCalls.filter((id) => id === "SECOND").length, providerBudget ? 3 : 4);
     assert.equal(new Set(attemptBindings.map((entry) => entry.id)).size, 1);
     assert.ok(semanticStates.every((state) => JSON.stringify(state) === JSON.stringify(semanticStates[0])),
       "response retries must leave the semantic Gate node and retry budget unchanged");
@@ -159,22 +172,25 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
     assert.equal(failure.code, "GATE_OUTPUT_TOOLING_FAILURE");
     const evidence = failure.responseProtocolEvidence;
     assert.ok(evidence, JSON.stringify(failure));
-    const exhausted = evidence.groups.find((group) => group.attempts.length === 4);
+    const exhausted = evidence.groups.find((group) => group.attempts.length === (providerBudget ? 3 : 4));
     assert.ok(exhausted, JSON.stringify(evidence));
     assert.ok(evidence.groups.some((group) => group.outcome === "accepted"),
       "earlier accepted group evidence must survive the final unavailable group");
-    assert.equal(exhausted.stopReason, "file_read_retry_exhausted");
+    const stopReason = providerBudget ? "provider_call_limit_exhausted" : "file_read_retry_exhausted";
+    assert.equal(exhausted.stopReason, stopReason);
     assert.equal(exhausted.providerAttemptCount, 4);
-    assert.equal(exhausted.responseCallCount, 4);
-    assert.deepEqual(exhausted.attempts.map((attempt) => attempt.failureKind),
-      Array(4).fill("file-read-failed"));
+    assert.equal(exhausted.responseCallCount, providerBudget ? 3 : 4);
+    if (providerBudget) {
+      assert.deepEqual(exhausted.attempts.map(attempt => attempt.providerAttemptCount), [2, 3, 4]);
+      assert.deepEqual(exhausted.attempts.map(attempt => attempt.retryKind), [null, "format", "file-read"]);
+    } else assert.deepEqual(exhausted.attempts.map((attempt) => attempt.failureKind), Array(4).fill("file-read-failed"));
     assert.equal(restored.canonicalState(specId).attempt.id, attemptBindings[0].id);
     assert.doesNotMatch(failure.message, /The first rule identifies a concrete issue/);
     const saved = restored.readCurrentStepSettlement({ specId, stepId: `${phase}-gate` });
     if (phase === "draft") {
       assert.equal(saved.result.kind, "draft-gate-error");
       assert.equal(saved.result.error.code, "GATE_OUTPUT_TOOLING_FAILURE");
-      assert.equal(saved.result.error.data.failureMode, "file_read_retry_exhausted");
+      assert.equal(saved.result.error.data.failureMode, stopReason);
       assert.deepEqual(saved.result.error.data.responseProtocolEvidence, evidence.toJSON());
       assert.equal(saved.receipt.binding.attemptId, attemptBindings[0].id);
     } else assert.equal(saved, null);
@@ -226,4 +242,5 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
   }
 });
 
+}
 }

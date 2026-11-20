@@ -1,3 +1,4 @@
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
 import { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";
 import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { readRuntimeResource } from "../../lib/runtime-package.js";
@@ -650,7 +651,7 @@ function retryRecoveryPlanFor({ ctx, state, descriptor, target }) {
     flowManager: ctx.flowManager,
     state: canonical,
     executionRoot: ctx.executionRoot || ctx.root,
-    artifactRoot: ctx.mainRoot || ctx.root,
+    artifactRoot: flowArtifactRoot(ctx),
   });
   return recoveryPlan;
 }

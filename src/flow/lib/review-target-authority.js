@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
+import { flowArtifactRoot, flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { CanonicalDraftReviewSource } from "./canonical-review-artifacts.js";
 import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { ReviewTargetState } from "./review-convergence.js";
@@ -37,7 +37,7 @@ export class ReviewTargetAuthority {
   static fromContext(ctx = {}) {
     return new ReviewTargetAuthority({
       executionRoot: ctx.executionRoot || ctx.root,
-      artifactRoot: ctx.root,
+      artifactRoot: flowArtifactRoot(ctx),
       flowState: ctx.flowState,
       flowManager: ctx.flowManager,
     });
@@ -53,6 +53,7 @@ export class ReviewTargetAuthority {
       artifactRoot: this.artifactRoot,
       specPath: this.specPath,
       state: this.flowState,
+      flowManager: this.flowManager ?? null,
     });
   }
 

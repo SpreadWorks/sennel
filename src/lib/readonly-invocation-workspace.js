@@ -9,7 +9,7 @@ import { captureRegularFile } from "./regular-file-snapshot.js";
 import { LogicalRelativePath, isNativePathWithin } from "./portable-path.js";
 import { OwnedTemporaryDirectory } from "./owned-temporary-directory.js";
 
-const FACTORY = Symbol("readonly invocation workspace factory");
+const FACTORY = Symbol("invocation control workspace factory");
 
 export class ReadOnlyInvocationWorkspaceError extends Error {
   constructor(code, message) {
@@ -28,14 +28,14 @@ class WorkspaceExecution {
   }
 }
 
-/** Physical control storage minted only by one owned read-only workspace. */
+/** Physical control storage; its existing wire tag grants no native effect authority. */
 export class ReadOnlyProcessRuntimeStorage {
   #workspace;
   #authority;
   #value;
   #marker;
   constructor(factory, { workspace = null, authority, workspaceAuthority, value = null }) {
-    if (factory !== FACTORY) throw new TypeError("runtime storage must be minted by a read-only workspace");
+    if (factory !== FACTORY) throw new TypeError("runtime storage must be minted by an invocation workspace");
     let ancestor = authority;
     while (ancestor !== null && ancestor !== workspaceAuthority) ancestor = ancestor.parentAuthority;
     if (ancestor === null) throw new TypeError("runtime storage must retain its minted workspace ancestry");
@@ -104,8 +104,8 @@ export class ReadOnlyProcessRuntimeStorage {
   toJSON() { return JSON.parse(JSON.stringify(this.#value)); }
 }
 
-/** Ephemeral invocation scratch; never canonical state or cross-invocation resume proof. */
-export class ReadOnlyInvocationWorkspace {
+/** Owned control scratch; never canonical state or cross-invocation resume proof. */
+export class InvocationControlWorkspace {
   #authority;
   #owned;
   #parent;
@@ -118,7 +118,7 @@ export class ReadOnlyInvocationWorkspace {
   #processRuntimeStorage = null;
 
   constructor(factory, owned, parent) {
-    if (factory !== FACTORY) throw new TypeError("use ReadOnlyInvocationWorkspace.create()");
+    if (factory !== FACTORY) throw new TypeError("use the workspace factory");
     this.#owned = owned;
     this.#authority = owned.authority;
     this.#directories.set(this.path, this.#authority);
@@ -141,7 +141,7 @@ export class ReadOnlyInvocationWorkspace {
     const parent = new RealDirectoryAuthority(selected);
     parent.assertStable();
     const owned = OwnedTemporaryDirectory.create(parent, "sennel-inspect-");
-    return new ReadOnlyInvocationWorkspace(FACTORY, owned, parent);
+    return new this(FACTORY, owned, parent);
   }
 
   get path() { return this.#authority.directory; }
@@ -310,3 +310,6 @@ export class ReadOnlyInvocationWorkspace {
     }
   }
 }
+
+/** Read-only application invocations may clean up after confirmed success. */
+export class ReadOnlyInvocationWorkspace extends InvocationControlWorkspace {}

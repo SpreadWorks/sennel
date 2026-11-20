@@ -137,14 +137,14 @@ function inspect(input, file) { return input?.readFileSync(file); }
 inspect(fs, '/proc/self/stat');`);
   sink(report, 2);
 });
-test("computed builtin calls retain unsupported capability refusal", () => {
+test("computed builtin calls retain the actual filesystem violation", () => {
   const report = check(`const fs = require('node:fs');
 function inspect(input, file) { return input['readFileSync'](file); }
 inspect(fs, '/proc/self/stat');`);
-  assert.equal(report.complete, false);
+  assert.equal(report.complete, true);
   assert.equal(report.ok, false);
-  assert.ok(report.diagnostics.some(item => ["OS01", "OS02"].includes(item.rule)
-    && item.classification === "incomplete"), report.diagnostics.join("\n"));
+  assert.deepEqual(report.diagnostics.map(item => [item.rule, item.file, item.line, item.column, item.classification, item.trace]),
+    [["OS01", entry, 2, 40, "violation", [entry]]]);
 });
 test("builtin function indirection retains its capability refusal", () => {
   const report = check(`const fs = require('node:fs');
@@ -205,9 +205,16 @@ test("distinct source method calls retain the original finite work refusal", () 
   finiteRefusal(check(`function inspect(input) { return [${reads}]; }
 inspect({ read() { return 0; } });`));
 });
-test("an unbound unknown builtin model still refuses a sensitive argument", () => {
+test("the native array predicate does not execute or expose its function input", () => {
   const report = check(`const fs = require('node:fs');
 Array.isArray(fs.readFileSync);`);
+  assert.equal(report.complete, true);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.diagnostics, []);
+});
+test("an unsupported native operation still refuses a sensitive argument", () => {
+  const report = check(`const fs = require('node:fs');
+Array.uninspectedFutureOperation(fs.readFileSync);`);
   assert.equal(report.complete, false);
   assert.equal(report.ok, false);
   assert.ok(report.diagnostics.some(item => item.line === 2 && item.classification === "incomplete"), report.diagnostics.join("\n"));

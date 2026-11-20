@@ -51,7 +51,8 @@ if (process.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) {
     activities: flowManager.activityLedger(flow.specId) });
   const target = await resolveReviewTarget(root, flow, resolveMergeBase(root, flow.baseBranch), spec);
   const touchedFiles = new Set([...target.touchedFiles, ...target.untrackedFiles]);
-  await runImplReview({ root, flowManager, flow, spec, cycle, reviewOutput: raw, touchedFiles });
+  await runImplReview({ root: flowManager.specLocation(flow.specId).repositoryRoot, executionRoot: root,
+    flowManager, flow, spec, cycle, reviewOutput: raw, touchedFiles });
   work.seal();
 }
 

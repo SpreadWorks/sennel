@@ -225,7 +225,8 @@ export function captureRetryRecoveryBaseline({ flowState, flowManager, execution
   } else {
     let fingerprint;
     try {
-      fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot, specPath: relativeSpecPath, state: flowState });
+      fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot, specPath: relativeSpecPath,
+        state: flowState, flowManager });
     } catch (error) {
       if (error?.code === "REPAIR_BASELINE_UNRESOLVABLE") return null;
       throw error;
@@ -532,11 +533,16 @@ function assertBaselinePublication(view, baseline) {
 }
 
 class LockScopedRetryRecoveryFlowManager {
-  constructor(view) {
+  #reader;
+
+  constructor(view, reader) {
+    this.#reader = reader;
     this.view = view;
     Object.freeze(this);
   }
 
+  readCanonicalTransitionView(input) { return this.#reader.readCanonicalTransitionView(input); }
+  executionRoot(state) { return this.#reader.executionRoot(state); }
   canonicalState() { return this.view.state; }
   loadReadOnly() { return this.view.state; }
   specLocation() { return this.view.location; }
@@ -648,10 +654,10 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
   });
 }
 
-function captureLockScopedRecoveryBaseline(view, executionRoot) {
+function captureLockScopedRecoveryBaseline(view, executionRoot, reader) {
   return captureRetryRecoveryBaseline({
     flowState: view.state,
-    flowManager: new LockScopedRetryRecoveryFlowManager(view),
+    flowManager: new LockScopedRetryRecoveryFlowManager(view, reader),
     executionRoot,
     artifactRoot: view.location.repositoryRoot,
     nodeId: view.state.attempt.nodeId,
@@ -675,14 +681,19 @@ export class ExhaustedReviewRetryRecoveryAdmission {
     }
     this.taskReviewRecoveryAuthorization = taskReviewRecoveryAuthorization;
     if (!this.receipt.basis.equals(this.basis)) throw new Error("retry recovery admission basis mismatch");
-    Object.freeze(this);
+    if (new.target === ExhaustedReviewRetryRecoveryAdmission) Object.freeze(this);
   }
 
-  bindPublication(receipt, taskReviewRecoveryAuthorization = null) {
+  canonicalReader() {
+    throw new Error("Review recovery admission requires its Store-bound canonical reader");
+  }
+
+  bindPublication(receipt, taskReviewRecoveryAuthorization, readerForView) {
     return new BoundExhaustedReviewRetryRecoveryAdmission(
       this,
       receipt,
       taskReviewRecoveryAuthorization,
+      readerForView,
     );
   }
 
@@ -701,7 +712,8 @@ export class ExhaustedReviewRetryRecoveryAdmission {
       throw new Error("exhausted Review recovery evidence changed before recovery");
     }
     assertBaselinePublication(view, previous);
-    const current = captureLockScopedRecoveryBaseline(view, this.executionRoot);
+    const reader = this.canonicalReader(view);
+    const current = captureLockScopedRecoveryBaseline(view, this.executionRoot, reader);
     if (current === null || !sameEvidenceLineage(current, this.observation)) {
       const changed = current === null
         ? "unavailable"
@@ -710,7 +722,7 @@ export class ExhaustedReviewRetryRecoveryAdmission {
           .join(",");
       throw new Error(`Review recovery checkout evidence changed before publication: ${changed}`);
     }
-    const flowManager = new LockScopedRetryRecoveryFlowManager(view);
+    const flowManager = new LockScopedRetryRecoveryFlowManager(view, reader);
     const plan = resolveRetryRecovery(recoveryDecisionFacts({
       flowManager,
       state,
@@ -746,12 +758,20 @@ export class ExhaustedReviewRetryRecoveryAdmission {
   }
 }
 
-class BoundExhaustedReviewRetryRecoveryAdmission {
-  constructor(admission, publicationReceipt, publicationTaskAuthorization) {
+class BoundExhaustedReviewRetryRecoveryAdmission extends ExhaustedReviewRetryRecoveryAdmission {
+  #readerForView;
+
+  constructor(admission, publicationReceipt, publicationTaskAuthorization, readerForView) {
     if (!(admission instanceof ExhaustedReviewRetryRecoveryAdmission)) {
       throw new Error("Review recovery publication binding requires its typed admission");
     }
-    this.admission = admission;
+    super({
+      receipt: admission.receipt,
+      observation: admission.observation,
+      basis: admission.basis,
+      executionRoot: admission.executionRoot,
+      taskReviewRecoveryAuthorization: admission.taskReviewRecoveryAuthorization,
+    });
     this.publicationReceipt = publicationReceipt instanceof RetryRecoveryReceipt
       ? publicationReceipt
       : new RetryRecoveryReceipt(publicationReceipt);
@@ -759,22 +779,28 @@ class BoundExhaustedReviewRetryRecoveryAdmission {
       && !(publicationTaskAuthorization instanceof TaskReviewRecoveryAuthorization)) {
       throw new Error("Review recovery publication binding requires typed Task authorization");
     }
+    if (typeof readerForView !== "function") {
+      throw new Error("Review recovery publication binding requires its Store reader factory");
+    }
+    this.#readerForView = readerForView;
     this.publicationTaskAuthorization = publicationTaskAuthorization;
     Object.freeze(this);
   }
 
+  canonicalReader(view) { return this.#readerForView(view); }
+
   assert(view) {
-    if (!this.admission.receipt.equals(this.publicationReceipt)) {
+    if (!this.receipt.equals(this.publicationReceipt)) {
       throw new Error("Review recovery admission receipt does not match the published receipt");
     }
-    const selected = this.admission.taskReviewRecoveryAuthorization;
+    const selected = this.taskReviewRecoveryAuthorization;
     const published = this.publicationTaskAuthorization;
     if ((selected === null) !== (published === null)
       || (selected !== null && (selected.digest !== published.digest
         || JSON.stringify(selected.toJSON()) !== JSON.stringify(published.toJSON())))) {
       throw new Error("Review recovery admission Task authorization does not match the published authorization");
     }
-    this.admission.assert(view);
+    super.assert(view);
   }
 }
 

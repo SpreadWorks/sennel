@@ -72,6 +72,7 @@ for (const fixture of fixtures) {
     const launchLine = fixture.source.slice(0, fixture.source.lastIndexOf("spawn(")).split("\n").length;
     const findings = report.diagnostics.filter(entry => entry.file === file && entry.line === launchLine);
     const details = report.diagnostics.join("\n");
+    assert.ok(!report.diagnostics.some(entry => entry.file === file && entry.rule === "OS00"), details);
     if (fixture.expectation === "typed-launch") assert.deepEqual(findings, [], details);
     else if (fixture.expectation === "shell-violation") {
       assert.ok(findings.some(entry => entry.rule === "OS02" && entry.classification === "violation"

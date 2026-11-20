@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
 /** A real Prepare process that exits at a published checkpoint without unwinding. */
 export class PrepareProcess {
@@ -13,27 +15,14 @@ export class PrepareProcess {
 
   interruptAfterWorktreeAdd() {
     const bootstrap = new URL("../../../src/sennel.js", import.meta.url).href;
-    const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
-    const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
-    const script = [
-      'import fs from "node:fs";',
-      `import { FlowManager } from ${JSON.stringify(managerModule)};`,
-      `import RunPrepareSpecCommand from ${JSON.stringify(commandModule)};`,
-      `const input = ${JSON.stringify(this.input)};`,
-      "const flowManager = new FlowManager({ root: input.root, mainRoot: input.mainRoot, inWorktree: false });",
-      "await new RunPrepareSpecCommand().execute({ ...input, flowManager, worktreePrepareFaultInjector(event) {",
-      'if (event.phase !== "after-worktree-add") return;',
-      'fs.writeSync(1, JSON.stringify(event));',
-      "process.exit(73);",
-      "} });",
-      'throw new Error("Prepare did not reach after-worktree-add");',
-    ].join("\n");
+    const worker = fileURLToPath(new URL("./prepare-process-worker.mjs", import.meta.url));
+    const invocation = new NativeExecutableInvocation({ executable: process.execPath,
+      args: ["--import", bootstrap, worker, JSON.stringify(this.input)], cwd: this.input.root,
+      env: this.environment, stdio: ["ignore", "pipe", "pipe"] });
     // spawnSync reaps the terminated owner; its timeout also bounds cleanup if
     // a regression prevents the requested production checkpoint from being reached.
-    const result = spawnSync(process.execPath, ["--import", bootstrap, "--input-type=module", "--eval", script], {
-      cwd: this.input.root, env: this.environment, encoding: "utf8", timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const result = spawnSync(invocation.executable, invocation.args, { ...invocation.processOptions(),
+      shell: false, encoding: "utf8", timeout: 30_000 });
     assert.equal(result.error, undefined, result.error?.stack);
     assert.equal(result.signal, null, result.stderr);
     assert.equal(result.status, 73, result.stderr || result.stdout);

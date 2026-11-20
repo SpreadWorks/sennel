@@ -1,4 +1,4 @@
-import { SourcePublicationCaptureFile } from "./source-publication-capture.js";
+import { SourcePublicationCaptureFile, CapturedPublicationBinding } from "./source-publication-capture.js";
 import assert from "node:assert/strict";
 
 // FlowManager initializes the production composition graph before its shared
@@ -50,8 +50,8 @@ class PublicationObservation {
   #priorActivities;
 
   constructor(producer, operation, input, captured = null) {
-    this.#input = snapshot(input);
-    this.#producer = producer instanceof FlowManager ? producer._store : producer;
+    this.#input = snapshot({ ...input, binding: CapturedPublicationBinding.from(input.binding) });
+    this.#producer = new WeakRef(producer instanceof FlowManager ? producer._store : producer);
     this.operation = operation;
     this.authorityRoot = captured?.authorityRoot ?? producer.executionRoot();
     const { binding, stepResult } = input;
@@ -85,7 +85,7 @@ class PublicationObservation {
   }
 
   authenticate(manager, activity, result, settlement) {
-    assert.notEqual(manager._store, this.#producer,
+    assert.notEqual(manager._store, this.#producer.deref(),
       "IMPL_PHASE_PUBLICATION_RELOAD_REQUIRED: authentication must use a fresh manager/Store");
     const input = snapshot(this.#input);
     assert.equal(stepResultDigest(input.stepResult), this.resultDigest,

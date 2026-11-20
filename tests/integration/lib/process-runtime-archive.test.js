@@ -149,7 +149,7 @@ test("repository identity comparison shares main authority and keeps full checko
 });
 
 
-test("a changed second archive observation validates new bytes even with the same file identity", async (t) => {
+test("a later public archive observation validates new bytes even with the same file identity", async (t) => {
   const { root, acquire, directory } = fixture(t);
   const runtime = await acquire();
   const result = await runtime.enter(() => executeManagedProcess(process.execPath,
@@ -167,24 +167,17 @@ test("a changed second archive observation validates new bytes even with the sam
   changed.payload.unexpectedObservationField = true;
   changed.digest = crypto.createHash("sha256").update(JSON.stringify(changed.payload)).digest("hex");
   const replacement = Buffer.from(JSON.stringify(changed));
-  const readDirectory = fs.readdirSync;
-  let observations = 0;
-  let mutated = false;
-  fs.readdirSync = function (directoryPath, ...args) {
-    if (path.resolve(directoryPath) === archives) {
-      observations++;
-      if (observations === 2) {
-        fs.writeFileSync(archivePath, replacement);
-        const after = fs.statSync(archivePath, { bigint: true });
-        assert.equal(after.dev, identity.dev);
-        assert.equal(after.ino, identity.ino);
-        assert.deepEqual(fs.readFileSync(archivePath), replacement);
-        mutated = true;
-      }
-    }
-    return readDirectory.call(this, directoryPath, ...args);
-  };
+  // A completed public observation owns its captured archive view. Change
+  // the physical file between public observations, then require a fresh read.
+  const captured = ProcessExecutionRuntime.inspect({ mainRoot: root });
+  assert.deepEqual(captured.executions.find((entry) => entry.executionId === runtime.executionId)
+    .calls[0].receipt, expectedReceipt);
   try {
+    fs.writeFileSync(archivePath, replacement);
+    const after = fs.statSync(archivePath, { bigint: true });
+    assert.equal(after.dev, identity.dev);
+    assert.equal(after.ino, identity.ino);
+    assert.deepEqual(fs.readFileSync(archivePath), replacement);
     assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), (error) => {
       assert.ok(error instanceof ProcessExecutionControlFailure);
       assert.equal(error.code, "PROCESS_EXECUTION_REGISTRY_FAILED");
@@ -192,10 +185,7 @@ test("a changed second archive observation validates new bytes even with the sam
       assert.equal(error.cause.message, "Runtime record has missing or unknown fields");
       return true;
     });
-    assert.equal(mutated, true);
-    assert.ok(observations >= 2);
   } finally {
-    fs.readdirSync = readDirectory;
     fs.writeFileSync(archivePath, original);
   }
   const fresh = ProcessExecutionRuntime.inspect({ mainRoot: root });

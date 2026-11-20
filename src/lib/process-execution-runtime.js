@@ -15,12 +15,12 @@ import { ProcessExecutionCapturedInvocation } from "./process-execution-invocati
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock, LockOwnerSession } from "./process-lock.js";
 import { FileIdentity } from "./file-identity.js";
-import { visitRegularFileChunks } from "./regular-file-snapshot.js";
+import { RegularFileSnapshotGroup, visitRegularFileChunks } from "./regular-file-snapshot.js";
 import { LogicalRelativePath } from "./portable-path.js";
-import { RealDirectoryAuthority, sameFileIdentity } from "./real-directory-authority.js";
+import { RealDirectoryAuthority, RealDirectoryNameSnapshot, sameFileIdentity } from "./real-directory-authority.js";
 import { RepositoryMaintenanceLock } from "./repository-maintenance-lock.js";
 import { RepositoryLockAuthority } from "./repository-control-lock.js";
-import { ReadOnlyInvocationWorkspace, ReadOnlyProcessRuntimeStorage } from "./readonly-invocation-workspace.js";
+import { InvocationControlWorkspace, ReadOnlyInvocationWorkspace, ReadOnlyProcessRuntimeStorage } from "./readonly-invocation-workspace.js";
 import { ProcessExecutionControlEndpoint } from "./process-execution-endpoint.js";
 import { ManagedStopOperation, managedMonotonicNow } from "./managed-stop-operation.js";
 import { ManagedControlPolicy } from "./managed-control-policy.js";
@@ -61,6 +61,7 @@ export function captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoo
 export const PROCESS_EXECUTION_SCOPE_ENV = "SENNEL_PROCESS_EXECUTION_SCOPE";
 const scopes = new AsyncLocalStorage();
 const MAX_REGISTRY_BYTES = 16 * 1024 * 1024;
+const RUNTIME_RECORD_CAPTURE_WIDTH = 2;
 const RUNTIME_RECORD_VERSION = 10;
 const recoveryEvidenceAuthority = Symbol("process-runtime-recovery-evidence");
 const preparedPublicationAuthority = Symbol("prepared runtime publication");
@@ -457,6 +458,33 @@ class PlannedRuntimeRequestExecution {
   constructor(execution, writes, inventory) { this.execution = execution; this.writes = Object.freeze([...writes]); this.inventory = inventory; Object.freeze(this); }
 }
 
+/** Pure normal-block path plan; decoded values never authorize the read. */
+class RuntimeRequestBlockPlan {
+  constructor(blocks) { this.blocks = Object.freeze([...blocks.values()]); Object.freeze(this); }
+}
+
+/** Images selected only after this operation's complete fresh group captures. */
+class RuntimeCapturedRecords {
+  #snapshots;
+  #namespaces;
+  constructor(snapshots, namespaces = new Map()) {
+    this.#snapshots = new Map(snapshots); this.#namespaces = new Map(namespaces); Object.freeze(this);
+  }
+  entries(relativePath, directory) {
+    const captured = this.#namespaces.get(relativePath);
+    if (captured === undefined) return undefined;
+    if (!(captured instanceof RealDirectoryNameSnapshot) || captured.directory !== directory.directory) {
+      throw new TypeError("Captured namespace requires its exact observed directory");
+    }
+    return captured.names.slice();
+  }
+  snapshot(relativePath) {
+    if (!this.#snapshots.has(relativePath)) fail("record-corrupt", "Captured record escaped its complete physical dependency set");
+    return this.#snapshots.get(relativePath);
+  }
+  view(store) { return new RuntimePublicationView(store, [], new Map(), null, this); }
+}
+
 /** Existing request storage packs immutable sections into bounded physical blocks. */
 class RuntimeRequestStorage {
   #store;
@@ -497,27 +525,93 @@ class RuntimeRequestStorage {
     const file = this.#store.requestBlockFile(executionId, blockId, { create: false });
     const snapshot = file?.readSnapshot() ?? null;
     if (snapshot === null) fail("record-missing", "A linked request block is missing");
+    return this.#restorePhysicalRecord(file, snapshot, executionId, blockId);
+  }
+  #restorePhysicalRecord(file, snapshot, executionId, blockId) {
     const previous = this.#blocks.get(file.filePath);
     if (previous?.matches(snapshot)) return previous.block;
     const block = restoreRuntimeRequestPhysicalRecord(decodeRuntimeRequestBlockPayload(snapshot.bytes, file.filePath), executionId, blockId, this.#evidenceCodec);
     this.#blocks.set(file.filePath, new ValidatedRuntimeRequestBlockObservation(snapshot, block));
     return block;
   }
-  readInventory(executionId, historyHead, completionHead) {
+  #readLinkedBlocks(executionId, historyHead, completionHead, resolve, planning = false) {
     const blocks = new Map();
     for (const [head, Block] of [[historyHead, RuntimeRequestHistoryBlock], [completionHead, RuntimeRequestCompletionBlock]]) {
       const visited = new Set();
       for (let link = RuntimeRequestReference.fromStored(head); link !== null;) {
-        const block = blocks.get(link.blockId) ?? this.readBlock(executionId, link.blockId);
+        const block = blocks.get(link.blockId) ?? resolve(link.blockId);
+        if (block === null) return null;
         blocks.set(link.blockId, block);
-        if (!(block instanceof Block)) fail("record-corrupt", "Request chain selected the wrong section block kind");
+        if (!(block instanceof Block)) {
+          if (planning) return null;
+          fail("record-corrupt", "Request chain selected the wrong section block kind");
+        }
         const section = block.section(link.digest);
-        if (section === null) fail("record-missing", "Linked request section is absent from its exact block");
-        if (visited.has(section.requestId)) fail("record-corrupt", "Request section chain contains a cycle");
+        if (section === null) {
+          if (planning) return null;
+          fail("record-missing", "Linked request section is absent from its exact block");
+        }
+        if (visited.has(section.requestId)) {
+          if (planning) return null;
+          fail("record-corrupt", "Request section chain contains a cycle");
+        }
         visited.add(section.requestId);
         link = section.previous;
       }
     }
+    return blocks;
+  }
+  #normalBlockPlan(executionId, historyHead, completionHead) {
+    // Inspect existing decoded values only: no file/directory accessor here.
+    const cached = new Map();
+    for (const { block } of this.#blocks.values()) {
+      if (!(block instanceof RuntimeRequestBlock) || block instanceof RuntimeRequestContinuedCompletionBlock
+        || block.executionId !== executionId) continue;
+      const previous = cached.get(block.blockId);
+      if (previous !== undefined && previous !== block) return null;
+      cached.set(block.blockId, block);
+    }
+    const blocks = this.#readLinkedBlocks(executionId, historyHead, completionHead,
+      (blockId) => cached.get(blockId) ?? null, true);
+    return blocks === null ? null : new RuntimeRequestBlockPlan(blocks);
+  }
+  #captureNormalBlocks(executionId, plan) {
+    const snapshots = new Map();
+    // Only the current two-file group adds fresh duplicate payloads; changed graph data, scratch and GC/RSS are separate.
+    // Per-file native limits are unchanged; previous sizes never cap new reads.
+    for (let offset = 0; offset < plan.blocks.length; offset += RUNTIME_RECORD_CAPTURE_WIDTH) {
+      const blocks = plan.blocks.slice(offset, offset + RUNTIME_RECORD_CAPTURE_WIDTH);
+      const files = blocks.map((block) => this.#store.requestBlockFile(executionId, block.blockId, { create: false }));
+      if (files.some((file) => file === null)) fail("record-missing", "A linked request block is missing");
+      const group = AtomicFile.readSnapshots(files);
+      for (let index = 0; index < blocks.length; index += 1) {
+        const file = files[index];
+        const snapshot = group.get(file.filePath);
+        if (snapshot === null) fail("record-missing", "A linked request block is missing");
+        this.#restorePhysicalRecord(file, snapshot, executionId, blocks[index].blockId);
+        // A hit keeps the existing immutable image only AFTER exact fresh byte
+        // comparison; a changed record installs its actual new image/decoder.
+        // This does not claim equal permission hints or timestamps.
+        snapshots.set(`requests/${executionId}/blocks/${blocks[index].blockId}.json`,
+          this.#blocks.get(file.filePath).snapshot);
+      }
+    }
+    return new RuntimeCapturedRecords(snapshots);
+  }
+  readInventory(executionId, historyHead, completionHead) {
+    // Existing prepared/captured views already own their physical observation.
+    if (this.#store instanceof ProcessRuntimeStore) {
+      const plan = this.#normalBlockPlan(executionId, historyHead, completionHead);
+      if (plan !== null) {
+        const captured = this.#captureNormalBlocks(executionId, plan);
+        const storage = this.fork(captured.view(this.#store));
+        const inventory = storage.readInventory(executionId, historyHead, completionHead);
+        this.#inventories.set(executionId, storage.#inventories.get(executionId));
+        return inventory;
+      }
+    }
+    const blocks = this.#readLinkedBlocks(executionId, historyHead, completionHead,
+      (blockId) => this.readBlock(executionId, blockId));
     const inventory = new RuntimeRequestInventory({ executionId, historyHead, completionHead, blocks });
     const observation = new RuntimeRequestStorageObservation(inventory, blocks);
     this.assertBlockInventory(executionId, observation.physicalBlocks);
@@ -546,33 +640,58 @@ class RuntimeRequestStorage {
     const preparation = new RuntimeRecordPreparation(runtimeRegistryObservationAuthority);
     return { ...execution, requests: inventory.requests.map((request) => preparation.requestValue(request)) };
   }
-  unchanged(executionId) {
-    const retained = this.#inventories.get(executionId);
-    if (retained === undefined) return false;
-    const blocks = new Map([...retained.physicalBlocks].map(([blockId, block]) => {
-      const file = this.#store.requestBlockFile(executionId, blockId, { create: false });
-      if (file === null) fail("record-missing", "A linked request block is missing");
-      return [file, block];
-    }));
-    // This one effect-free read captures EVERY physical dependency, including
-    // continuation pieces, before any result escapes its complete parent forest.
-    // A miss discards logical reuse; the caller's normal decoder then owns the
-    // fresh full-chain validation, including replacement bytes and new references.
+  unchanged(executionId) { return this.captureUnchangedExecutions([executionId]) !== null; }
+  captureUnchangedExecutions(executionIds, additionalSnapshots = new Map(), expectedHeads = null) {
+    const retained = new Map();
+    const snapshots = new Map(additionalSnapshots);
     let same = true;
-    const snapshots = new Map([...blocks].map(([file, block]) => {
-      const observed = this.#blocks.get(file.filePath);
-      if (observed?.block !== block) same = false;
-      return [file, observed?.snapshot ?? null];
-    }));
+    for (const executionId of executionIds) {
+      const observation = this.#inventories.get(executionId);
+      if (observation === undefined) return null;
+      if (expectedHeads !== null) {
+        const heads = expectedHeads.get(executionId);
+        for (const [expected, current] of [[heads.history, observation.inventory.historyHead],
+          [heads.completion, observation.inventory.completionHead]]) {
+          if (expected === null ? current !== null : !expected.matches(current)) return null;
+        }
+      }
+      retained.set(executionId, observation.physicalBlocks);
+      for (const [blockId, block] of observation.physicalBlocks) {
+        const file = this.#store.requestBlockFile(executionId, blockId, { create: false });
+        if (file === null) fail("record-missing", "A linked request block is missing");
+        const observed = this.#blocks.get(file.filePath);
+        if (observed?.block !== block) same = false;
+        snapshots.set(file, observed?.snapshot ?? null);
+      }
+    }
+    // Compare every byte and generation afresh before reusing these images.
+    // The returned data serves only this synchronous read; it grants no effect
+    // and does not make a later preparation/publication check unnecessary.
     const sameSnapshots = AtomicFile.snapshotsMatch(snapshots);
-    this.assertBlockInventory(executionId, retained.physicalBlocks);
-    return same && sameSnapshots;
+    const namespaces = this.assertBlockInventories(retained);
+    if (!same || !sameSnapshots) return null;
+    return new RuntimeCapturedRecords(new Map([...snapshots].map(([file, snapshot]) => [
+      path.relative(this.#store.authority.directory, file.filePath).split(path.sep).join("/"), snapshot,
+    ])), namespaces);
   }
   assertBlockInventory(executionId, blocks) {
     const directory = this.#store.requestBlockDirectory(executionId, { create: false });
-    if (directory !== null) for (const name of directory.entries()) {
+    if (directory !== null) this.#assertBlockNames(directory.entries(), blocks);
+  }
+  #assertBlockNames(names, blocks) {
+    for (const name of names) {
       if (!/^[0-9a-f-]{36}\.json$/.test(name) || !blocks.has(name.slice(0, -5))) fail("record-corrupt", "A request block is outside its complete committed section inventory");
     }
+  }
+  assertBlockInventories(inventories) {
+    const directories = new Map();
+    for (const [executionId, blocks] of inventories) {
+      const directory = this.#store.requestBlockDirectory(executionId, { create: false });
+      if (directory !== null) directories.set(directory, blocks);
+    }
+    const observed = RealDirectoryAuthority.observeNames(directories.keys());
+    for (const [index, blocks] of [...directories.values()].entries()) this.#assertBlockNames(observed[index].names, blocks);
+    return new Map(observed.map(names => [path.relative(this.#store.authority.directory, names.directory).split(path.sep).join("/"), names]));
   }
   planExecution(execution, { requestPublications = new RuntimeRequestPublications(), importing = false } = {}) {
     const retained = importing ? undefined : this.#inventories.get(execution.executionId);
@@ -1437,9 +1556,18 @@ export class ProcessExecutionRuntimeConversionTarget {
 
 class RuntimeLogicalInventoryRecords {
   constructor(registry, archives) {
+    if (!(registry instanceof RuntimeRegistry) || !Array.isArray(archives)
+      || archives.some((archive) => !(archive instanceof ClosedProcessExecutionArchive))) {
+      throw new TypeError("Runtime inventory requires a registry and closed archive records");
+    }
     this.registry = registry;
     this.archives = Object.freeze([...archives]);
     Object.freeze(this);
+  }
+  toJSON() {
+    return json({ ...this.registry.toJSON(),
+      executions: [...this.archives.map((archive) => archive.execution), ...this.registry.executions]
+        .sort((left, right) => left.ownerEpoch - right.ownerEpoch) });
   }
 }
 const runtimeLogicalInventoryRecords = new WeakMap();
@@ -1447,12 +1575,13 @@ const runtimeLogicalInventoryRecords = new WeakMap();
 /** Fully validated logical data, without a worker or physical-store capability. */
 class RuntimeLogicalInventory {
   constructor(sourceVersion, registry, archives) {
-    const executions = assertLogicalRuntimeInventory(registry, archives.map((archive) => archive.execution));
+    assertLogicalRuntimeInventory(registry, archives.map((archive) => archive.execution));
     if (archives.some((archive) => !archive.checkout.matches(registry.checkout))) throw new TypeError("Runtime data has a foreign checkout archive");
-    runtimeLogicalInventoryRecords.set(this, new RuntimeLogicalInventoryRecords(registry, archives));
+    const records = new RuntimeLogicalInventoryRecords(registry, archives);
+    runtimeLogicalInventoryRecords.set(this, records);
     this.sourceVersion = sourceVersion;
     this.checkout = registry.checkout;
-    this.logicalInventory = freezeExecutionValue(json({ ...registry.toJSON(), executions: [...executions].sort((a, b) => a.ownerEpoch - b.ownerEpoch) }));
+    this.logicalInventory = freezeExecutionValue(records.toJSON());
     Object.freeze(this);
   }
 }
@@ -1678,14 +1807,30 @@ class RuntimePublicationSource {
     if (!this.generation.matches(snapshot)) fail("authority-mismatch", "Preserved runtime input changed its exact preparation generation");
     return snapshot;
   }
-  static captureAll(sources, store) {
+  static captureAll(sources, store, additionalFiles = []) {
     const files = sources.map((source) => source.#file.resolve(store));
     if (files.some((file) => file === null)) fail("authority-mismatch", "Preserved runtime input changed its exact preparation generation");
-    const snapshots = AtomicFile.readSnapshots(files);
-    return new Map(sources.map((source, index) => [source.relativePath,
+    const complete = new Map([...files, ...additionalFiles].map(file => [file.filePath, file]));
+    const snapshots = AtomicFile.readSnapshots(complete.values());
+    const captured = new Map(sources.map((source, index) => [source.relativePath,
       source.assertCaptured(snapshots.get(files[index].filePath))]));
+    return new RuntimePublicationCapturedFiles(captured, snapshots);
   }
   toJSON() { return { relativePath: this.relativePath, generation: this.generation }; }
+}
+
+/** Sources, targets and stages captured by the same complete fresh forest. */
+class RuntimePublicationCapturedFiles {
+  #sources;
+  #snapshots;
+  constructor(sources, snapshots) {
+    if (!(sources instanceof Map) || !(snapshots instanceof RegularFileSnapshotGroup)) throw new TypeError("Publication capture requires sources and a regular file snapshot group");
+    this.#sources = new Map(sources);
+    this.#snapshots = snapshots;
+    Object.freeze(this);
+  }
+  sources() { return new Map(this.#sources); }
+  snapshots() { return this.#snapshots; }
 }
 
 /** Exact existing ancestry within the selected runtime; no path grants ownership. */
@@ -1723,15 +1868,58 @@ class RuntimePublicationDirectoryGeneration {
   #assertIdentity(directory) {
     if (!sameFileIdentity(this.identity, directory.identity)) fail("authority-mismatch", "Prepared runtime directory changed its exact generation");
   }
-  static assertAllMatches(store, generations) {
+  static #assertIdentities(generations, directories) {
+    for (const [index, generation] of generations.entries()) generation.#assertIdentity(directories[index]);
+  }
+  static beginAllMatches(store, generations, { includeStore = false } = {}) {
     const directories = generations.map((generation) => generation.#authority(store));
-    RealDirectoryAuthority.assertAllStable(directories);
-    for (const [index, generation] of generations.entries()) {
-      generation.#assertIdentity(directories[index]);
+    const physical = includeStore ? store.beginStableObservation({ additionalAuthorities: directories })
+      : RealDirectoryAuthority.beginObservation(directories);
+    try {
+      this.#assertIdentities(generations, directories);
+      return new RuntimePublicationDirectoryObservation(runtimeRegistryObservationAuthority, store, generations, directories, physical);
+    } catch (cause) { physical.discard(); throw cause; }
+  }
+  static assertAllMatches(store, generations, { includeStore = false, observation = null } = {}) {
+    if (observation !== null) {
+      if (!(observation instanceof RuntimePublicationDirectoryObservation)) throw new TypeError("Expected this publication's directory read interval");
+      observation.assertMatches(store, generations);
+      const directories = generations.map((generation) => generation.#authority(store));
+      this.#assertIdentities(generations, directories);
+      return directories;
     }
-    return directories;
+    const captured = this.beginAllMatches(store, generations, { includeStore });
+    try { return captured.complete(); } finally { captured.discard(); }
   }
   toJSON() { return { relativePath: this.relativePath, identity: this.identity, entries: this.entries }; }
+}
+
+/** One fixed read interval; no completed observation authorizes an effect. */
+class RuntimePublicationDirectoryObservation {
+  #store;
+  #generations;
+  #directories;
+  #physical;
+  #active = true;
+  constructor(authority, store, generations, directories, physical) {
+    if (authority !== runtimeRegistryObservationAuthority) throw new TypeError("Publication directory observations require their complete owner");
+    this.#store = store; this.#generations = generations;
+    this.#directories = Object.freeze([...directories]); this.#physical = physical;
+    Object.freeze(this);
+  }
+  assertMatches(store, generations) {
+    if (!this.#active || store !== this.#store || generations !== this.#generations) {
+      throw new TypeError("Directory read observation belongs to another publication or interval");
+    }
+  }
+  complete() {
+    try {
+      this.#physical.complete();
+      RuntimePublicationDirectoryGeneration.assertAllMatches(this.#store, this.#generations, { observation: this });
+      return this.#directories.slice();
+    } finally { this.#active = false; }
+  }
+  discard() { this.#active = false; this.#physical.discard(); }
 }
 
 /** The existing transition file holds metadata only, never result payloads. */
@@ -1771,18 +1959,26 @@ class RuntimePreparedPublication {
   restoreSource(value) { return new RuntimePublicationSource(value); }
   permitsAnchorMigration() { return false; }
   withTargets(targets) { return new this.constructor({ ...json(this), targets }); }
-  assertStorageAuthority(store) {
-    store.assertStable();
+  #assertStorageIdentity(store) {
     if (!this.checkout.matches(store.checkout) || !sameFileIdentity(this.runtimeIdentity, store.authority.identity)) fail("authority-mismatch", "Prepared publication belongs to another runtime authority");
-    RuntimePublicationDirectoryGeneration.assertAllMatches(store, this.directories);
   }
-  assertAuthority(store) {
-    this.assertStorageAuthority(store);
+  #beginReadObservation(store) {
+    this.#assertStorageIdentity(store);
+    return RuntimePublicationDirectoryGeneration.beginAllMatches(store, this.directories, { includeStore: true });
+  }
+  assertStorageAuthority(store, observation = null) {
+    this.#assertStorageIdentity(store);
+    RuntimePublicationDirectoryGeneration.assertAllMatches(store, this.directories, { includeStore: true, observation });
+  }
+  assertAuthority(store, observation = null) {
+    this.assertStorageAuthority(store, observation);
     const current = store.ownerLock.inspect();
     if (this.owner === null ? current !== null : current === null || !sameFileIdentity(this.ownerIdentity, current.stat)
       || this.owner.ownerToken !== current.owner.ownerToken || this.owner.ownerSession !== current.owner.ownerSession) fail("ownership-changed", "Prepared publication owner observation changed");
   }
-  captureSources(store) { return RuntimePublicationSource.captureAll(this.sources, store); }
+  captureSources(store, additionalFiles = []) {
+    return RuntimePublicationSource.captureAll(this.sources, store, additionalFiles);
+  }
   assertNextTarget(store, index) {
     const targets = this.targets.slice(0, index + 1);
     const files = targets.map((target) => target.file(store));
@@ -1815,8 +2011,8 @@ class RuntimePreparedPublication {
     }
     return snapshot;
   }
-  assertSelected(store, selection) {
-    this.assertAuthority(store);
+  assertSelected(store, selection, observation = null) {
+    this.assertAuthority(store, observation);
     selection.assertCurrent();
   }
   consumeValidatedRegistry(snapshot, linkedSnapshots) {
@@ -1825,10 +2021,14 @@ class RuntimePreparedPublication {
     return observation?.read(snapshot, linkedSnapshots) ?? null;
   }
   assertPhysical(store, { committed = false } = {}) {
-    this.assertAuthority(store);
-    const observation = this.#capturePhysical(store, { committed });
-    this.assertAuthority(store);
-    return observation;
+    const read = this.#beginReadObservation(store);
+    try {
+      this.assertAuthority(store, read);
+      const observation = this.#capturePhysical(store, { committed });
+      this.assertAuthority(store, read);
+      read.complete();
+      return observation;
+    } finally { read.discard(); }
   }
   #capturePhysical(store, { committed = false } = {}) {
     const observation = new RuntimePublicationPhysicalObservation(this, store);
@@ -1848,17 +2048,20 @@ class RuntimePreparedPublication {
     // One synchronous, callback-free read interval owns both complete physical
     // images and the pure decode. Keep the original polymorphic selected proof
     // at both ends, including migration's extra source/namespace observations.
-    const assertCurrent = () => selection === null ? this.assertAuthority(store) : this.assertSelected(store, selection);
+    let read = null;
+    const assertCurrent = () => selection === null ? this.assertAuthority(store, read) : this.assertSelected(store, selection, read);
     try {
+      read = this.#beginReadObservation(store);
       assertCurrent();
       const registry = this.#readData(store, intended, archiveObservation);
       assertCurrent();
+      read.complete();
       return registry;
     } catch (cause) {
       this.#registryObservation = null;
       this.#dataObservation = null;
       throw cause;
-    }
+    } finally { read?.discard(); }
   }
   #readData(store, intended, archiveObservation) {
     const observation = this.#capturePhysical(store);
@@ -1905,7 +2108,7 @@ class RuntimePreparedPublication {
       .map((source) => source.relativePath));
     const archives = [...archiveNames].map((name) => {
       if (!/^[0-9a-f-]{36}\.json$/.test(name)) fail("record-corrupt", "Unexpected prepared runtime archive inventory entry");
-      if (preservedSources.has(`archives/${name}`)) return store.readPreservedArchive(archiveObservation, name, view);
+      if (preservedSources.has(`archives/${name}`)) return store.readPreservedArchive(archiveObservation, name, view, storage);
       const value = decode(`archives/${name}`);
       const expandedArchive = { ...value, execution: expandStoredRuntimeExecution(storage, value.execution) };
       const archive = exact(expandedArchive, new ClosedProcessExecutionArchive(expandedArchive));
@@ -1985,8 +2188,9 @@ class RuntimePreparedRecordMigration extends RuntimePreparedPublication {
   permitsAnchorMigration() { return true; }
   // Predecessor artifacts can exceed the canonical in-memory file bound.
   // Keep their existing complete streaming capture and generation checks.
-  captureSources(store) {
-    return new Map(this.sources.map((source) => [source.relativePath, source.capture(store)]));
+  captureSources(store, additionalFiles = []) {
+    const sources = new Map(this.sources.map((source) => [source.relativePath, source.capture(store)]));
+    return new RuntimePublicationCapturedFiles(sources, AtomicFile.readSnapshots(additionalFiles));
   }
   constructor(value) {
     super(value);
@@ -2123,7 +2327,6 @@ class RuntimePublicationPhysicalObservation {
   #namespaces = new Map();
   constructor(prepared, store) {
     this.#prepared = prepared; this.#store = store;
-    this.#sources = prepared.captureSources(store);
     const files = new Map();
     for (const target of prepared.targets) {
       const file = target.file(store);
@@ -2136,7 +2339,9 @@ class RuntimePublicationPhysicalObservation {
     // One callback-free image includes every target, its owned stages and the
     // registry dependency. Each file keeps its full fresh capture; the common
     // snapshot group checks shared ancestry before and after the whole image.
-    this.#snapshots = AtomicFile.readSnapshots(files.values());
+    const captured = prepared.captureSources(store, files.values());
+    this.#sources = captured.sources();
+    this.#snapshots = captured.snapshots();
     Object.freeze(this);
   }
   captureTarget(target) {
@@ -2169,17 +2374,15 @@ class RuntimePublicationPhysicalObservation {
   }
   assertNamespaces() {
     const view = new RuntimePublicationView(this.#store, this.#prepared.targets, new Map());
-    for (const directory of this.#prepared.directories) {
-      // assertPhysical's opening authority check has already validated every
-      // directory, including all private call pins; repeat the same per-path
-      // check when taking namespace bytes, as the original implementation did.
-      if (directory.entries === null) { this.#directories.set(directory.relativePath, directory); continue; }
-      const actual = directory.assertMatches(this.#store);
-      const entries = view.entries(directory.relativePath, actual).sort();
+    const selected = this.#prepared.directories.filter(directory => directory.entries !== null);
+    const directories = RuntimePublicationDirectoryGeneration.assertAllMatches(this.#store, selected);
+    const snapshots = RealDirectoryAuthority.observeNames(directories);
+    for (const [index, directory] of selected.entries()) {
+      const entries = view.entries(directory.relativePath, directories[index], snapshots[index]).sort();
       if (!isDeepStrictEqual(entries, directory.entries)) fail("authority-mismatch", "Prepared canonical namespace inventory changed");
-      this.#directories.set(directory.relativePath, directory);
       this.#namespaces.set(directory.relativePath, Object.freeze(entries));
     }
+    for (const directory of this.#prepared.directories) this.#directories.set(directory.relativePath, directory);
   }
   assertDirectory(relativePath) {
     if (!this.#directories.has(relativePath)) fail("authority-mismatch", "Prepared runtime directory lacks its exact captured ancestry");
@@ -2201,26 +2404,33 @@ class RuntimePublicationReadFile {
 /** The normal request reader consumes exact staged bytes through its same API.
  * Only already generation-validated owned stage names are excluded. */
 class RuntimePublicationView {
-  constructor(store, targets, snapshots, observation = null) {
+  constructor(store, targets, snapshots, observation = null, capture = null) {
     if (observation !== null && !(observation instanceof RuntimePublicationPhysicalObservation)) throw new TypeError("Publication view requires its exact physical observation");
+    if (capture !== null && !(capture instanceof RuntimeCapturedRecords)) throw new TypeError("Record view requires its closed captured images");
     this.store = store; this.targets = targets; this.snapshots = snapshots; this.observation = observation;
+    this.capture = capture;
   }
   publicationFile(relativePath) { return this.file(relativePath); }
   file(relativePath) {
+    // Membership is checked BEFORE a Native accessor can read through a miss.
+    const snapshot = this.capture === null ? this.snapshots.get(relativePath) : this.capture.snapshot(relativePath);
     const file = this.store.publicationFile(relativePath, { create: false });
-    return file === null ? null : new RuntimePublicationReadFile(file, this.snapshots.get(relativePath));
+    return file === null ? null : new RuntimePublicationReadFile(file, snapshot);
   }
-  entries(relativePath, directory) {
-    const captured = this.observation?.entries(relativePath);
+  entries(relativePath, directory, names = null) {
+    if (names !== null && (!(names instanceof RealDirectoryNameSnapshot) || names.directory !== directory.directory)) {
+      throw new TypeError("Publication namespace requires its exact observed directory names");
+    }
+    const captured = this.observation?.entries(relativePath) ?? this.capture?.entries(relativePath, directory);
     if (captured !== undefined) return captured;
     const targets = this.targets.filter((target) => path.posix.dirname(target.relativePath) === relativePath);
     const owned = new Set(targets.flatMap((target) => [target.sourceStage.name, target.publicationStage?.name]).filter(Boolean));
-    const names = new Set((directory?.entries() ?? []).filter((name) => !owned.has(name)));
+    const projected = new Set((names?.names ?? directory?.entries() ?? []).filter((name) => !owned.has(name)));
     for (const target of targets) {
       const name = path.posix.basename(target.relativePath);
-      if (target.removal) names.delete(name); else names.add(name);
+      if (target.removal) projected.delete(name); else projected.add(name);
     }
-    return [...names];
+    return [...projected];
   }
   requestBlockFile(executionId, blockId) { return this.file(`requests/${executionId}/blocks/${blockId}.json`); }
   requestBlockDirectory(executionId) {
@@ -2611,11 +2821,11 @@ class ValidatedRuntimePublicationData {
 class ValidatedRuntimeArchiveObservation {
   #snapshot;
   #archive;
-  constructor(snapshot, filePath, checkout, name, store) {
+  constructor(snapshot, filePath, checkout, name, storage) {
     const envelope = decodeRuntimeJson(snapshot?.bytes ?? null, filePath);
     if (!envelope || Object.keys(envelope).length !== 2 || envelope.digest !== digest(envelope.payload)) fail("record-corrupt", "Runtime archive checksum is invalid");
     refusePreviousRuntimeRecord(envelope.payload, checkout);
-    const expanded = { ...envelope.payload, execution: store.expandExecution(envelope.payload.execution) };
+    const expanded = { ...envelope.payload, execution: expandStoredRuntimeExecution(storage, envelope.payload.execution) };
     const archive = exact(expanded, new ClosedProcessExecutionArchive(expanded));
     this.#archive = archive;
     if (!this.#matchesCheckout(checkout, name)) fail("authority-mismatch", "Runtime archive belongs to another checkout or execution");
@@ -2628,11 +2838,14 @@ class ValidatedRuntimeArchiveObservation {
   #matchesCheckout(checkout, name) {
     return this.#archive.checkout.matches(checkout) && name === `${this.#archive.execution.executionId}.json`;
   }
+  matchesSnapshot(snapshot, checkout, name) {
+    return this.#matchesCheckout(checkout, name) && sameRuntimeRecordSnapshot(this.#snapshot, snapshot);
+  }
   matches(snapshot, checkout, name, store) {
-    return this.#matchesCheckout(checkout, name) && sameRuntimeRecordSnapshot(this.#snapshot, snapshot)
+    return this.matchesSnapshot(snapshot, checkout, name)
       && store.unchangedExecution(this.#archive.execution.executionId);
   }
-  get execution() { return this.#archive.execution; }
+  get archive() { return this.#archive; }
   get snapshot() { return this.#snapshot; }
 }
 
@@ -2643,20 +2856,54 @@ class RuntimeRecordObservation {
     return new Map([...this.#observations].map(([filePath, observation]) => [`archives/${path.basename(filePath)}`, observation.snapshot]));
   }
 
+  readUnchangedArchives(files, checkout, retainedObservations, store, baseline) {
+    if (baseline === null) return null;
+    const snapshots = new Map(files.map(file => [file,
+      baseline.snapshots.get(`archives/${path.basename(file.filePath)}`)]));
+    if ([...snapshots.values()].some(snapshot => snapshot === undefined)) return null;
+    const executionIds = files.map(file => path.basename(file.filePath, ".json"));
+    // A failed earlier read may have observed another valid request head. Such
+    // a plan miss must use the normal reader rather than reject restored data.
+    const heads = new Map(files.map((file, index) => [executionIds[index], RuntimeRequestHeads.fromExecution(
+      decodeRuntimeJson(snapshots.get(file).bytes, file.filePath).payload.execution)]));
+    const captured = store.requestStorage.captureUnchangedExecutions(executionIds, snapshots, heads);
+    if (captured === null) return null;
+    const view = captured.view(store), storage = store.requestStorage.fork(view);
+    return files.map(file => this.readPrepared(view.file(`archives/${path.basename(file.filePath)}`),
+      checkout, path.basename(file.filePath), retainedObservations, storage));
+  }
   read(file, checkout, name, retainedObservations, store) {
     // Every observation still captures and validates the actual physical file.
-    const snapshot = file.readSnapshot();
+    return this.readCaptured(file, file.readSnapshot(), checkout, name, retainedObservations, store);
+  }
+  readCaptured(file, snapshot, checkout, name, retainedObservations, store) {
     const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath)?.deref();
     if (snapshot !== null && previous?.matches(snapshot, checkout, name, store)) {
       this.#observations.set(file.filePath, previous);
-      return previous.execution;
+      return previous.archive;
     }
+    return this.#restore(file, snapshot, checkout, name, retainedObservations, store.requestStorage);
+  }
+  readPrepared(file, checkout, name, retainedObservations, storage) {
+    // Both callers own a complete captured archive/block graph and its exact
+    // namespaces. Prepared publication also recaptures that complete graph
+    // after decoding; no per-archive Native reread belongs inside this interval.
+    // Retain decoded values within this RPC; cross-RPC history remains weak.
+    const snapshot = file.readSnapshot();
+    const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath)?.deref();
+    if (snapshot !== null && previous?.matchesSnapshot(snapshot, checkout, name)) {
+      this.#observations.set(file.filePath, previous);
+      return previous.archive;
+    }
+    return this.#restore(file, snapshot, checkout, name, retainedObservations, storage);
+  }
+  #restore(file, snapshot, checkout, name, retainedObservations, storage) {
     this.#observations.delete(file.filePath);
     retainedObservations.delete(file.filePath);
-    const observation = new ValidatedRuntimeArchiveObservation(snapshot, file.filePath, checkout, name, store);
+    const observation = new ValidatedRuntimeArchiveObservation(snapshot, file.filePath, checkout, name, storage);
     this.#observations.set(file.filePath, observation);
     retainedObservations.set(file.filePath, new WeakRef(observation));
-    return observation.execution;
+    return observation.archive;
   }
 }
 function encodeRuntimeRecord(record) {
@@ -3047,7 +3294,7 @@ class ProcessRuntimeStore {
     this.tail = Promise.resolve();
     this.requestStorage = new RuntimeRequestStorage(this);
   }
-  assertStable() {
+  #assertStoragePolicy() {
     this.storagePolicy?.assertStable();
     if (this.checkoutAuthority === null && !this.historical) {
       try {
@@ -3055,10 +3302,28 @@ class ProcessRuntimeStore {
         fail("authority-mismatch", "Retained checkout path reappeared during inspection");
       } catch (cause) { if (cause.code !== "ENOENT") throw cause; }
     }
-    RealDirectoryAuthority.assertAllStable([
-      this.mainAuthority, ...(this.checkoutAuthority === null ? [] : [this.checkoutAuthority]),
-      this.authority, this.callsAuthority, this.archivesAuthority,
-    ]);
+  }
+  #stableAuthorities(additionalAuthorities) {
+    return [this.mainAuthority, ...(this.checkoutAuthority === null ? [] : [this.checkoutAuthority]),
+      this.authority, this.callsAuthority, this.archivesAuthority, ...additionalAuthorities];
+  }
+  // Private nominal value keeps policy access in this Store, without exposing
+  // an arbitrary callback or a process-global directory freshness cache.
+  static #StableObservation = class RuntimeStoreStableObservation {
+    #store;
+    #forest;
+    constructor(store, forest) { this.#store = store; this.#forest = forest; Object.freeze(this); }
+    complete() { this.#store.#assertStoragePolicy(); this.#forest.complete(); }
+    discard() { this.#forest.discard(); }
+  };
+  beginStableObservation({ additionalAuthorities = [] } = {}) {
+    this.#assertStoragePolicy();
+    return new ProcessRuntimeStore.#StableObservation(this,
+      RealDirectoryAuthority.beginObservation(this.#stableAuthorities(additionalAuthorities)));
+  }
+  assertStable({ additionalAuthorities = [] } = {}) {
+    this.#assertStoragePolicy();
+    RealDirectoryAuthority.assertAllStable(this.#stableAuthorities(additionalAuthorities));
   }
   assertCommitted() {
     this.assertStable();
@@ -3156,7 +3421,8 @@ class ProcessRuntimeStore {
     if (anchor === null || existing === null) fail("record-missing", "Runtime authority or inventory was removed");
     return this.read();
   }
-  read({ required = true, archiveObservation = new RuntimeRecordObservation(), immutable = false } = {}) {
+  read(options = {}) { return this.#readRecords(options)?.registry ?? null; }
+  #readRecords({ required = true, archiveObservation = new RuntimeRecordObservation(), immutable = false } = {}) {
     try {
       this.assertCommitted();
       const snapshot = !required && this.file.read() === null ? null : this.#read(archiveObservation, null, immutable);
@@ -3205,7 +3471,7 @@ class ProcessRuntimeStore {
       }
     }
     if (!isDeepStrictEqual(json(registry.checkout), json(this.checkout))) fail("authority-mismatch", "Runtime registry belongs to a different checkout");
-    this.#assertInventory(registry, archiveObservation);
+    const inventory = this.#assertInventory(registry, archiveObservation);
     // Reuse only an immutable graph of these exact physical bytes. Every
     // request freshly checks archive files and the complete inventory.
     // Publication readback keeps the original exact-identity/full-comparison
@@ -3219,48 +3485,67 @@ class ProcessRuntimeStore {
       ["registry.json", snapshot], ["authority.json", anchorSnapshot],
       ...archiveObservation.publicationSnapshots(), ...this.requestStorage.publicationSnapshots(),
     ]));
-    if (publication !== null || immutable) return registry;
-    return this.#readonlyObservation.mutableCopy();
+    if (publication !== null || immutable) return inventory;
+    return new RuntimeLogicalInventoryRecords(this.#readonlyObservation.mutableCopy(), inventory.archives);
   }
   readArchives(archiveObservation = new RuntimeRecordObservation()) {
+    return this.#readArchives(archiveObservation).map((archive) => archive.execution);
+  }
+  #readArchives(archiveObservation) {
     this.archivesAuthority.assertStable();
     const names = fs.readdirSync(this.archivesAuthority.directory);
     const paths = new Set(names.map((name) => path.join(this.archivesAuthority.directory, name)));
     for (const [filePath, observation] of this.#archiveObservations) {
       if (!paths.has(filePath) || observation.deref() === undefined) this.#archiveObservations.delete(filePath);
     }
-    return names.map((name) => {
-      if (!/^[0-9a-f-]{36}\.json$/.test(name)) fail("record-corrupt", "Unexpected runtime archive inventory entry");
-      const file = new AtomicFile(path.join(this.archivesAuthority.directory, name), { directoryAuthority: this.archivesAuthority });
-      return archiveObservation.read(file, this.checkout, name, this.#archiveObservations, this);
-    }).sort((left, right) => left.ownerEpoch - right.ownerEpoch);
-  }
-  readPreservedArchive(archiveObservation, name, view) {
-    const execution = archiveObservation.read(view.file(`archives/${name}`), this.checkout, name,
-      this.#archiveObservations, this);
-    // The ordinary reader freshly checks every actual linked block and its
-    // complete namespace even on a semantic reuse. Its exact physical image
-    // must also match this prepared validation's already captured source view.
-    for (const [relativePath, snapshot] of this.requestStorage.publicationSnapshots(new Set([execution.executionId]))) {
-      if (!sameRuntimeRecordSnapshot(snapshot, view.snapshots.get(relativePath) ?? null)) {
-        fail("authority-mismatch", "Preserved archive request blocks differ from the prepared physical graph");
+    // Recheck the complete archived physical graph in one streaming forest.
+    // Decode its freshly matched images even when weak expanded graphs expired.
+    // Singleton reads retain their ordinary boundary; misses decode normally.
+    if (names.length > 1) {
+      const files = names.map(name => {
+        if (!/^[0-9a-f-]{36}\.json$/.test(name)) fail("record-corrupt", "Unexpected runtime archive inventory entry");
+        return new AtomicFile(path.join(this.archivesAuthority.directory, name), { directoryAuthority: this.archivesAuthority });
+      });
+      const unchanged = archiveObservation.readUnchangedArchives(files, this.checkout, this.#archiveObservations, this, this.#publicationBaseline);
+      if (unchanged !== null) return unchanged.sort((left, right) => left.execution.ownerEpoch - right.execution.ownerEpoch);
+    }
+    const archives = [];
+    for (let offset = 0; offset < names.length; offset += RUNTIME_RECORD_CAPTURE_WIDTH) {
+      const selected = names.slice(offset, offset + RUNTIME_RECORD_CAPTURE_WIDTH);
+      const files = selected.map((name) => {
+        if (!/^[0-9a-f-]{36}\.json$/.test(name)) fail("record-corrupt", "Unexpected runtime archive inventory entry");
+        return new AtomicFile(path.join(this.archivesAuthority.directory, name), { directoryAuthority: this.archivesAuthority });
+      });
+      // A singleton retains the ordinary read boundary. Plural reads share
+      // fresh parent observations through the existing complete capture API.
+      // At most two fresh duplicate payloads are retained, as for request blocks.
+      const snapshots = files.length > 1 ? AtomicFile.readSnapshots(files) : null;
+      for (const [index, file] of files.entries()) {
+        archives.push(snapshots === null
+          ? archiveObservation.read(file, this.checkout, selected[index], this.#archiveObservations, this)
+          : archiveObservation.readCaptured(file, snapshots.get(file.filePath), this.checkout, selected[index], this.#archiveObservations, this));
       }
     }
-    return execution;
+    return archives.sort((left, right) => left.execution.ownerEpoch - right.execution.ownerEpoch);
+  }
+  readPreservedArchive(archiveObservation, name, view, storage) {
+    return archiveObservation.readPrepared(view.file(`archives/${name}`), this.checkout, name,
+      this.#archiveObservations, storage).execution;
   }
   readInventory() {
-    const archiveObservation = new RuntimeRecordObservation();
-    const registry = this.read({ archiveObservation });
-    return json({ ...registry.toJSON(), executions: [...this.readArchives(archiveObservation), ...registry.executions]
-      .sort((left, right) => left.ownerEpoch - right.ownerEpoch) });
+    // This read already validated every archive and its linked records. Carry
+    // that exact captured view; a later read still captures every file anew.
+    return this.#readRecords({ immutable: true }).toJSON();
   }
   readConsistentInventory() {
     const deadline = managedMonotonicNow() + 1000;
     const pause = new Int32Array(new SharedArrayBuffer(4));
     let failure;
     do {
+      // Undefined means capture did not complete; null records actual absence.
+      let before;
       try {
-        const before = this.file.readSnapshot();
+        before = this.file.readSnapshot();
         const result = this.readInventory();
         const after = this.file.readSnapshot();
         if (before !== null && after !== null && before.digest === after.digest
@@ -3268,7 +3553,23 @@ class ProcessRuntimeStore {
         failure = new ProcessExecutionControlFailure("durability-uncertain", "Runtime changed during read-only inventory observation");
       } catch (cause) {
         failure = cause;
-        if (!(cause instanceof ProcessExecutionControlFailure)
+        // A reader can retain the old registry while the sole writer publishes
+        // its next immutable blocks, including closed stages prepared before
+        // journal selection. A checkout-bound admission held by the published
+        // owner's session proves an ambiguous writer window, not its liveness
+        // or the validity of any block. Reobserve within this existing bound;
+        // never accept the failed inventory or acquire/reclaim that exclusion.
+        if (cause instanceof ProcessExecutionControlFailure && cause.reason === "record-corrupt") {
+          const after = this.file.readSnapshot();
+          const admission = this.admission.inspect();
+          const owner = admission === null ? null : this.ownerLock.inspect();
+          const preparing = owner !== null && admission.owner.ownerSession === owner.owner.ownerSession;
+          const unchanged = before === undefined || (before === null ? after === null
+            : RuntimeFileGeneration.capture(before).matches(after));
+          if (unchanged
+            && this.transition.readSnapshot() === null && !preparing) throw cause;
+          failure = new ProcessExecutionControlFailure("durability-uncertain", "Runtime changed during read-only inventory observation", { cause });
+        } else if (!(cause instanceof ProcessExecutionControlFailure)
           || !["durability-uncertain", "registry-failed", "record-missing"].includes(cause.reason)) throw cause;
       }
       if (managedMonotonicNow() >= deadline) break;
@@ -3277,13 +3578,15 @@ class ProcessRuntimeStore {
     throw failure;
   }
   #assertInventory(registry, archiveObservation) {
-    const inventory = assertLogicalRuntimeInventory(registry, this.readArchives(archiveObservation));
+    const records = new RuntimeLogicalInventoryRecords(registry, this.#readArchives(archiveObservation));
+    const inventory = assertLogicalRuntimeInventory(registry, records.archives.map((archive) => archive.execution));
     const callIds = new Set(inventory.flatMap((execution) => execution.calls.map((call) => call.callId)));
     const names = this.callsAuthority.entries();
     for (const name of names) {
       if (!callIds.has(name)) fail("record-missing", "A physical call artifact is outside the durable runtime inventory");
     }
     this.observeCallDirectories(names);
+    return records;
   }
   assertRecordMigrationQuiescent() {
     this.assertStable();
@@ -4476,7 +4779,7 @@ export class ProcessExecutionCoordinator {
     // committed start without recording a permanent refusal or holding a lock.
     if (message.operation === "authenticate" && message.payload.data?.binding !== undefined && parent !== null
       && !new ProcessExecutionBinding(message.payload.data.binding).matches(parent.binding)) fail("binding-mismatch", "Borrowed scope differs from its exact parent binding");
-    if (pending !== null && !this.#admit(root, parent, { waitForStart: true })) return true;
+    if (pending instanceof ParentStartPublication && !this.#admit(root, parent, { waitForStart: true })) return true;
     pending?.assertLive();
     return false;
   }
@@ -5405,7 +5708,7 @@ export class ProcessExecutionRuntime {
         || runId !== grant.runId || specId !== grant.specId) fail("delegation-refused", "Borrowed execution belongs to another checkout, run or specification");
       return this.fromRemoteGrant(grant, { binding, callAdmission, eventWriter, faultInjector });
     }
-    if (workspace !== null && !(workspace instanceof ReadOnlyInvocationWorkspace)) throw new TypeError("Read-only execution requires a minted invocation workspace");
+    if (workspace !== null && !(workspace instanceof InvocationControlWorkspace)) throw new TypeError("Isolated control storage requires a minted invocation workspace");
     const storagePolicy = workspace?.processRuntimeStorage() ?? null;
     const configuration = { mainRoot: fs.realpathSync(path.resolve(mainRoot)), executionRoot: fs.realpathSync(path.resolve(executionRoot)),
       runId, specId, binding: json(new ProcessExecutionBinding(binding)), storage: storagePolicy?.toJSON() ?? null };
@@ -5746,9 +6049,9 @@ export class ProcessExecutionRuntime {
       }
     } finally { maintenance.release(); }
   }
-  static readHistoricalInventory({ mainRoot, executionRoot = mainRoot, checkoutIdentity, runId, specId } = {}) {
+  static readHistoricalInventory({ mainRoot, executionRoot = mainRoot, checkoutIdentity, runId, specId, storagePolicy = null } = {}) {
     try {
-      const store = new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, historical: true });
+      const store = new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, historical: true, storagePolicy });
       if (checkoutIdentity !== undefined && !store.checkout.matches(new ProcessExecutionCheckoutIdentity(checkoutIdentity))) fail("authority-mismatch", "Historical runtime source belongs to another checkout identity");
       const inventory = store.readConsistentInventory(); store.assertCommitted();
       return new ProcessExecutionHistoricalInventory(inventory, { runId, specId });

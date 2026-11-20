@@ -1,5 +1,5 @@
 import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
-import { ProcessExecutionEvent } from "../../lib/process-execution-values.js";
+import { ProcessExecutionEvent, ProcessExecutionEventGroup } from "../../lib/process-execution-values.js";
 import { FlowProcessEvent, PROCESS_EVENT_OPERATION, PROCESS_EVENT_ACTIVITY_TYPES } from "./flow-process-event.js";
 import { ProcessExecutionFinalizationBarrier } from "../../lib/process-execution-finalization.js";
 import { CanonicalPromptResponseAdoption, PromptResponseAdoptionAdmissionValue } from "./prompt-response-adoption.js";
@@ -1538,6 +1538,7 @@ export class CurrentFlowContext {
     Object.freeze(this);
   }
 
+  get baseOid() { return this.value?.baseOid ?? null; }
   toJSON() { return this.value === null ? null : { ...this.value }; }
 }
 
@@ -6758,6 +6759,33 @@ export class CurrentFlowState {
     return new CurrentFlowState({ ...this.toJSON(), confirmationOrder }, { definition: this.definition });
   }
 
+  /** Replay privately owned state while retaining exact Attempt finish facts. */
+  replayActivities(activities) {
+    if (!Array.isArray(activities) || activities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("state replay requires typed Activities");
+    }
+    const attemptHistory = new CurrentFlowAttemptHistory();
+    const replay = new CurrentFlowJournalReplay(this, [], {
+      reuseValidatedBase: false,
+      attemptHistory,
+    });
+    for (const activity of activities) replay.apply(activity);
+    return new CurrentFlowReplayResult(replay.materialize(), attemptHistory);
+  }
+
+  /** Privately preview exact process observations without publishing state. */
+  previewProcessEvents(group, priorActivities) {
+    if (!(group instanceof ProcessExecutionEventGroup)) {
+      throw new TypeError("Canonical process publication requires a typed event group");
+    }
+    if (!Array.isArray(priorActivities) || priorActivities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("process preview requires typed prior Activities");
+    }
+    return new CurrentFlowJournalReplay(this, priorActivities, {
+      reuseValidatedBase: false,
+    }).previewProcessEvents(group);
+  }
+
   get cursor() {
     return this.current == null ? null : new CurrentCursor({ path: this.current, attempt: this.attempt });
   }
@@ -7125,8 +7153,7 @@ export class CurrentFlowState {
 
   #replaceRoot(root, current = this.current, attempt = this.attempt, history = this.history) {
     return new CurrentFlowState({
-      ...this.toJSON(),
-      ...root.toJSON(),
+      ...this.#serialize(root),
       current: current == null ? null : current.at(-1),
       attempt: attempt?.toJSON?.() ?? attempt,
       history: history?.toJSON() ?? null,
@@ -7148,6 +7175,10 @@ export class CurrentFlowState {
   }
 
   toJSON() {
+    return this.#serialize(this.root);
+  }
+
+  #serialize(root) {
     return {
       schemaRevision: this.schemaRevision,
       ...this.identity.toJSON(),
@@ -7156,7 +7187,7 @@ export class CurrentFlowState {
       lifecycle: this.lifecycle.toJSON(),
       execution: this.execution.toJSON(),
       policy: this.policy.toJSON(),
-      ...this.root.toJSON(),
+      ...root.toJSON(),
       current: this.current == null ? null : this.current.at(-1),
       attempt: this.attempt?.toJSON() ?? null,
       confirmationOrder: this.confirmationOrder,
@@ -8231,7 +8262,133 @@ export class ActivityTransition {
   }
 }
 
+const ACTIVITY_TYPE_FOR_OPERATION = Object.freeze({
+  add_task: "task_added",
+  add_approval_task: "task_added",
+  start_attempt: "attempt_started",
+  retry_attempt: "attempt_retried",
+  retry_gate_attempt: "attempt_retried",
+  settle_spec_gate_retry: "attempt_retried",
+  settle_spec_gate_recovered: "attempt_recovered",
+  retry_recovery_attempt: "attempt_recovered",
+  update_attempt: "attempt_updated",
+  [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
+  [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+  [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
+  [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
+  fail_attempt: "attempt_failed",
+  record_failure: "failure_recorded",
+  confirm_attempt: "result_confirmed",
+  [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
+  [DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]: "result_confirmed",
+  [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
+  [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
+  advance_task_review_stage: "result_confirmed",
+  [REQUIREMENT_TEST_INITIALIZATION_OPERATION]: "result_confirmed",
+  [REQUIREMENT_TEST_TRANSITION_OPERATION]: "result_confirmed",
+  rewind: "recovery",
+  rewind_test_evidence: "recovery",
+  repair_implementation: "recovery",
+  triage_implementation_for_repair: "recovery",
+  triage_implementation_no_repair: "recovery",
+  repair_acceptance_review: "recovery",
+  reopen_draft_preimplementation: "recovery",
+  reopen_draft_task_addition: "recovery",
+  reopen_draft_spec_correction: "recovery",
+  plan_gate_repair: "recovery",
+  recover_attempt: "recovery",
+  recover_missing_producer_artifact: "recovery",
+  recover_task_execution_overrun: "recovery",
+  park_flow: "flow_parked",
+  resume_flow: "flow_resumed",
+  finalize_flow: "flow_finalized",
+  set_policy: "policy_updated",
+  activate_nonblocking: "policy_updated",
+  publish_artifacts: "artifacts_published",
+  publish_plugin_artifacts: "artifacts_published",
+  publish_upgrade_result: "artifacts_published",
+  update_spec_record: "spec_record_updated",
+  begin_outbox: "outbox_started",
+  reopen_outbox: "outbox_reopened",
+  complete_outbox: "outbox_completed",
+  fail_outbox: "outbox_failed",
+  record_dispatch_approval: "dispatch_approval_recorded",
+  record_metric: "metric_recorded",
+  record_note: "note_recorded",
+  record_nonblocking: "nonblocking_recorded",
+  continue_nonblocking: "nonblocking_recorded",
+  accept_final_regression_failure: "failure_accepted",
+  defer_failed_review: "failure_accepted",
+  defer_failed_gate: "failure_accepted",
+  skip_finalize_downstream: "finalization_downstream_updated",
+  reset_finalize_downstream: "finalization_downstream_updated",
+  recover_interrupted_finalize_sync: "recovery",
+});
+
 export class FlowActivity {
+  static typeForOperation(operation) {
+    return ACTIVITY_TYPE_FOR_OPERATION[operation];
+  }
+
+  static forState(state, {
+    id,
+    nodeId,
+    attemptId = null,
+    sequence = null,
+    result = null,
+    failure = null,
+    timing = null,
+    provider = null,
+    model = null,
+    effort = null,
+    usage = null,
+    metric = null,
+    note = null,
+    processEvent = null,
+    processFinalizationBarrier = null,
+    policy = null,
+    outbox = null,
+    approval = null,
+    nonblocking = null,
+    references = { evaluations: [], findings: [], repairs: [], artifacts: [] },
+    transition,
+  }) {
+    const parsedTransition = transition instanceof ActivityTransition
+      ? transition
+      : new ActivityTransition({
+        ...transition,
+        policy: transition.policy ?? policy,
+        outbox: transition.outbox ?? outbox,
+        approval: transition.approval ?? approval,
+        nonblocking: transition.nonblocking ?? nonblocking,
+      });
+    const node = state.findNode(nodeId);
+    if (node === null) throw new CurrentFlowStateInvariantError(`Activity node is not part of this Flow: ${nodeId}`);
+    return new FlowActivity({
+      id: requireString(id, "activityId"),
+      nodeId,
+      nodeKey: node.key,
+      attemptId,
+      sequence,
+      confirmationOrder: state.confirmationOrder + 1,
+      type: processEvent === null ? FlowActivity.typeForOperation(parsedTransition.operation) : new FlowProcessEvent(processEvent).activityType,
+      transition: parsedTransition,
+      result,
+      timing,
+      failure,
+      provider,
+      model,
+      effort,
+      usage,
+      references,
+      metric,
+      note,
+      reviewPublication: null,
+      ...(processEvent === null ? {} : { processEvent: processEvent.toJSON() }),
+      ...(processFinalizationBarrier === null ? {} : { processFinalizationBarrier: processFinalizationBarrier.toJSON() }),
+    });
+  }
+
   constructor(value) {
     requireExactFields(value, new Set([
       "id", "nodeId", "nodeKey", "attemptId", "sequence", "confirmationOrder", "type", "transition",
@@ -8268,71 +8425,12 @@ export class FlowActivity {
       }
     }
     this.transition = transition instanceof ActivityTransition ? transition : new ActivityTransition(transition);
-    const typeForOperation = {
-      [FLOW_CREATION_TRANSITION_OPERATION]: FLOW_CREATION_ACTIVITY_TYPE,
-      add_task: "task_added",
-      add_approval_task: "task_added",
-      start_attempt: "attempt_started",
-      retry_attempt: "attempt_retried",
-      retry_gate_attempt: "attempt_retried",
-      settle_spec_gate_retry: "attempt_retried",
-      settle_spec_gate_recovered: "attempt_recovered",
-      retry_recovery_attempt: "attempt_recovered",
-      update_attempt: "attempt_updated",
-      [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
-      [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
-      [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
-      [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
-      fail_attempt: "attempt_failed",
-      record_failure: "failure_recorded",
-      confirm_attempt: "result_confirmed",
-      [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
-      [DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]: "result_confirmed",
-      [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
-      [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
-      advance_task_review_stage: "result_confirmed",
-      [REQUIREMENT_TEST_INITIALIZATION_OPERATION]: "result_confirmed",
-      [REQUIREMENT_TEST_TRANSITION_OPERATION]: "result_confirmed",
-      rewind: "recovery",
-      rewind_test_evidence: "recovery",
-      repair_implementation: "recovery",
-      triage_implementation_for_repair: "recovery",
-      triage_implementation_no_repair: "recovery",
-      repair_acceptance_review: "recovery",
-      reopen_draft_preimplementation: "recovery",
-      reopen_draft_task_addition: "recovery",
-      reopen_draft_spec_correction: "recovery",
-      plan_gate_repair: "recovery",
-      recover_attempt: "recovery",
-      recover_missing_producer_artifact: "recovery",
-      recover_task_execution_overrun: "recovery",
-      park_flow: "flow_parked",
-      resume_flow: "flow_resumed",
-      finalize_flow: "flow_finalized",
-      set_policy: "policy_updated",
-      activate_nonblocking: "policy_updated",
-      publish_artifacts: "artifacts_published",
-      publish_plugin_artifacts: "artifacts_published",
-      publish_upgrade_result: "artifacts_published",
-      update_spec_record: "spec_record_updated",
-      begin_outbox: "outbox_started",
-      reopen_outbox: "outbox_reopened",
-      complete_outbox: "outbox_completed",
-      fail_outbox: "outbox_failed",
-      record_dispatch_approval: "dispatch_approval_recorded",
-      record_metric: "metric_recorded",
-      record_note: "note_recorded",
-      [PROCESS_EVENT_OPERATION]: value.processEvent == null ? null : new FlowProcessEvent(value.processEvent).activityType,
-      record_nonblocking: "nonblocking_recorded",
-      continue_nonblocking: "nonblocking_recorded",
-      accept_final_regression_failure: "failure_accepted",
-      defer_failed_review: "failure_accepted",
-      defer_failed_gate: "failure_accepted",
-      skip_finalize_downstream: "finalization_downstream_updated",
-      reset_finalize_downstream: "finalization_downstream_updated",
-      recover_interrupted_finalize_sync: "recovery",
-    };
-    if (typeForOperation[this.transition.operation] !== this.type) {
+    const processType = value.processEvent == null ? null : new FlowProcessEvent(value.processEvent).activityType;
+    const expectedType = this.transition.operation === FLOW_CREATION_TRANSITION_OPERATION
+      ? FLOW_CREATION_ACTIVITY_TYPE
+      : this.transition.operation === PROCESS_EVENT_OPERATION
+        ? processType : FlowActivity.typeForOperation(this.transition.operation);
+    if (expectedType !== this.type) {
       throw new CurrentFlowStateInvariantError("activity.type must match its deterministic transition operation");
     }
     if (this.transition.nodeId !== this.nodeId) {
@@ -9245,14 +9343,41 @@ class CurrentFlowStateValidationCache {
   }
 }
 
+/** Detached preview data; only the canonical Store can publish its Activities. */
+class CurrentFlowProcessPreview {
+  constructor(state, activities) {
+    if (!(state instanceof CurrentFlowState) || !Array.isArray(activities)
+      || activities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("process preview requires typed state and Activities");
+    }
+    this.state = state;
+    this.activities = Object.freeze([...activities]);
+    Object.freeze(this);
+  }
+}
+
+/** The detached result of one completed state replay and its Attempt facts. */
+class CurrentFlowReplayResult {
+  constructor(state, attemptHistory) {
+    if (!(state instanceof CurrentFlowState) || !(attemptHistory instanceof CurrentFlowAttemptHistory)) {
+      throw new CurrentFlowStateInvariantError("state replay result requires typed state and Attempt history");
+    }
+    this.state = state;
+    this.attemptHistory = attemptHistory;
+    Object.freeze(this);
+  }
+}
+
 /** Cold replay owns its transient graph; validated prefixes retain ordinary copies. */
 class CurrentFlowJournalReplay {
   #state;
   #priorActivities;
   #reuseValidatedBase;
+  #attemptHistory;
 
-  constructor(state, priorActivities, { reuseValidatedBase }) {
+  constructor(state, priorActivities, { reuseValidatedBase, attemptHistory = null }) {
     this.#reuseValidatedBase = reuseValidatedBase;
+    this.#attemptHistory = attemptHistory;
     // A validated prefix already belongs to the existing warm replay path.
     // Only cold replay privately shares a fully detached graph across observations.
     this.#state = reuseValidatedBase ? state : this.#detach(state);
@@ -9260,19 +9385,48 @@ class CurrentFlowJournalReplay {
   }
 
   apply(activity) {
+    const before = this.#state;
     if (!this.#reuseValidatedBase && activity.transition.operation === PROCESS_EVENT_OPERATION) {
       const unchanged = applyCanonicalTransition(this.#state, activity, this.#priorActivities);
       if (unchanged !== this.#state) {
         throw new CurrentFlowStateInvariantError("process observation cannot change the journal replay graph");
       }
-      this.#state = new CurrentFlowState(
-        new CurrentFlowReplayConfirmation(unchanged, activity.confirmationOrder),
-        { definition: unchanged.definition },
-      );
+      this.#advanceConfirmation(activity.confirmationOrder);
     } else {
       this.#state = applyCanonicalActivity(this.materialize(), activity, this.#priorActivities);
     }
+    this.#attemptHistory?.recordTransition(before, this.#state, activity);
     this.#priorActivities.push(activity);
+  }
+
+  previewProcessEvents(group) {
+    const additions = [];
+    for (const event of group.events) {
+      const fact = new FlowProcessEvent(event);
+      const existing = this.#priorActivities.find((activity) => activity.id === fact.activityId);
+      if (existing) {
+        if (existing.processEvent?.digest !== event.digest) {
+          throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
+        }
+        continue;
+      }
+      fact.assertFor(this.#state, this.#priorActivities);
+      const recordedAt = event.occurredAt;
+      const activity = FlowActivity.forState(this.#state, { id: fact.activityId, nodeId: fact.nodeId,
+        processEvent: event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
+        transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
+          attempt: null, status: null, nonblocking: null } });
+      additions.push(activity); this.#priorActivities.push(activity);
+      this.#advanceConfirmation(activity.confirmationOrder);
+    }
+    return new CurrentFlowProcessPreview(this.materialize(), additions);
+  }
+
+  #advanceConfirmation(confirmationOrder) {
+    this.#state = new CurrentFlowState(
+      new CurrentFlowReplayConfirmation(this.#state, confirmationOrder),
+      { definition: this.#state.definition },
+    );
   }
 
   materialize() {
@@ -10045,14 +10199,18 @@ export class CurrentFlowVersionStore {
       },
     });
   }
-  loadSnapshot() {
+  loadSnapshot({ required = false } = {}) {
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
       read: (catalog) => {
         this.#assertSpecRevisionAuthority(catalog);
         this.#assertExecutionSourceContracts(catalog);
         const snapshot = this.#store().loadSnapshot();
-        if (snapshot === null) return null;
+        if (snapshot === null) {
+          // Required snapshot reads keep load's existing missing-state failure.
+          if (required) this.#assertPersistedIdentity(null);
+          return null;
+        }
         this.#assertPersistedIdentity(snapshot.state);
         return snapshot;
       },

@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { NativeExecutableInvocation } from "../../src/lib/command-invocation.js";
 import { ProcessExecutionControlFailure } from "../../src/lib/process-execution-values.js";
 import { testTemporaryRoot } from "../test-environment.js";
 import SetInitCommand from "../../src/flow/lib/set-init.js";
@@ -69,7 +70,10 @@ export class PrepareArtifactScenario {
   }
 
   git(args, root = this.root) {
-    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+    const invocation = new NativeExecutableInvocation({ executable: "git", args: ["-C", root, ...args] });
+    const result = spawnSync(invocation.executable, invocation.args, {
+      ...invocation.processOptions(), shell: false, encoding: "utf8",
+    });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   }
@@ -133,8 +137,10 @@ export class PrepareArtifactScenario {
   }
 
   cli(args, root = this.executionRoot) {
-    const result = spawnSync(process.execPath, [cliPath, "flow", ...args], {
-      cwd: root, encoding: "utf8", env: this.environment(root), timeout: 30_000,
+    const invocation = new NativeExecutableInvocation({ executable: process.execPath,
+      args: [cliPath, "flow", ...args], cwd: root, env: this.environment(root) });
+    const result = spawnSync(invocation.executable, invocation.args, {
+      ...invocation.processOptions(), shell: false, encoding: "utf8", timeout: 30_000,
     });
     const text = result.stdout?.trim() ?? "";
     return { ...result, envelope: text.startsWith("{") ? JSON.parse(text) : null };

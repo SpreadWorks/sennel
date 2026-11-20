@@ -119,3 +119,19 @@ test("a completed catalog read reacquires fresh child directories on its next ca
     assert.deepEqual(fs.readFileSync(path.join(retained, path.basename(artifact.relativePath))), value.bytes);
   }
 });
+
+test("catalog verification preserves the missing-path refusal for the first artifact in a shared parent", t => {
+  const value = fixture(t, 3);
+  const first = value.catalog.artifacts[0];
+  const file = value.location.resolve(first.relativePath);
+  fs.unlinkSync(file);
+  assert.throws(() => value.catalog.verify(value.location), error => {
+    assert.equal(error.constructor, Error);
+    assert.equal(error.message, `Version authority path does not exist: ${path.relative(value.location.repositoryRoot, file)}`);
+    return true;
+  });
+  assert.equal(fs.existsSync(file), false);
+  for (const artifact of value.catalog.artifacts.slice(1)) {
+    assert.deepEqual(fs.readFileSync(value.location.resolve(artifact.relativePath)), value.bytes);
+  }
+});

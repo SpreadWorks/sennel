@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { closeDirectoryHandle } from "./file-descriptor.js";
-import { isNativePathWithin } from "./portable-path.js";
+import { LogicalRelativePath, isNativePathWithin } from "./portable-path.js";
 import { isCanonicalRealPath } from "./canonical-real-path.js";
 import { FileIdentity, sameFileIdentity } from "./file-identity.js";
 export { FileIdentity, sameFileIdentity } from "./file-identity.js";
@@ -9,6 +9,16 @@ export { FileIdentity, sameFileIdentity } from "./file-identity.js";
 const CHAIN_CAPTURE = Symbol("directory authority chain capture");
 const AUTHORITY_FAILURES = new WeakSet();
 const directoryObservationToken = Symbol("owned directory forest observation");
+const directoryTreeToken = Symbol("complete directory tree observation");
+const directoryNamesToken = Symbol("complete directory names observation");
+
+function directorySegments(anchor, directory) {
+  const relative = path.relative(anchor, directory);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("directory authority descendant must stay within its parent");
+  }
+  return relative.split(path.sep).filter(Boolean);
+}
 
 /** A read interval only; it cannot authorize filesystem mutations. */
 export class RealDirectoryForestObservation {
@@ -25,6 +35,60 @@ export class RealDirectoryForestObservation {
     this.#complete();
   }
   discard() { this.#active = false; }
+}
+
+
+/** Observed names and kinds only; this value grants no filesystem authority. */
+export class RealDirectoryTreeEntry {
+  #directory;
+  #file;
+  #symbolicLink;
+  constructor(token, root, parent, entry, linkCount) {
+    if (token !== directoryTreeToken) throw new TypeError("Directory tree entries require a complete owned observation");
+    this.name = entry.name;
+    this.absolutePath = path.join(parent.directory, entry.name);
+    this.relativePath = path.relative(root.directory, this.absolutePath);
+    this.#directory = entry.isDirectory();
+    this.#file = entry.isFile();
+    this.#symbolicLink = entry.isSymbolicLink();
+    if (this.#file && (!Number.isSafeInteger(linkCount) || linkCount < 0)
+      || !this.#file && linkCount !== null) throw new TypeError("Observed file link count must match its entry kind");
+    this.linkCount = linkCount;
+    Object.freeze(this);
+  }
+  isDirectory() { return this.#directory; }
+  isFile() { return this.#file; }
+  isSymbolicLink() { return this.#symbolicLink; }
+}
+
+export class RealDirectoryTreeSnapshot {
+  constructor(token, root, entries) {
+    if (token !== directoryTreeToken || entries.some(entry => !(entry instanceof RealDirectoryTreeEntry))) {
+      throw new TypeError("Directory tree snapshots require a complete owned observation");
+    }
+    this.directory = root.directory;
+    this.entries = Object.freeze([...entries]);
+    Object.freeze(this);
+  }
+}
+
+/** Pure names from one checked read interval; no mutation authority. */
+export class RealDirectoryNameSnapshot {
+  constructor(token, authority, names) {
+    if (token !== directoryNamesToken) throw new TypeError("Directory names require an owned observation");
+    this.directory = authority.directory;
+    this.names = Object.freeze([...names]);
+    Object.freeze(this);
+  }
+}
+
+export class RealDirectoryTreeLimitError extends Error {
+  constructor(maximum) {
+    super("Directory tree observation exceeds its entry limit");
+    this.name = "RealDirectoryTreeLimitError";
+    this.code = "REAL_DIRECTORY_TREE_LIMIT";
+    this.maximum = maximum;
+  }
 }
 
 
@@ -88,16 +152,11 @@ export class RealDirectoryAuthority {
   static resolve(directory, { create = false, allowMissing = false, parentAuthority = null, creationMode = 0o777, errorFactory = defaultErrorFactory } = {}) {
     const resolved = path.resolve(directory);
     const anchor = parentAuthority?.directory ?? path.parse(resolved).root;
-    const relative = path.relative(anchor, resolved);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error("directory authority descendant must stay within its parent");
-    }
+    const segments = directorySegments(anchor, resolved);
     let current = parentAuthority ?? new RealDirectoryAuthority(anchor, { errorFactory });
     current.assertStable();
-    for (const segment of relative.split(path.sep).filter(Boolean)) {
-      const next = new RealDirectoryAuthority(path.join(current.directory, segment), {
-        create, parentAuthority: current, creationMode, errorFactory, [CHAIN_CAPTURE]: true,
-      });
+    for (const segment of segments) {
+      const next = current.#captureChild(segment, { create, creationMode, errorFactory });
       if (create && next.identity === null) next.ensure();
       else if (!create && allowMissing && next.identity === null) {
         current.assertStable();
@@ -113,11 +172,86 @@ export class RealDirectoryAuthority {
     return RealDirectoryAuthority.resolve(directory, { ...options, parentAuthority: this });
   }
 
+  /** Capture fresh requested descendants with shared ancestry. This is a
+   * read observation, not a lease: later file reads and effects retain their
+   * own authority checks. Missing paths return the closest existing parent
+   * only when explicitly requested, as resolve({ allowMissing: true }) does.
+   */
+  observeDescendants(directories, { allowMissing = false } = {}) {
+    const paths = directories.map(directory => directorySegments(this.directory, path.resolve(directory)));
+    const captured = new Map([[this.directory, this]]);
+    this.assertStable();
+    const result = paths.map(segments => {
+      let current = this;
+      for (const segment of segments) {
+        const directory = path.join(current.directory, segment);
+        let child = captured.get(directory);
+        if (child === undefined) {
+          child = current.#captureChild(segment);
+          if (child.identity === null) {
+            if (allowMissing) break;
+            child.assertStable();
+          }
+          captured.set(directory, child);
+        }
+        current = child;
+      }
+      return current;
+    });
+    RealDirectoryAuthority.assertAllStable(captured.values());
+    return Object.freeze(result);
+  }
+
+  #captureChild(name, { create = false, creationMode = 0o777, errorFactory = this.errorFactory } = {}) {
+    return new RealDirectoryAuthority(path.join(this.directory, name), {
+      create, parentAuthority: this, creationMode, errorFactory, [CHAIN_CAPTURE]: true,
+    });
+  }
+
   entries(options = {}) {
     this.assertStable();
     const entries = fs.readdirSync(this.directory, options);
     this.assertStable();
     return entries;
+  }
+
+  /** One synchronous read-only tree interval. No callback or partial snapshot
+   * escapes before captured directory identities pass the final forward and
+   * reverse forest checks. Each directory is also checked around its own read.
+   * Pruned directories retain their own observed identity but are not entered.
+   */
+  observeTreeEntries({ pruneDirectories = [], maxEntries = Infinity } = {}) {
+    if (maxEntries !== Infinity && (!Number.isSafeInteger(maxEntries) || maxEntries < 0)) {
+      throw new TypeError("Directory tree entry limit must be a nonnegative safe integer or Infinity");
+    }
+    const pruned = new Set([...pruneDirectories].map(value => LogicalRelativePath.from(value).toString()));
+    const authorities = new Set([this]);
+    const entries = [];
+    this.assertStable();
+    const visit = (authority) => {
+      authority.#observeIdentity(authority.#validatedIdentity());
+      const children = fs.readdirSync(authority.directory, { withFileTypes: true });
+      authority.#observeIdentity(authority.#validatedIdentity());
+      for (const entry of children) {
+        if (entries.length >= maxEntries) throw new RealDirectoryTreeLimitError(maxEntries);
+        const absolute = path.join(authority.directory, entry.name);
+        const linkCount = entry.isFile() ? fs.lstatSync(absolute).nlink : null;
+        const observed = new RealDirectoryTreeEntry(directoryTreeToken, this, authority, entry, linkCount);
+        entries.push(observed);
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        // The same private direct-child capture used by observeChildren. The
+        // completed forest, rather than repeated per-child ancestry walks,
+        // owns the surrounding read interval; no data can escape it early.
+        const child = authority.#captureChild(entry.name);
+        if (child.identity === null) child.assertStable();
+        authorities.add(child);
+        const relative = observed.relativePath.split(path.sep).join("/");
+        if (!pruned.has(relative)) visit(child);
+      }
+    };
+    visit(this);
+    RealDirectoryAuthority.assertAllStable(authorities);
+    return new RealDirectoryTreeSnapshot(directoryTreeToken, this, entries);
   }
 
   forEachEntry(visitor) {
@@ -141,9 +275,7 @@ export class RealDirectoryAuthority {
 
   /** Capture fresh direct children in one complete, effect-free observation. */
   observeChildren(names) {
-    const children = names.map((name) => new RealDirectoryAuthority(path.join(this.directory, name), {
-      parentAuthority: this, errorFactory: this.errorFactory, [CHAIN_CAPTURE]: true,
-    }));
+    const children = names.map((name) => this.#captureChild(name));
     RealDirectoryAuthority.assertAllStable([this, ...children]);
     return children;
   }
@@ -276,6 +408,22 @@ export class RealDirectoryAuthority {
    */
   static assertAllStable(authorities) {
     RealDirectoryAuthority.beginObservation(authorities).complete();
+  }
+
+  /** Read all requested namespaces in one fresh, effect-free forest interval.
+   * Every retained generation is checked; no partial names escape on refusal.
+   */
+  static observeNames(authorities) {
+    authorities = [...authorities];
+    const observation = RealDirectoryAuthority.beginObservation(authorities);
+    const snapshots = authorities.map(authority => {
+      authority.#observeIdentity(authority.#validatedIdentity());
+      const names = fs.readdirSync(authority.directory);
+      authority.#observeIdentity(authority.#validatedIdentity());
+      return new RealDirectoryNameSnapshot(directoryNamesToken, authority, names);
+    });
+    observation.complete();
+    return Object.freeze(snapshots);
   }
 
   /** The caller may perform only synchronous, read-only captures before

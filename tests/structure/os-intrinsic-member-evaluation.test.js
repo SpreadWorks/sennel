@@ -109,14 +109,14 @@ fs.readFileSync(selected());`);
   sink(report, 4);
 });
 
-test("computed builtin members retain unsupported capability refusal", () => {
+test("computed builtin members retain the actual filesystem violation", () => {
   const report = check(`const fs = require('node:fs');
 function read(input) { return input['readFileSync']; }
 read(fs)('/proc/self/stat');`);
-  assert.equal(report.complete, false);
+  assert.equal(report.complete, true);
   assert.equal(report.ok, false);
-  assert.ok(report.diagnostics.some(item => ["OS01", "OS02"].includes(item.rule)
-    && item.classification === "incomplete"), report.diagnostics.join("\n"));
+  assert.deepEqual(report.diagnostics.map(item => [item.rule, item.file, item.line, item.column, item.classification, item.trace]),
+    [["OS01", entry, 3, 1, "violation", [entry]]]);
 });
 
 test("optional builtin members retain their actual filesystem consumer", () => {

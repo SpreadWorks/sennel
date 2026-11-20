@@ -1,3 +1,4 @@
+import { testTemporaryRoot } from "../../test-environment.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,7 +6,7 @@ import { test } from "node:test";
 import { ProcessExecutionRuntime, ProcessExecutionOwnershipReservation, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess, verifyManagedProcessStopped } from "../../../src/lib/managed-process.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
-import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { removeQuiescentRuntimeFixture, terminateFixtureCoordinator } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 function fixture(t) {
   const mainRoot = createTmpDir("runtime-handoff-", { parent: path.resolve(".tmp/c2f6/runtime-handoff-fixtures") });
@@ -15,7 +16,15 @@ function fixture(t) {
     try {
       for (const entry of owned) if (!entry.runtime.closed && !entry.unproven) await entry.runtime.close();
       for (const reservation of reservations) reservation.release();
-    } finally { removeQuiescentRuntimeFixture(options); }
+    } finally {
+      for (const entry of owned) if (entry.unproven) {
+        // Keep the unknown execution's exclusion and evidence after every
+        // assertion. Fixture-owned termination proves only this control exit.
+        testTemporaryRoot().retainOnUnconfirmedExecution();
+        await terminateFixtureCoordinator(entry.runtime);
+      }
+      removeQuiescentRuntimeFixture(options);
+    }
   });
   const options = { mainRoot, executionRoot: checkout, runId: "handoff-run", specId: "handoff-spec" };
   return { mainRoot, checkout, options, reservations,

@@ -1057,8 +1057,7 @@ export class SourceStructureChecker {
         this.bindingSubclassMatches.set(cacheKey, true);
         return true;
       }
-      const parent = owner.classEntry.parent;
-      owner = parent ? this.#resolveLocal(owner.file, owner.module, parent, new Set(), "A11") : null;
+      owner = this.#resolveClassParent(owner.file, owner.module, owner.classEntry, "A11");
     }
     this.bindingSubclassMatches.set(cacheKey, false);
     return false;
@@ -2744,21 +2743,27 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
   }
 
   #isStepClass(file, module, entry, seen) {
-    if (!entry.parent) return false;
+    if (entry.heritage === null) return false;
     const key = `${file}#${entry.name}`;
     if (seen.has(key)) return false;
     seen.add(key);
-    const parent = this.#resolveLocal(file, module, entry.parent, new Set(), "A01");
-    if (!parent) {
-      if (nativeClassBases.has(entry.parent) && module.isUnbound(entry.parent, entry.parentToken)) return false;
-      if (!this.unresolvedHeritage.has(key)) {
-        this.unresolvedHeritage.add(key);
-        this.#diagnose("A01", file, entry.token, [file], `cannot resolve class heritage ${entry.parent}`);
-      }
-      return false;
-    }
+    const parent = this.#resolveClassParent(file, module, entry, "A01");
+    if (!parent) return false;
     return this.rules.isStepBase(parent.file, parent.classEntry.name)
       || this.#isStepClass(parent.file, parent.module, parent.classEntry, seen);
+  }
+
+  #resolveClassParent(file, module, entry, rule, trace = [file]) {
+    if (entry.heritage === null) return null;
+    const name = entry.parent;
+    const parent = name === null ? null : this.#resolveLocal(file, module, name, new Set(), rule);
+    if (parent !== null || nativeClassBases.has(name) && module.isUnbound(name, entry.parentToken)) return parent;
+    const key = `${rule}:${file}#${entry.name}`;
+    if (!this.unresolvedHeritage.has(key)) {
+      this.unresolvedHeritage.add(key);
+      this.#diagnose(rule, file, entry.parentToken, trace, `cannot resolve class heritage ${entry.heritage}`);
+    }
+    return null;
   }
 
   #resolveLocal(file, module, name, seen, rule) {
@@ -3247,7 +3252,7 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
     while (actual && !seen.has(actual.key)) {
       if (actual.key === expected?.key) return true;
       seen.add(actual.key);
-      actual = this.#resolveLocal(actual.file, actual.module, actual.classEntry.parent, new Set(), "A12");
+      actual = this.#resolveClassParent(actual.file, actual.module, actual.classEntry, "A12");
     }
     return false;
   }
@@ -3291,15 +3296,9 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
 
   #serviceParent(owner, trace, ancestry = new Set()) {
     const entry = owner.classEntry;
-    if (!entry.parent) return null;
-    const parent = this.#resolveLocal(owner.file, owner.module, entry.parent, new Set(), "A08");
-    if (!parent) {
-      if (!nativeClassBases.has(entry.parent) || !owner.module.isUnbound(entry.parent, entry.parentToken)) {
-        this.#diagnose("A08", owner.file, entry.parentToken, trace,
-          `cannot resolve Service helper heritage ${entry.parent}`);
-      }
-      return null;
-    }
+    if (entry.heritage === null) return null;
+    const parent = this.#resolveClassParent(owner.file, owner.module, entry, "A08", trace);
+    if (!parent) return null;
     if (ancestry.has(parent.key)) {
       this.#diagnose("A08", owner.file, entry.parentToken, trace, "cyclic Service helper heritage");
       return null;

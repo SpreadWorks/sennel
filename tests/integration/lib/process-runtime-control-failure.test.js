@@ -11,7 +11,7 @@ import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import { testTemporaryRoot } from "../../test-environment.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
-import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { removeQuiescentRuntimeFixture, terminateFixtureCoordinator } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { RuntimeRegistryPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 
 const runtimeURL = pathToFileURL(path.resolve("src/lib/process-execution-runtime.js")).href;
@@ -87,10 +87,7 @@ test("uncertain control-failure persistence preserves its transition marker and 
     testTemporaryRoot().retainOnUnconfirmedExecution();
     // Intentional fixture termination is an actual exit observation, not normal product closure.
     // No business child was launched and no process receipt is reconstructed.
-    const child = runtime.control.child;
-    if (child.exitCode === null && child.signalCode === null) {
-      const stopped = once(child, "exit"); child.ref(); child.kill(); await stopped;
-    }
+    await terminateFixtureCoordinator(runtime);
   }
 });
 

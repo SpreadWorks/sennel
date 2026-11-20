@@ -5,7 +5,7 @@ import { LogicalPathSet } from "../../lib/portable-path.js";
 import { SourceWorkingFileCapture, observeSourceUntrackedMode, selectedSourceGitRoot } from "./source-working-file-capture.js";
 import crypto from "node:crypto";
 import { GitSourceEntry, SourceWorkingFile } from "./source-working-file.js";
-import { GitPorcelainV2StatusExecution, LoggedGitCommandExecution, runGit, runGitToFile, withGitOutputCleanup } from "../../lib/git-helpers.js";
+import { GitNulFields, GitNameStatusDecoder, GitRefObservation, GitPorcelainV2StatusExecution, LoggedGitCommandExecution, runGit, runGitToFile, withGitOutputCleanup } from "../../lib/git-helpers.js";
 import { CommandExecutionBatchFailure } from "../../lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +14,7 @@ import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { CurrentFlowContext } from "./current-flow-state.js";
 import { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { compareText } from "./text-order.js";
@@ -437,7 +438,7 @@ function forEachGitNulField(root, directory, args, label, visit) {
         let start = 0;
         for (let index = 0; index < chunk.length; index += 1) {
           if (chunk[index] !== 0) continue;
-          visit(chunk.subarray(start, index).toString("utf8"));
+          visit(GitNulFields.decodeField(chunk.subarray(start, index), label));
           start = index + 1;
         }
         pending = Buffer.from(chunk.subarray(start));
@@ -478,25 +479,15 @@ function changedPathEntry(changed, relPath, boundary) {
 }
 
 function streamNameStatus(root, directory, args, scope, changed, boundary, registry) {
-  let status = null;
-  let oldPath = null;
+  const decoder = new GitNameStatusDecoder(`malformed ${scope} Git name-status output`);
   forEachGitNulField(root, directory, args, `failed to collect ${scope} repair delta`, (field) => {
-    if (status == null) {
-      status = field;
-      return;
+    const observed = decoder.accept(field);
+    if (observed !== null && !registry.owns(observed.path)) {
+      const entry = changedPathEntry(changed, observed.path, boundary);
+      entry.addStatus(scope, observed.rawStatus[0], observed.originalPath);
     }
-    if (/^[RC]/.test(status) && oldPath == null) {
-      oldPath = field;
-      return;
-    }
-    if (!registry.owns(field)) {
-      const entry = changedPathEntry(changed, field, boundary);
-      entry.addStatus(scope, status[0], oldPath);
-    }
-    status = null;
-    oldPath = null;
   });
-  if (status != null || oldPath != null) throw new Error(`malformed ${scope} Git name-status output`);
+  decoder.finish();
 }
 
 function collectGitChangedPaths(root, directory, baseline, boundary, registry, status) {
@@ -714,38 +705,63 @@ function buildFilesystemManifest({ root, specPath, boundary, registry }) {
   });
 }
 
-function baselineFromStateOrRepository({ root, state }) {
-  const runId = state?.runId;
-  if (runId) {
-    const ref = PRODUCT.flowBaselineRef(assertSafeRunId(runId));
-    const pinned = GitRevisionObservation.read(root, ref);
-    if (pinned.ok) {
-      const objectFormat = pinned.objectFormat;
-      const commitOid = pinned.oid;
-      const treeOid = requireOid(runGitRequired(root, ["rev-parse", `${commitOid}^{tree}`], "failed to read pinned repair baseline").trim(), "treeOid", objectFormat);
-      return new ImmutableGitBaseline({
-        kind: "git",
-        objectFormat,
-        commitOid,
-        treeOid,
-        sourceRef: state.baseBranch || "pinned",
-        ref,
-        capturedAt: state.createdAt || new Date().toISOString(),
-      });
+/** Read existing historical authority; fingerprint capture never pins a Git ref. */
+function baselineFromStateOrRepository({ root, state, pinMissingBaseline }) {
+  if (state?.runId) {
+    const runId = assertSafeRunId(state.runId);
+    const ref = PRODUCT.flowBaselineRef(runId);
+    const pinned = GitRefObservation.resolve({ root, ref });
+    let baseOid = null;
+    if (!pinMissingBaseline && state.context !== undefined) {
+      if (!(state.context instanceof CurrentFlowContext)) {
+        throw new RepairStateError("REPAIR_BASELINE_UNRESOLVABLE", "repair baseline requires typed canonical context");
+      }
+      baseOid = state.context.baseOid;
     }
-  }
-  let defaultBaseRef = "HEAD";
-  for (const candidate of ["main", "master"]) {
-    if (runGit(["show-ref", "--verify", `refs/heads/${candidate}`], { cwd: root }).ok) {
-      defaultBaseRef = candidate;
-      break;
+    if (baseOid !== null && pinned.present && pinned.oid !== baseOid.toLowerCase()) {
+      throw new RepairStateError("REPAIR_BASELINE_UNRESOLVABLE", "Flow preparation base conflicts with its existing run baseline");
     }
+    const source = baseOid ?? pinned.oid;
+    if (source === null) {
+      // The direct Manifest API retains its existing lazy-pinning producer.
+      // The value API instead falls through to its original fresh repository
+      // observation; no creation-time historical identity is asserted there.
+      if (pinMissingBaseline) {
+        return repositoryBaseline(root, state, true);
+      }
+      return repositoryBaseline(root);
+    }
+    const commit = GitRevisionObservation.read(root, `${source}^{commit}`);
+    if (!commit.ok || commit.oid !== source.toLowerCase()) {
+      throw new RepairStateError("REPAIR_BASELINE_OBJECT_MISSING", "Flow historical baseline commit is unavailable");
+    }
+    const treeOid = requireOid(runGitRequired(root, ["rev-parse", "--verify", `${commit.oid}^{tree}`],
+      "failed to read Flow historical baseline tree").trim(), "treeOid", commit.objectFormat);
+    return new ImmutableGitBaseline({ kind: "git", objectFormat: commit.objectFormat,
+      commitOid: commit.oid, treeOid,
+      sourceRef: baseOid === null ? state.baseBranch || "pinned" : state.execution?.baseBranch || baseOid,
+      ref: pinned.present ? ref : null,
+      capturedAt: state.createdAt || new Date().toISOString() });
   }
-  const baseRef = state?.baseBranch || defaultBaseRef;
-  return captureRepairBaseline({ root, baseRef, runId: runId || "unbound", useMergeBase: baseRef !== "HEAD", pin: Boolean(runId) });
+  return repositoryBaseline(root, pinMissingBaseline ? state : null, pinMissingBaseline);
 }
 
-export function buildRepairStateManifest({ root, artifactRoot = null, specPath, state = null }) {
+function repositoryBaselineRef(root) {
+  for (const candidate of ["main", "master"]) {
+    if (runGit(["show-ref", "--verify", `refs/heads/${candidate}`], { cwd: root }).ok) return candidate;
+  }
+  return "HEAD";
+}
+
+/** Select the existing repository source; only the direct producer may pin it. */
+function repositoryBaseline(root, state = null, pinMissingBaseline = false) {
+  const baseRef = state?.baseBranch || repositoryBaselineRef(root);
+  const runId = state?.runId || "unbound";
+  return captureRepairBaseline({ root, baseRef, runId, useMergeBase: baseRef !== "HEAD",
+    pin: pinMissingBaseline && Boolean(state?.runId) });
+}
+
+export function buildRepairStateManifest({ root, artifactRoot = null, specPath, state = null, pinMissingBaseline = true }) {
   requireString(root, "root");
   const normalizedSpec = normalizeRepairPath(specPath);
   const registry = new RepairArtifactRegistry(normalizedSpec);
@@ -754,7 +770,10 @@ export function buildRepairStateManifest({ root, artifactRoot = null, specPath, 
   );
   const boundary = readConfiguredBoundary(root);
   if (!selectedSourceGitRoot(root)) return buildFilesystemManifest({ root, specPath: normalizedSpec, boundary, registry });
-  const baseline = withManagedProcessScopeSync({ executionRoot: root }, () => baselineFromStateOrRepository({ root, state }));
+  const captureBaseline = pinMissingBaseline ? withManagedProcessScopeSync : withReadOnlyManagedProcessScopeSync;
+  const scope = pinMissingBaseline ? { executionRoot: root }
+    : { mainRoot: resolvedArtifactRoot, executionRoot: root };
+  const baseline = captureBaseline(scope, () => baselineFromStateOrRepository({ root, state, pinMissingBaseline }));
   return withReadOnlyManagedProcessScopeSync({ mainRoot: root, executionRoot: root }, () => buildGitRepairStateManifest({
     root, resolvedArtifactRoot, normalizedSpec, state, baseline, boundary, registry,
   }));

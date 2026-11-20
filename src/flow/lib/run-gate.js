@@ -19,6 +19,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  */
 
 import { flowTemporaryRoot } from "./flow-context.js";
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import fs from "fs";
 import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
@@ -4431,8 +4432,10 @@ export class RunGateCommand extends FlowCommand {
         });
         const currentFingerprint = buildRepairFingerprint({
           root: executionRoot,
-          artifactRoot: ctx.root,
+          artifactRoot: flowArtifactRoot(ctx),
           specPath,
+          state: ctx.flowState,
+          flowManager: ctx.flowManager,
         });
         const staleEvidence = StaleTestEvidenceMismatch.detect({
           artifacts: fingerprintAuthority.toArtifactMap(),

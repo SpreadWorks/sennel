@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { once } from "node:events";
 import { test } from "node:test";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessExecutionStopReceipt, executionValueDigest } from "../../../src/lib/process-execution-values.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
-import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { removeQuiescentRuntimeFixture, terminateFixtureCoordinator } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { RuntimeRegistryPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 
 // Revision9 retains exact prepared target/source generations until commit.
@@ -30,12 +29,8 @@ for (const [mutation, expectedCode] of [
       try {
       } finally {
         for (const owned of [runtime, predecessor]) {
-          const child = owned?.control.child;
-          if (child !== undefined && child.exitCode === null && child.signalCode === null) {
-            // Test cleanup observes only its actual owned coordinator handle.
-            // This is not a product receipt or recovery of uncertain metadata.
-            const stopped = once(child, "exit"); child.ref(); child.kill(); await stopped;
-          }
+          // Only actual test-owned handles supply this teardown exit.
+          if (owned !== undefined) await terminateFixtureCoordinator(owned);
         }
         removeQuiescentRuntimeFixture({ mainRoot: root });
       }

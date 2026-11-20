@@ -1,4 +1,4 @@
-import { matching, SourceClassMembers, SourceDeclaration, SourceTemplateToken } from "./source-reader.js";
+import { matching, SourceClassMembers, SourceDeclaration, SourceTemplateToken, SourceForOf } from "./source-reader.js";
 import { supportedPlatforms } from "./os-command-policy.js";
 
 /** Values are source-derived, never the analyzer host's OS. null means unknown. */
@@ -56,6 +56,11 @@ class Statements {
       const end = matching(t, start);
       this.cursor = end + 1;
       return new Statements(t.slice(start + 1, end)).block();
+    }
+    const loop = keyword(token, "for") ? SourceForOf.read(t, start) : null;
+    if (loop !== null) {
+      this.cursor = loop.endIndex + 1;
+      return new UnsupportedControl(t.slice(start, this.cursor));
     }
     if (keyword(token, "if") && punctuation(t[this.cursor], "(")) {
       const end = matching(t, this.cursor, "(", ")");
@@ -129,42 +134,32 @@ class ImplementationRoute {
   constructor(platform) {
     this.platform = platform;
     this.tokens = [];
+    this.statements = [];
     this.terminal = null;
     this.unknown = false;
     this.result = [];
   }
+  prefixBefore(token) {
+    const statement = this.statements.find(statement => statement.tokens.includes(token));
+    return statement ? statement.tokens.slice(0, statement.tokens.indexOf(token)) : [];
+  }
 }
 
-export class PlatformImplementationBoundary {
-  constructor(declaration, expression) {
-    Object.assign(this, { declaration, expression });
+/** Shared bounded statement routes; platform boundaries and finite loops use the same walk. */
+export class SourceStatementRoutes {
+  constructor(tokens, expression, inspectControl = () => false) {
+    if (typeof inspectControl !== "function") throw new TypeError("source nested control inspector required");
+    this.inspectControl = inspectControl;
+    if (tokens !== null && !Array.isArray(tokens) || typeof expression !== "function") throw new TypeError("source statement tokens and interpretation required");
+    this.expression = expression;
     this.conditions = new Set();
     this.dependent = false;
     this.routes = supportedPlatforms.map((platform) => new ImplementationRoute(platform));
-    const tokens = declaration.bodyTokens();
     this.modeled = tokens !== null;
     const body = new Statements(tokens ?? []).block();
     this.indexConditions(body);
     for (const route of this.routes) this.walk(body, route);
-    this.classification = null;
-    this.message = null;
   }
-  classify(signature, platforms = supportedPlatforms, knownPlatforms = platforms) {
-    if (!this.dependent) return;
-    const routes = this.routes.filter((route) => platforms.includes(route.platform));
-    const results = routes.map((route) => signature(route));
-    const missing = routes.filter((route, index) => !route.unknown && (route.terminal === "throw" || results[index] === "empty"));
-    const knownMissing = missing.filter((route) => knownPlatforms.includes(route.platform));
-    if (knownMissing.length) {
-      this.classification = "violation";
-      this.message = `shared platform boundary has no normal implementation for ${knownMissing.map((route) => route.platform).join(", ")} (missing, rejection or no-op)`;
-    } else if (missing.length || !routes.length || routes.some((route) => route.unknown) || results.includes("unknown") || new Set(results).size !== 1) {
-      this.classification = "incomplete";
-      this.message = "shared platform boundary cannot prove matching result/effect guarantees on Linux, macOS and Windows";
-    }
-  }
-  contains(token) { return token.offset >= this.declaration.token.offset && token.offset <= this.declaration.tokens.at(-1).offset; }
-  routesAt(token) { return this.routes.filter((route) => route.tokens.some((item) => item.offset === token.offset)); }
   indexConditions(node) {
     if (node instanceof Block) { node.statements.forEach((child) => this.indexConditions(child)); return; }
     if (!(node instanceof Branch || node instanceof SwitchBranch)) return;
@@ -211,8 +206,9 @@ export class PlatformImplementationBoundary {
       for (; index >= 0 && index < node.cases.length && !route.terminal; index++) this.walk(node.cases[index].body, route);
       if (route.terminal === "break") route.terminal = null;
     } else {
+      route.statements.push(node);
       route.tokens.push(...node.tokens);
-      if (node instanceof UnsupportedControl) route.unknown = true;
+      if (node instanceof UnsupportedControl && !this.inspectControl(node.tokens)) route.unknown = true;
       if (keyword(node.tokens[0], "return", "throw", "break")) {
         route.terminal = node.tokens[0].value;
         route.result = resultTokens(node.tokens);
@@ -223,6 +219,31 @@ export class PlatformImplementationBoundary {
     if (node instanceof Block) node.statements.forEach((child) => this.appendAll(child, route));
     else if (node instanceof Branch) { route.tokens.push(...node.condition); this.appendAll(node.yes, route); this.appendAll(node.no, route); }
     else if (node instanceof SwitchBranch) { route.tokens.push(...node.selector); node.cases.forEach((entry) => this.appendAll(entry.body, route)); }
-    else route.tokens.push(...node.tokens);
+    else { route.statements.push(node); route.tokens.push(...node.tokens); }
   }
+}
+
+export class PlatformImplementationBoundary extends SourceStatementRoutes {
+  constructor(declaration, expression) {
+    super(declaration.bodyTokens(), expression);
+    this.declaration = declaration;
+    this.classification = null;
+    this.message = null;
+  }
+  classify(signature, platforms = supportedPlatforms, knownPlatforms = platforms) {
+    if (!this.dependent) return;
+    const routes = this.routes.filter((route) => platforms.includes(route.platform));
+    const results = routes.map((route) => signature(route));
+    const missing = routes.filter((route, index) => !route.unknown && (route.terminal === "throw" || results[index] === "empty"));
+    const knownMissing = missing.filter((route) => knownPlatforms.includes(route.platform));
+    if (knownMissing.length) {
+      this.classification = "violation";
+      this.message = `shared platform boundary has no normal implementation for ${knownMissing.map((route) => route.platform).join(", ")} (missing, rejection or no-op)`;
+    } else if (missing.length || !routes.length || routes.some((route) => route.unknown) || results.includes("unknown") || new Set(results).size !== 1) {
+      this.classification = "incomplete";
+      this.message = "shared platform boundary cannot prove matching result/effect guarantees on Linux, macOS and Windows";
+    }
+  }
+  contains(token) { return token.offset >= this.declaration.token.offset && token.offset <= this.declaration.tokens.at(-1).offset; }
+  routesAt(token) { return this.routes.filter((route) => route.tokens.some((item) => item.offset === token.offset)); }
 }

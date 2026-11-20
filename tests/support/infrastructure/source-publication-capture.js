@@ -39,7 +39,7 @@ class CapturedSourcePublicationIdentity {
 }
 
 /** Pure original binding identity; deliberately cannot validate or start an Attempt. */
-class CapturedSourceBinding {
+export class CapturedPublicationBinding {
   constructor(value) {
     exact(value, ["runId", "specId", "stepId", "nodeId", "attempt"]);
     for (const field of ["runId", "specId", "stepId", "nodeId"]) {
@@ -49,6 +49,15 @@ class CapturedSourceBinding {
     this.attempt = CurrentAttemptIdentity.from(value.attempt);
     assert.equal(this.attempt.nodeId, this.nodeId);
     Object.freeze(this);
+  }
+  static from(binding) {
+    if (binding instanceof CapturedPublicationBinding) return binding;
+    return new CapturedPublicationBinding({ runId: binding.runId, specId: binding.specId,
+      stepId: binding.stepId, nodeId: binding.nodeId, attempt: binding.attempt });
+  }
+  toJSON() {
+    return { runId: this.runId, specId: this.specId, stepId: this.stepId,
+      nodeId: this.nodeId, attempt: this.attempt.toJSON() };
   }
 }
 
@@ -74,9 +83,7 @@ export class SourcePublicationCaptureFile {
       "publication capture must be outside execution, canonical and handoff authority");
     const document = { version: 1, nonce: this.nonce, processId: process.pid, executionRoot, operation,
       beforeState: beforeState.toJSON(), priorActivities: priorActivities.map((entry) => entry.toJSON()),
-      input: { binding: { runId: input.binding.runId, specId: input.binding.specId,
-        stepId: input.binding.stepId, nodeId: input.binding.nodeId,
-        attempt: input.binding.attempt.toJSON() },
+      input: { binding: CapturedPublicationBinding.from(input.binding).toJSON(),
       stepResult: input.stepResult.toJSON(), settlement: input.settlement.toJSON(),
       effect: input.effect.toJSON(), mutationManifest: input.mutationManifest.toJSON(),
       sourceMutationBaseline: input.sourceMutationBaseline.toJSON(), handoffDigest: input.handoffDigest,
@@ -99,7 +106,7 @@ export class SourcePublicationCaptureFile {
     exact(document.input, ["binding", "stepResult", "settlement", "effect", "mutationManifest", "sourceMutationBaseline",
       "handoffDigest", "sourceHandoffSettlement", "taskStageBinding", "result", "sourceTaskReviewStage", "candidateBytes"]);
     const value = document.input;
-    const binding = new CapturedSourceBinding(value.binding);
+    const binding = new CapturedPublicationBinding(value.binding);
     const stepResult = StepResult.fromStored(binding.stepId, value.stepResult);
     const settlement = binding.stepId.startsWith("task-") ? settleTaskStepResult(binding.stepId, stepResult)
       : settleImplStepResult(binding.stepId, stepResult);

@@ -1,4 +1,4 @@
-import { FlowProcessEvent, FlowProcessEventWriter, PROCESS_EVENT_OPERATION } from "./flow-process-event.js";
+import { FlowProcessEvent, FlowProcessEventWriter } from "./flow-process-event.js";
 import { ProcessExecutionEventGroup } from "../../lib/process-execution-values.js";
 import { ProcessExecutionRuntime } from "../../lib/process-execution-runtime.js";
 import { ProcessExecutionBindingSelection } from "../../lib/process-execution-finalization.js";
@@ -19,7 +19,6 @@ import { DEFAULT_FLOW_SPEC_DIR, FlowWorkspace } from "../../lib/flow-workspace.j
 import { FlowVersion } from "../../lib/flow-version.js";
 import { diagnoseFlowFormat, isFlowFormatError } from "../../lib/flow-format-error.js";
 import {
-  ActivityTransition,
   CurrentAttemptIdentity,
   CurrentFlowDefinition,
   CurrentFlowState,
@@ -36,69 +35,6 @@ import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
 import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
 import { TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION } from "./task-gate-classification-recovery.js";
 import { DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION } from "./draft-worker-recovery.js";
-
-const TYPE_FOR_OPERATION = Object.freeze({
-  add_task: "task_added",
-  add_approval_task: "task_added",
-  start_attempt: "attempt_started",
-  retry_attempt: "attempt_retried",
-  retry_gate_attempt: "attempt_retried",
-  settle_spec_gate_retry: "attempt_retried",
-  settle_spec_gate_recovered: "attempt_recovered",
-  retry_recovery_attempt: "attempt_recovered",
-  update_attempt: "attempt_updated",
-  [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
-  [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
-  [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
-  [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
-  fail_attempt: "attempt_failed",
-  record_failure: "failure_recorded",
-  confirm_attempt: "result_confirmed",
-  complete_draft_completion: "result_confirmed",
-  record_draft_step_settlement: "result_confirmed",
-  settle_conditional_worker: "result_confirmed",
-  complete_task_review_stage: "result_confirmed",
-  advance_task_review_stage: "result_confirmed",
-  initialize_requirement_test_lifecycle: "result_confirmed",
-  advance_requirement_test_lifecycle: "result_confirmed",
-  rewind: "recovery",
-  rewind_test_evidence: "recovery",
-  repair_implementation: "recovery",
-  triage_implementation_for_repair: "recovery",
-  triage_implementation_no_repair: "recovery",
-  repair_acceptance_review: "recovery",
-  reopen_draft_preimplementation: "recovery",
-  reopen_draft_task_addition: "recovery",
-  reopen_draft_spec_correction: "recovery",
-  plan_gate_repair: "recovery",
-  recover_attempt: "recovery",
-  recover_missing_producer_artifact: "recovery",
-  recover_task_execution_overrun: "recovery",
-  park_flow: "flow_parked",
-  resume_flow: "flow_resumed",
-  finalize_flow: "flow_finalized",
-  set_policy: "policy_updated",
-  activate_nonblocking: "policy_updated",
-  publish_artifacts: "artifacts_published",
-  publish_plugin_artifacts: "artifacts_published",
-  publish_upgrade_result: "artifacts_published",
-  update_spec_record: "spec_record_updated",
-  begin_outbox: "outbox_started",
-  reopen_outbox: "outbox_reopened",
-  complete_outbox: "outbox_completed",
-  fail_outbox: "outbox_failed",
-  record_dispatch_approval: "dispatch_approval_recorded",
-  record_metric: "metric_recorded",
-  record_note: "note_recorded",
-  record_nonblocking: "nonblocking_recorded",
-  continue_nonblocking: "nonblocking_recorded",
-  accept_final_regression_failure: "failure_accepted",
-  defer_failed_review: "failure_accepted",
-  defer_failed_gate: "failure_accepted",
-  skip_finalize_downstream: "finalization_downstream_updated",
-  reset_finalize_downstream: "finalization_downstream_updated",
-  recover_interrupted_finalize_sync: "recovery",
-});
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -192,8 +128,10 @@ export class CanonicalFlowRuntime {
     return this.#read(specId, (store) => store.load(), { stateRead: true });
   }
 
-  loadSnapshot(specId) {
-    return this.#read(specId, (store) => store.loadSnapshot(), { stateRead: true, allowAbsent: true });
+  loadSnapshot(specId, { required = false } = {}) {
+    return this.#read(specId, (store) => store.loadSnapshot({ required }), {
+      stateRead: true, allowAbsent: !required,
+    });
   }
   readCurrentSpecReview(specId, input = {}) {
     return this.#read(specId, (store) => store.readCurrentSpecReview(input));
@@ -300,7 +238,7 @@ export class CanonicalFlowRuntime {
   addTask({ specId, activityId, taskId, key, taskSpec = undefined } = {}) {
     const state = this.#state(specId);
     const nodeId = state.definition.dynamicTaskContainerId;
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId,
       transition: {
@@ -318,7 +256,7 @@ export class CanonicalFlowRuntime {
   addApprovalTask({ specId, activityId, taskId, key, taskSpec = undefined, admission } = {}) {
     const state = this.#state(specId);
     const nodeId = state.definition.dynamicTaskContainerId;
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId,
       transition: {
@@ -587,7 +525,7 @@ export class CanonicalFlowRuntime {
 
   settleConditionalWorker({ specId, activityId, stepId, result, admission = undefined } = {}) {
     const state = this.#state(specId);
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: stepId,
       result,
@@ -874,7 +812,7 @@ export class CanonicalFlowRuntime {
 
   recoverInterruptedFinalizeSync({ specId, activityId, cleanupAttempt, outbox, timing = null, references, artifactWrites = undefined, result, admission = undefined } = {}) {
     const state = this.#state(specId);
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: "finalize-sync",
       attemptId: state.attempt.id,
@@ -903,7 +841,7 @@ export class CanonicalFlowRuntime {
 
   setPolicy({ specId, activityId, policy } = {}) {
     const state = this.#state(specId);
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       policy,
@@ -921,7 +859,7 @@ export class CanonicalFlowRuntime {
   /** Commit one-way policy activation and its bound initial observation together. */
   activateNonblockingPolicy({ specId, activityId, policy, nonblocking, admission = undefined } = {}) {
     const state = this.#state(specId);
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       policy,
@@ -954,7 +892,7 @@ export class CanonicalFlowRuntime {
     if (!Array.isArray(artifactWrites) || artifactWrites.length === 0) {
       throw new CurrentFlowStateInvariantError("artifact publication requires one or more artifact writes");
     }
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: target,
       attemptId: expected?.id ?? null,
@@ -982,7 +920,7 @@ export class CanonicalFlowRuntime {
     if (artifactWrite?.logicalKey !== "upgrade.result") {
       throw new CurrentFlowStateInvariantError("canonical upgrade publication requires upgrade.result");
     }
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       transition: {
@@ -1004,7 +942,7 @@ export class CanonicalFlowRuntime {
     if (artifactWrites.some((write) => write?.artifact?.logicalKey !== "plugin.lifecycle.artifact")) {
       throw new CurrentFlowStateInvariantError("plugin artifact publication accepts only plugin.lifecycle.artifact writes");
     }
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       transition: {
@@ -1026,7 +964,7 @@ export class CanonicalFlowRuntime {
   updateSpecRecord({ specId, activityId, nodeId, specRecord } = {}) {
     const state = this.#state(specId);
     const target = requiredText(nodeId, "canonical Spec update nodeId");
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: target,
       transition: {
@@ -1070,7 +1008,7 @@ export class CanonicalFlowRuntime {
     }
     const state = this.#state(specId);
     const now = new Date().toISOString();
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       timing: { startedAt: now, finishedAt: now, durationMs: 0 },
@@ -1092,7 +1030,7 @@ export class CanonicalFlowRuntime {
     if (approval === null || typeof approval !== "object" || Array.isArray(approval)) {
       throw new CurrentFlowStateInvariantError("dispatch approval requires a receipt object");
     }
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       timing: (() => {
@@ -1119,24 +1057,7 @@ export class CanonicalFlowRuntime {
     if (!(group instanceof ProcessExecutionEventGroup)) throw new TypeError("Canonical process publication requires a typed event group");
     const specId = group.events[0].binding.value.specId;
     const view = this.loadTransitionSnapshot(specId);
-    let state = view.state;
-    const prior = [...view.activities], additions = [];
-    for (const event of group.events) {
-      const fact = new FlowProcessEvent(event);
-      const existing = prior.find((activity) => activity.id === fact.activityId);
-      if (existing) {
-        if (existing.processEvent?.digest !== event.digest) throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
-        continue;
-      }
-      fact.assertFor(state, prior);
-      const recordedAt = event.occurredAt;
-      const activity = this.#activity(state, { id: fact.activityId, nodeId: fact.nodeId,
-        processEvent: event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
-        transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
-          attempt: null, status: null, nonblocking: null } });
-      additions.push(activity); prior.push(activity);
-      state = state.withConfirmationOrder(activity.confirmationOrder);
-    }
+    const additions = view.state.previewProcessEvents(group, view.activities).activities;
     if (additions.length > 0) this.apply(specId, additions[0], { followingProcessActivities: additions.slice(1) });
     return group.events.map((event) => event.eventId);
   }
@@ -1155,7 +1076,7 @@ export class CanonicalFlowRuntime {
   recordNonblocking({ specId, activityId, nodeId, nonblocking, timing = null, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined } = {}) {
     const state = this.#state(specId);
     const target = requiredText(nodeId, "nonblocking nodeId");
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: target,
       timing: timing ?? (() => {
@@ -1318,7 +1239,7 @@ export class CanonicalFlowRuntime {
     // flow_finalized Activity rather than from a mutable flow.json field or
     // filesystem metadata.
     const now = new Date().toISOString();
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       timing: { startedAt: now, finishedAt: now, durationMs: 0 },
@@ -1349,7 +1270,7 @@ export class CanonicalFlowRuntime {
       exactRecoveryReceipt: outbox.exactRecoveryReceipt ?? null,
       ...(outbox.executionBinding == null ? {} : { executionBinding: outbox.executionBinding }),
     };
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: state.root.id,
       timing: timing ?? (() => {
@@ -1373,7 +1294,7 @@ export class CanonicalFlowRuntime {
     const state = this.#state(specId);
     const now = new Date().toISOString();
     const target = nodeId === null ? state.root.id : requiredText(nodeId, "observation nodeId");
-    return this.apply(specId, this.#activity(state, {
+    return this.apply(specId, FlowActivity.forState(state, {
       id: activityId,
       nodeId: target,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
@@ -1449,7 +1370,7 @@ export class CanonicalFlowRuntime {
     if (activityAttempt === null) {
       throw new CurrentFlowStateInvariantError(`${operation} requires a current Attempt`);
     }
-    let activity = this.#activity(state, {
+    let activity = FlowActivity.forState(state, {
       id,
       nodeId: target,
       result,
@@ -1491,10 +1412,10 @@ export class CanonicalFlowRuntime {
         throw new CurrentFlowStateInvariantError("Canonical Flow changed while its process finalization barrier was published");
       }
       state = refreshed;
-      activity = this.#activity(state, activity.toJSON());
+      activity = FlowActivity.forState(state, activity.toJSON());
     }
     const completionActivity = completesFlow
-      ? this.#activity(state.withConfirmationOrder(activity.confirmationOrder), {
+      ? FlowActivity.forState(state.withConfirmationOrder(activity.confirmationOrder), {
         id: `${activity.id}-finalized`, nodeId: state.root.id, timing: activity.timing.toJSON(),
         processFinalizationBarrier,
         transition: { operation: "finalize_flow", nodeId: state.root.id, task: null, attempt: null, status: null },
@@ -1510,65 +1431,6 @@ export class CanonicalFlowRuntime {
       admission,
       publicationLimits,
       retryRecoveryPublication,
-    });
-  }
-
-  #activity(state, {
-    id,
-    nodeId,
-    attemptId = null,
-    sequence = null,
-    result = null,
-    failure = null,
-    timing = null,
-    provider = null,
-    model = null,
-    effort = null,
-    usage = null,
-    metric = null,
-    note = null,
-    processEvent = null,
-    processFinalizationBarrier = null,
-    policy = null,
-    outbox = null,
-    approval = null,
-    nonblocking = null,
-    references = { evaluations: [], findings: [], repairs: [], artifacts: [] },
-    transition,
-  }) {
-    const parsedTransition = transition instanceof ActivityTransition
-      ? transition
-      : new ActivityTransition({
-        ...transition,
-        policy: transition.policy ?? policy,
-        outbox: transition.outbox ?? outbox,
-        approval: transition.approval ?? approval,
-        nonblocking: transition.nonblocking ?? nonblocking,
-      });
-    const node = state.findNode(nodeId);
-    if (node === null) throw new CurrentFlowStateInvariantError(`Activity node is not part of this Flow: ${nodeId}`);
-    return new FlowActivity({
-      id: requiredText(id, "activityId"),
-      nodeId,
-      nodeKey: node.key,
-      attemptId,
-      sequence,
-      confirmationOrder: state.confirmationOrder + 1,
-      type: processEvent === null ? TYPE_FOR_OPERATION[parsedTransition.operation] : new FlowProcessEvent(processEvent).activityType,
-      transition: parsedTransition,
-      result,
-      timing,
-      failure,
-      provider,
-      model,
-      effort,
-      usage,
-      references,
-      metric,
-      note,
-      reviewPublication: null,
-      ...(processEvent === null ? {} : { processEvent: processEvent.toJSON() }),
-      ...(processFinalizationBarrier === null ? {} : { processFinalizationBarrier: processFinalizationBarrier.toJSON() }),
     });
   }
 

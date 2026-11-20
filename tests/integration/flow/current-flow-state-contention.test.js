@@ -34,7 +34,7 @@ async function withContendingWriter(t, versionLocation, operation) {
     import { FlowWorkspace } from ${JSON.stringify(workspaceModule)};
     const location = new FlowWorkspace({ repositoryRoot: ${JSON.stringify(versionLocation.repositoryRoot)},
       executionRoot: ${JSON.stringify(versionLocation.repositoryRoot)}, specRoot: ${JSON.stringify(versionLocation.specRoot.toString())} })
-      .canonicalVersion(${JSON.stringify(versionLocation.specId.toString())}, ${JSON.stringify(versionLocation.version.toString())});
+      .canonicalVersion(${JSON.stringify(versionLocation.specId.toString())}, ${JSON.stringify(versionLocation.version.toJSON())});
     const store = new CurrentFlowStateStore({ directory: ${JSON.stringify(directory)}, definition: buildCurrentFlowDefinition(),
       runtimeLockLocation: location.runtimeLock("runtime.lock.current-flow-state") });
     store.lock.acquire();

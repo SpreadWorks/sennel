@@ -8,7 +8,7 @@ import { GitCommandExecution } from "./git-command-execution.js";
 
 import fs from "node:fs";
 import path from "node:path";
-import { assertOk } from "./process.js";
+import { assertOk, withDeferredSynchronousCommandPublication } from "./process.js";
 import { container } from "./container.js";
 import { AtomicFile, AtomicFileWriteError, RetainedAtomicFileOutput } from "./atomic-file.js";
 import { ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "./process-execution-values.js";
@@ -213,23 +213,7 @@ export class GitStatusPathSet {
   }
 
   static fromPorcelainV1Z(output) {
-    const records = String(output || "").split("\0");
-    const paths = [];
-    for (let index = 0; index < records.length; index += 1) {
-      const record = records[index];
-      if (!record) continue;
-      if (record.length < 4 || record[2] !== " ") {
-        throw new Error("git porcelain v1 -z entry is malformed");
-      }
-      const status = record.slice(0, 2);
-      paths.push(record.slice(3));
-      if (status.includes("R") || status.includes("C")) {
-        const original = records[++index];
-        if (!original) throw new Error("git porcelain rename/copy entry is incomplete");
-        paths.push(original);
-      }
-    }
-    return new GitStatusPathSet(paths);
+    return GitPorcelainV1Status.from(output).pathSet;
   }
 
   static fromPorcelainV2Z(output) {
@@ -247,6 +231,146 @@ export class GitStatusPathSet {
 
   toArray() {
     return [...this.paths];
+  }
+}
+
+/** Exact UTF-8 fields from a machine-readable Git NUL boundary. */
+export class GitNulFields {
+  constructor(output, { label = "Git NUL output", ErrorType = Error } = {}) {
+    const bytes = Buffer.isBuffer(output) ? output : Buffer.from(String(output ?? ""), "utf8");
+    if (bytes.length === 0) {
+      this.values = Object.freeze([]);
+    } else {
+      if (bytes.at(-1) !== 0) throw new ErrorType(`${label} is not NUL terminated`);
+      const decoded = GitNulFields.decodeField(bytes.subarray(0, -1), label, ErrorType);
+      this.values = Object.freeze(decoded.split("\0"));
+    }
+    Object.freeze(this);
+  }
+
+  static decodeField(bytes, label = "Git field", ErrorType = Error) {
+    const decoded = bytes.toString("utf8");
+    if (!Buffer.from(decoded, "utf8").equals(bytes)) throw new ErrorType(`${label} is not valid UTF-8`);
+    return decoded;
+  }
+}
+
+const GIT_UNMERGED_STATUSES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+function isPorcelainV1Status(value) {
+  return value === "??" || value === "!!" || GIT_UNMERGED_STATUSES.has(value)
+    || /^(?: [AMTDRC]|[MTARC][ MTD]|D )$/.test(value);
+}
+
+function isGitNameStatus(value) {
+  const status = /^([ACDMTUXBR])([0-9]{1,3})?$/.exec(value);
+  return status !== null && (status[2] === undefined
+    || ("MRC".includes(status[1]) && Number.parseInt(status[2], 10) <= 100));
+}
+
+/** One raw Git change with its public regression-status projection. */
+export class GitPathChange {
+  constructor(rawStatus, relativePath, originalPath = null) {
+    if (typeof rawStatus !== "string" || (!isPorcelainV1Status(rawStatus) && !isGitNameStatus(rawStatus))
+      || typeof relativePath !== "string" || relativePath === "" || relativePath.includes("\0")
+      || (originalPath !== null && (typeof originalPath !== "string" || originalPath === "" || originalPath.includes("\0")))
+      || /[RC]/.test(rawStatus) !== (originalPath !== null)) {
+      throw new Error("Git path change requires its complete status and paths");
+    }
+    this.rawStatus = rawStatus;
+    this.status = normalizeStatus(rawStatus);
+    this.path = relativePath;
+    this.originalPath = originalPath;
+    Object.freeze(this);
+  }
+  paths() { return this.originalPath === null ? [this.path] : [this.path, this.originalPath]; }
+  toJSON() {
+    return { status: this.status, path: this.path,
+      ...(this.status === "renamed" ? { old_path: this.originalPath } : {}) };
+  }
+}
+
+function assertGitChangeCount(entries, maxEntries, label) {
+  if (entries.length > maxEntries) {
+    throw new Error(`${label} returned ${entries.length} entries (max ${maxEntries})`);
+  }
+}
+
+class GitPathChanges {
+  constructor(entries) {
+    if (!Array.isArray(entries) || entries.some((entry) => !(entry instanceof GitPathChange))) {
+      throw new TypeError("Git path changes require typed entries");
+    }
+    this.entries = Object.freeze([...entries]);
+  }
+}
+
+/** Porcelain v1 -z retains raw names and destination-before-original order. */
+export class GitPorcelainV1Status extends GitPathChanges {
+  constructor(entries) {
+    super(entries);
+    this.pathSet = new GitStatusPathSet(entries.flatMap((entry) => entry.paths()));
+    Object.freeze(this);
+  }
+  static from(output, { maxEntries = Infinity, label = "git porcelain v1 -z output" } = {}) {
+    const records = new GitNulFields(output, { label }).values;
+    const entries = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+      if (record.length < 4 || record[2] !== " ") throw new Error("git porcelain v1 -z entry is malformed");
+      const status = record.slice(0, 2);
+      if (!isPorcelainV1Status(status)) throw new Error("git porcelain v1 status is invalid");
+      const original = /[RC]/.test(status) ? records[++index] : null;
+      if (original === undefined) throw new Error("git porcelain rename/copy entry is incomplete");
+      entries.push(new GitPathChange(status, record.slice(3), original));
+      assertGitChangeCount(entries, maxEntries, label);
+    }
+    return new GitPorcelainV1Status(entries);
+  }
+}
+
+/** Pure state machine shared by buffered and streaming name-status readers. */
+export class GitNameStatusDecoder {
+  #status = null;
+  #originalPath = null;
+  constructor(label = "Git name-status output") { this.label = label; Object.freeze(this); }
+  accept(field) {
+    if (this.#status === null) {
+      if (!isGitNameStatus(field)) {
+        throw new Error(`${this.label}: invalid status`);
+      }
+      this.#status = field;
+      return null;
+    }
+    if (/^[RC]/.test(this.#status) && this.#originalPath === null) {
+      if (field === "") throw new Error(`${this.label}: missing original path`);
+      this.#originalPath = field;
+      return null;
+    }
+    const entry = new GitPathChange(this.#status, field, this.#originalPath);
+    this.#status = null;
+    this.#originalPath = null;
+    return entry;
+  }
+  finish() {
+    if (this.#status !== null) throw new Error(`${this.label}: incomplete entry`);
+  }
+}
+
+export class GitNameStatusChanges extends GitPathChanges {
+  constructor(entries) { super(entries); Object.freeze(this); }
+  static from(output, { maxEntries = Infinity, label = "Git name-status output" } = {}) {
+    const decoder = new GitNameStatusDecoder(label);
+    const entries = [];
+    for (const field of new GitNulFields(output, { label }).values) {
+      const entry = decoder.accept(field);
+      if (entry !== null) {
+        entries.push(entry);
+        assertGitChangeCount(entries, maxEntries, label);
+      }
+    }
+    decoder.finish();
+    return new GitNameStatusChanges(entries);
   }
 }
 
@@ -332,7 +456,7 @@ export class GitPorcelainV2StatusEntry {
         throw new GitPorcelainV2StatusError("git porcelain v2 rename/copy status is invalid");
       }
     }
-    if (kind === "unmerged" && !new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]).has(xy)) {
+    if (kind === "unmerged" && !GIT_UNMERGED_STATUSES.has(xy)) {
       throw new GitPorcelainV2StatusError("git porcelain v2 unmerged status is invalid");
     }
     if (kind === "untracked" && xy !== "??") {
@@ -376,14 +500,8 @@ export class GitPorcelainV2Status {
   }
 
   static from(output) {
-    const bytes = Buffer.isBuffer(output) ? output : Buffer.from(String(output ?? ""), "utf8");
-    if (bytes.length === 0) return new GitPorcelainV2Status([]);
-    if (bytes.at(-1) !== 0) throw new GitPorcelainV2StatusError("git porcelain v2 -z output is not NUL terminated");
-    const decoded = bytes.toString("utf8");
-    if (!Buffer.from(decoded, "utf8").equals(bytes)) {
-      throw new GitPorcelainV2StatusError("git porcelain v2 -z output is not valid UTF-8");
-    }
-    const records = decoded.slice(0, -1).split("\0");
+    const records = new GitNulFields(output, { label: "git porcelain v2 -z output",
+      ErrorType: GitPorcelainV2StatusError }).values;
     const entries = [];
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
@@ -506,7 +624,7 @@ function retainsGitOutput(failure) {
 export function withGitOutputCleanup(operation, cleanup) {
   let failure = null;
   return completeManagedOperationSync(() => {
-    try { return operation(); }
+    try { return withDeferredSynchronousCommandPublication(operation); }
     catch (error) { failure = error; throw error; }
   }, () => { if (!retainsGitOutput(failure)) return cleanup(); });
 }
@@ -670,12 +788,9 @@ export function countCommitsBetween(base, head, opts = {}) {
  * @returns {string[]}
  */
 export function listUncommittedFiles(opts = {}) {
-  const res = runGit(["status", "--porcelain"], opts);
+  const res = runGit(["status", "--porcelain=v1", "-z"], { ...opts, encoding: "buffer" });
   assertOk(res, "listUncommittedFiles failed");
-  return res.stdout
-    .split("\n")
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
+  return GitStatusPathSet.fromPorcelainV1Z(res.stdout).toArray();
 }
 
 function normalizeStatus(rawStatus) {
@@ -684,21 +799,6 @@ function normalizeStatus(rawStatus) {
   if (rawStatus.includes("D")) return "deleted";
   if (rawStatus.includes("A")) return "added";
   return "modified";
-}
-
-function normalizeGitPath(p) {
-  return p.replace(/^"|"$/g, "").split("\\").join("/");
-}
-
-function parsePorcelainLine(line) {
-  const rawStatus = line.slice(0, 2);
-  const body = line.slice(3).trim();
-  const status = normalizeStatus(rawStatus);
-  if (status === "renamed" && body.includes(" -> ")) {
-    const [oldPath, newPath] = body.split(" -> ");
-    return { status, old_path: normalizeGitPath(oldPath), path: normalizeGitPath(newPath) };
-  }
-  return { status, path: normalizeGitPath(body) };
 }
 
 export const DEFAULT_MAX_CHANGED_FILE_ENTRIES = 2000;
@@ -731,23 +831,19 @@ export function listChangedFilesDetailed(opts = {}) {
   };
 
   if (opts.baseBranch) {
-    const committed = runGit(["diff", "--name-status", `${opts.baseBranch}...HEAD`, ...pathspec], { cwd, gitPolicy });
+    const committed = runGit(["diff", "--name-status", "-z", `${opts.baseBranch}...HEAD`, ...pathspec], { cwd, gitPolicy, encoding: "buffer" });
     assertOk(committed, "listChangedFilesDetailed committed diff failed");
-    for (const line of splitBoundedGitOutput(committed.stdout, maxChangedFileEntries, "committed diff")) {
-      const parts = line.split("\t");
-      if (parts[0]?.startsWith("R")) add({ status: "renamed", old_path: normalizeGitPath(parts[1]), path: normalizeGitPath(parts[2]) });
-      else if (parts[0] === "A") add({ status: "added", path: normalizeGitPath(parts[1]) });
-      else if (parts[0] === "D") add({ status: "deleted", path: normalizeGitPath(parts[1]) });
-      else add({ status: "modified", path: normalizeGitPath(parts[1]) });
-    }
+    for (const entry of GitNameStatusChanges.from(committed.stdout, {
+      maxEntries: maxChangedFileEntries, label: "listChangedFilesDetailed committed diff",
+    }).entries) add(entry.toJSON());
   }
 
-  const statusArgs = ["status", "--porcelain", `--untracked-files=${untrackedFiles}`, ...pathspec];
-  const porcelain = runGit(statusArgs, { cwd, gitPolicy });
+  const statusArgs = ["status", "--porcelain=v1", "-z", `--untracked-files=${untrackedFiles}`, ...pathspec];
+  const porcelain = runGit(statusArgs, { cwd, gitPolicy, encoding: "buffer" });
   assertOk(porcelain, "listChangedFilesDetailed status failed");
-  for (const line of splitBoundedGitOutput(porcelain.stdout, maxChangedFileEntries, "status")) {
-    add(parsePorcelainLine(line));
-  }
+  for (const entry of GitPorcelainV1Status.from(porcelain.stdout, {
+    maxEntries: maxChangedFileEntries, label: "listChangedFilesDetailed status",
+  }).entries) add(entry.toJSON());
 
   return [...byKey.values()].sort((a, b) => {
     const ap = `${a.path}:${a.status}:${a.old_path || ""}`;
@@ -772,10 +868,3 @@ function normalizeUntrackedFilesMode(value) {
   return mode;
 }
 
-function splitBoundedGitOutput(stdout, maxEntries, label) {
-  const lines = stdout.split("\n").filter(Boolean);
-  if (lines.length > maxEntries) {
-    throw new Error(`listChangedFilesDetailed ${label} returned ${lines.length} entries (max ${maxEntries})`);
-  }
-  return lines;
-}

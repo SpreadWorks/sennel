@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
 import { TestTemporaryRoot } from "../../test-temporary-root.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
 /** Isolate the actual retired size predicate, never the canonical Error producer. */
 export class LegacySpecGateRepairErrorSeed {
@@ -44,12 +45,15 @@ export class LegacySpecGateRepairErrorSeed {
   async create({ mode = "valid" } = {}) {
     const output = path.join(this.root, `legacy-error-${randomUUID()}.json`);
     try {
-      const result = spawnSync(process.execPath, [
+      const invocation = new NativeExecutableInvocation({ executable: process.execPath, args: [
         "--import", pathToFileURL(path.join(this.root, "src/sennel.js")).href,
         path.join(this.root, "tests/support/spec-gate-repair-legacy-worker.js"), mode, output,
-      ], { cwd: this.root, encoding: "utf8", env: { ...process.env,
+      ], cwd: this.root, env: { ...process.env,
         SENNEL_WORK_ROOT: this.root, SENNEL_SOURCE_ROOT: this.root,
         SENNEL_TEST_TEMP_ROOT: this.temporaryRoot.path } });
+      const result = spawnSync(invocation.executable, invocation.args, {
+        ...invocation.processOptions(), shell: false, encoding: "utf8",
+      });
       assert.equal(result.error, undefined);
       assert.equal(result.signal, null, result.stderr);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);

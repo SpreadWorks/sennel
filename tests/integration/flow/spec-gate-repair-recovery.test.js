@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionStopReceipt, executionValueDigest } from "../../../src/lib/process-execution-values.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
+import { resolveExecutableInvocation } from "../../../src/lib/executable-resolution.js";
 import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
@@ -69,16 +73,20 @@ function count(saved, logicalKey) {
   return saved.catalog.artifacts.filter((artifact) => artifact.logicalKey === logicalKey).length;
 }
 
-function assertRecoveryOnly(before, after, preview) {
+function assertRecoveryOnly(before, after, preview, processActivities = []) {
   assert.deepEqual(after.state.attempt, { ...before.state.attempt, failure: null });
   assert.deepEqual(after.state.current, before.state.current);
   assert.equal(after.spec, before.spec);
   assert.deepEqual(after.budget, before.budget);
   assert.deepEqual(after.progress, before.progress);
   assert.deepEqual(after.activities.slice(0, before.activities.length), before.activities);
-  assert.equal(after.activities.length, before.activities.length + 1);
+  assert.equal(after.activities.length, before.activities.length + 1 + processActivities.length);
   assert.equal(after.journal.slice(0, before.journal.length), before.journal);
-  const recovery = after.activities.at(-1);
+  const added = after.activities.slice(before.activities.length);
+  assert.deepEqual(added.filter((entry) => entry.processEvent != null), processActivities);
+  const recoveries = added.filter((entry) => entry.processEvent == null);
+  assert.equal(recoveries.length, 1);
+  const recovery = recoveries[0];
   assert.equal(recovery.transition.operation, "recover_spec_gate_repair");
   assert.equal(recovery.attemptId, before.state.attempt.id);
   const receipt = recovery.result.draftSettlementReceipt;
@@ -92,6 +100,58 @@ function assertRecoveryOnly(before, after, preview) {
   for (const key of ["spec.snapshot", "spec.gate.repair.audit", "spec.gate.repair.progress", "spec.gate", "spec.review"]) {
     assert.equal(count(after, key), count(before, key), key);
   }
+}
+
+/** CLI apply audits actual Git calls; the direct recovery API starts none. */
+async function confirmedRecoveryProcessActivities(value, before, after) {
+  const activities = after.activities.slice(before.activities.length).filter((entry) => entry.processEvent != null);
+  assert.ok(activities.length > 0, "ordinary CLI apply must retain its real process audit");
+  const ids = new Set(activities.map((entry) => entry.processEvent.eventId));
+  assert.equal(ids.size, activities.length);
+  const inventory = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: value.root });
+  const executions = inventory.executions.filter((execution) => execution.events.some((event) => ids.has(event.eventId)));
+  assert.ok(executions.length > 0);
+  const expectedGit = resolveExecutableInvocation(new NativeExecutableInvocation({
+    executable: "git", args: [], cwd: value.root,
+  }));
+  const events = new Map();
+  for (const execution of executions) {
+    assert.equal(execution.status, "closed");
+    for (const call of execution.calls) {
+      assert.equal(call.binding.commandId, "recover-spec-gate-repair");
+      assert.equal(call.binding.runId, after.state.runId);
+      assert.equal(call.binding.specId, value.specId);
+      assert.equal(call.binding.flowVersionId, after.state.flowVersionId);
+      assert.equal(call.binding.attemptId, before.state.attempt.id);
+      assert.equal(call.invocation.kind, "command", "recovery cannot launch a provider");
+      assert.equal(call.invocation.actualCommand.executable, expectedGit.executable);
+      const receipt = new ProcessExecutionStopReceipt(call.receipt);
+      assert.equal(receipt.callId, call.callId);
+      assert.equal(receipt.executionId, execution.executionId);
+      assert.deepEqual(receipt.binding.toJSON(), call.binding);
+      assert.equal(receipt.stopEvidence.confirmed, true);
+      assert.equal(receipt.scope, "registered-executions");
+    }
+    for (const event of execution.events) {
+      assert.equal(ids.has(event.eventId), true, "every newly executed process event must be in the canonical ledger");
+      assert.equal(events.has(event.eventId), false);
+      events.set(event.eventId, event);
+      const acknowledgements = execution.eventAcknowledgements.filter((ack) => ack.eventId === event.eventId);
+      assert.equal(acknowledgements.length, 1);
+      assert.equal(acknowledgements[0].eventDigest, executionValueDigest(event));
+    }
+  }
+  assert.equal(events.size, activities.length);
+  for (const activity of activities) {
+    assert.deepEqual(activity.processEvent, events.get(activity.processEvent.eventId));
+  }
+  // Earlier phase records in this legacy Error seed are synthetic preconditions,
+  // not a supported whole-history query producer. Verify the actual cataloged
+  // audit here; current producer → query coverage lives in the lineage scenario.
+  const manager = reload(value);
+  manager.artifactCatalog(value.specId).verify(manager.specLocation(value.specId));
+  assert.deepEqual(snapshot(manager, value), after, "audit and catalog readback cannot publish again");
+  return activities;
 }
 
 async function dispatch(value, manager, agent, maxDispatches = 1) {
@@ -307,7 +367,9 @@ describe("Explicit recovery of a genuine legacy Spec Gate repair Error", { concu
     assert.equal(applied.envelope.data.recovered, true);
     assert.equal(applied.envelope.data.replayed, false);
     assert.equal(applied.envelope.data.workerStarted, false);
-    assertRecoveryOnly(before, snapshot(reload(value), value), preview.envelope.data);
+    const after = snapshot(reload(value), value);
+    const processActivities = await confirmedRecoveryProcessActivities(value, before, after);
+    assertRecoveryOnly(before, after, preview.envelope.data, processActivities);
   });
 
   it("refuses changed canonical rules between preview and apply without superseding the Error", async (t) => {

@@ -30,7 +30,9 @@ if (publicCommandEntrypoint.accepts(process.argv.slice(2))) {
 async function dispatchOrdinaryCli() {
   const { coreCommandRegistry } = await import("./lib/command-registry.js");
   const { CliInvocationPolicy } = await import("./lib/cli-invocation-policy.js");
-  const policy = new CliInvocationPolicy(coreCommandRegistry, process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  const isFlowQuery = rawArgs[0] === "flow" && rawArgs[1] === "query";
+  const policy = new CliInvocationPolicy(coreCommandRegistry, rawArgs);
   if (policy.migration) {
     // The migration captures its source before configuration, logging or process
     // admission can create the canonical target. Its domain transaction owns
@@ -47,8 +49,6 @@ async function dispatchOrdinaryCli() {
   const { repoRoot, getMainRepoPath, isInsideWorktree } = await import("./lib/cli.js");
 
   async function dispatchCli(workspace = null) {
-    const rawArgs = process.argv.slice(2);
-    const isFlowQuery = rawArgs[0] === "flow" && rawArgs[1] === "query";
     if (isFlowQuery) {
       // Query input is the only bootstrap boundary allowed before worktree
       // resolution. Query is read-only and executes against the caller-selected
@@ -179,8 +179,10 @@ async function dispatchOrdinaryCli() {
   }
 
   if (policy.readOnly) {
-    const executionRoot = repoRoot();
-    const mainRoot = isInsideWorktree(executionRoot) ? getMainRepoPath(executionRoot) : executionRoot;
+    const executionRoot = isFlowQuery
+      ? (await import("./flow/query.js")).flowQueryRoot()
+      : repoRoot();
+    const mainRoot = !isFlowQuery && isInsideWorktree(executionRoot) ? getMainRepoPath(executionRoot) : executionRoot;
     process.exitCode = await withReadOnlyManagedProcessScope({ mainRoot, executionRoot }, (_runtime, workspace) => dispatchCli(workspace));
   } else if (policy.inherited || policy.flow) {
     // The command wrapper authenticates its inherited grant; Flow's dispatcher

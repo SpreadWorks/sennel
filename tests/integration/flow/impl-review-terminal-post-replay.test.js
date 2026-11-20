@@ -9,6 +9,7 @@ import { attachedCanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical
 import { attachedCanonicalCommandResultArtifact, attachedCanonicalCommandResultPublications,
   attachCanonicalCommandResultArtifact, attachCanonicalCommandResultPublications,
   CanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
+import { CurrentFlowVersionStore } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 
 function replayInput(output, artifact, publications) {
@@ -52,6 +53,33 @@ test("Impl Review exact terminal post survives cleanup and fresh-manager replay 
   assert.notEqual(scenario.manager, originalManager);
   const saved = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId, stepId: "impl-review", completed: true });
   const expected = saved.receipt.toJSON();
+  const beforeInterleave = scenario.snapshot();
+  const location = scenario.manager.specLocation(scenario.specId);
+  let noteWritten = false;
+  const reads = ["load", "loadSnapshot"].map(name => {
+    const original = CurrentFlowVersionStore.prototype[name];
+    return t.mock.method(CurrentFlowVersionStore.prototype, name, function (...args) {
+      const value = Reflect.apply(original, this, args);
+      if (!noteWritten && this.location.directory === location.directory) {
+        noteWritten = true;
+        scenario.manager.addNote("a note committed after the settlement read capture", { specId: scenario.specId });
+      }
+      return value;
+    });
+  });
+  let captured;
+  try {
+    captured = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId,
+      stepId: "impl-review", completed: true });
+  } finally {
+    for (const read of reads) read.mock.restore();
+  }
+  assert.equal(noteWritten, true, "a real committed note interleaves after the original read delegate returns");
+  assert.deepEqual(captured.receipt.toJSON(), expected, "the captured terminal producer remains the exact same receipt");
+  const afterInterleave = scenario.snapshot();
+  assert.equal(afterInterleave.state.confirmationOrder, beforeInterleave.state.confirmationOrder + 1);
+  assert.deepEqual(afterInterleave.activities.slice(0, -1), beforeInterleave.activities);
+  assert.equal(afterInterleave.activities.at(-1).note.text, "a note committed after the settlement read capture");
   const before = scenario.snapshot();
   const counts = { workers: scenario.requests.length, reviews: scenario.phaseReviews.length,
     metrics: before.activities.filter((activity) => activity.metric !== null).map((activity) => activity.metric) };
