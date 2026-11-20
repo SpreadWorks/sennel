@@ -1655,6 +1655,12 @@ class InvocationClassContract {
     return this.matches(tail, `return Object.freeze([...${input}].map((${entry.value}) => ${helper.value}(${entry.value}, ${label}, true)));`)
       || this.matches(tail, `return Object.freeze([...${input}].map(${entry.value} => ${helper.value}(${entry.value}, ${label}, true)));`);
   }
+  static environmentClone(value) {
+    const parameters = this.ordinaryFunction(value, 1);
+    if (!parameters || parameters[0].length !== 1 || parameters[0][0].kind !== "identifier") return false;
+    const input = parameters[0][0].value;
+    return this.matches(value.declaration.bodyTokens() ?? [], `return ${input} === null ? null : { ...${input} };`);
+  }
   static inspect(source, origins) {
     const tokens = source.declaration.tokens;
     // A module binding is stable independently of a particular factory call.
@@ -1679,9 +1685,13 @@ class InvocationClassContract {
     if (members.instanceInitializers.length || members.unresolvedInstanceMembers.length || members.unresolvedStaticMembers.length
       || ["executable", "args", "cwd", "env", "stdio"].some(name => members.instanceMembers.has(name))) return null;
     const initialize = members.instanceMembers.get("constructor"), options = members.instanceMembers.get("processOptions");
-    if (!initialize || !options || !options.matchesDeclaration(`processOptions() {
-      return { ...(this.cwd !== null && { cwd: this.cwd }), ...(this.env !== null && { env: this.env }), stdio: this.stdio };
-    }`)) return null;
+    if (!initialize || !options) return null;
+    const environmentClone = (options.bodyTokens() ?? []).find((token, index, tokens) => token.kind === "identifier"
+      && tokens[index - 2]?.value === "env" && tokens[index - 1]?.value === ":");
+    if (!environmentClone || !this.environmentClone(origins.identifier(parent.module, environmentClone))
+      || !options.matchesDeclaration(`processOptions() {
+        return { ...(this.cwd !== null && { cwd: this.cwd }), ...(this.env !== null && { env: ${environmentClone.value}(this.env) }), stdio: this.stdio };
+      }`)) return null;
     const input = readParameters(initialize.tokens);
     if (input.length !== 1 || !this.matches(input[0], `{ executable, args = [], cwd = null, env = null, stdio = 'pipe' }`)) return null;
     const tail = this.refusalTail(initialize, `new.target === ${parent.name}`);

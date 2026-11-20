@@ -59,6 +59,19 @@ const ALLOWLIST = new Map([
   ["tests/integration/lib/gitignore.test.js", "normalizer boundary fixture for retired managed metadata"],
   ["tests/integration/lib/gitattributes.test.js", "normalizer boundary fixture for retired managed metadata"],
   ["tests/integration/lib/cleanup-obsolete-skills.test.js", "retired product skill cleanup fixture"],
+  ["src/lib/layout-template-transformation.js", "explicit one-way legacy template token transformation"],
+  ["tests/fixtures/layout-migration-v8/journal.json", "immutable predecessor-produced legacy migration journal"],
+  ["tests/fixtures/layout-migration-v9/producer.js", "immutable predecessor migration producer"],
+  ["tests/integration/flow-cli/worktree-cli-execution.test.js", "explicit legacy managed-root migration CLI fixture"],
+  ["tests/integration/layout-metadata-evidence-retirement.test.js", "legacy migration metadata retirement fixture"],
+  ["tests/integration/layout-migration-capacity.test.js", "legacy managed-root migration capacity fixture"],
+  ["tests/integration/layout-migration-previous-journal.test.js", "authentic predecessor journal migration and rollback fixture"],
+  ["tests/integration/layout-root-metadata-bytes.test.js", "legacy root metadata byte preservation and rollback fixture"],
+  ["tests/integration/layout-root-metadata-capacity.test.js", "legacy root metadata migration capacity fixture"],
+  ["tests/integration/lib/layout-file-content.test.js", "legacy template token transformation and byte preservation fixture"],
+  ["tests/integration/lib/layout-migration-evidence.test.js", "legacy migration evidence and restoration fixture"],
+  ["tests/integration/migration-bootstrap.test.js", "explicit legacy source migration bootstrap fixture"],
+  ["tests/unit/layout-template-transformation.test.js", "legacy template transformation input and preserved project-owned token fixtures"],
 ]);
 function filesUnder(relativePath) {
   const absolutePath = path.join(ROOT, relativePath);
