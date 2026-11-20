@@ -118,7 +118,7 @@ export async function withReadOnlyManagedProcessScope({ mainRoot, executionRoot 
 }
 
 /** Retain locator provenance even when native work, publication or closure fails. */
-async function withRetainedManagedProcessScope(options, callback) {
+export async function withRetainedManagedProcessScope(options, callback) {
   let scope;
   let result;
   try {

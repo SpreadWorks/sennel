@@ -14,6 +14,7 @@ import { managedDir, managedOutputDir } from "../../lib/config.js";
 import { PRODUCT } from "../../lib/product.js";
 import { assertOk } from "../../lib/process.js";
 import { RuntimeChildExecution } from "../../lib/runtime-package.js";
+import { withRetainedManagedProcessScope } from "../../lib/managed-process.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
 import { GIT_OBJECT_ID, captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
 import { emptySpecStub } from "../../lib/spec-json.js";
@@ -198,6 +199,7 @@ function runDocsScanAndValidate(root) {
   } catch (err) {
     throw new Error(`analysis.json is unreadable or invalid after docs scan: ${err.message}`);
   }
+  return res;
 }
 
 async function hookSnapshotFor(root) {
@@ -1206,7 +1208,8 @@ export class RunPrepareSpecCommand extends FlowCommand {
         }
         await writeFlowState();
         reportWorktreePrepareCheckpoint(ctx, "after-planning-state-publication", worktreeAttempt);
-        runDocsScanAndValidate(executionRoot);
+        await withRetainedManagedProcessScope({ mainRoot, executionRoot },
+          () => runDocsScanAndValidate(executionRoot));
         const identity = new WorktreeFlowIdentity({
           runId: flowRunId,
           issue: issue ? Number(issue) : null,
