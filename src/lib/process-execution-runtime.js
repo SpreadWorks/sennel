@@ -502,6 +502,11 @@ class RuntimeRequestStorage {
     storage.#continuations = this.#continuations;
     return storage;
   }
+  retainFor(store, previous) {
+    const storage = this.fork(store);
+    storage.#inventories = new Map([...previous.#inventories, ...this.#inventories]);
+    return storage;
+  }
   readBlock(executionId, blockId) {
     const physical = this.readPhysicalRecord(executionId, blockId);
     if (physical instanceof RuntimeRequestBlock) return physical;
@@ -2143,8 +2148,13 @@ class RuntimePreparedPublication {
     // Migration adds streamed predecessor and namespace proofs; retain its
     // complete polymorphic validation rather than sharing this normal image.
     if (this.constructor === RuntimePreparedPublication) this.#dataObservation = new ValidatedRuntimePublicationData(
-      runtimeRegistryObservationAuthority, this, registry, snapshots);
+      runtimeRegistryObservationAuthority, this, registry, snapshots, storage);
     return registry;
+  }
+  retainReadback(store, registry) {
+    if (this.constructor !== RuntimePreparedPublication) return false;
+    this.#dataObservation.retain(store, registry);
+    return true;
   }
   assertLogicalInventory(_registry, _inventory) {}
   assertStandaloneResults(inventory, storage, view) {
@@ -2804,16 +2814,24 @@ class ValidatedRuntimeRegistryObservation {
 class ValidatedRuntimePublicationData {
   #meaning;
   #observation;
-  constructor(authority, prepared, registry, snapshots) {
+  #snapshots;
+  #storage;
+  constructor(authority, prepared, registry, snapshots, storage) {
     if (authority !== runtimeRegistryObservationAuthority) throw new TypeError("Publication data requires its complete validated readback");
     this.#meaning = new ProcessExecutionValueEncoding(prepared);
     this.#observation = new ValidatedRuntimeRegistryObservation(authority, freezeRuntimeRegistry(registry),
       snapshots.get("registry.json"), snapshots);
+    this.#snapshots = new Map(snapshots);
+    this.#storage = storage;
     Object.freeze(this);
   }
   read(prepared, snapshots) {
     if (!this.#meaning.matches(new ProcessExecutionValueEncoding(prepared))) return null;
     return this.#observation.read(snapshots.get("registry.json"), snapshots);
+  }
+  retain(store, registry) {
+    if (!this.#observation.owns(registry)) throw new TypeError("Publication readback requires its exact validated registry");
+    store.retainPublicationRead(registry, this.#snapshots, this.#storage);
   }
 }
 
@@ -3478,15 +3496,29 @@ class ProcessRuntimeStore {
     // check before retaining any graph. save() invalidates it on later failure
     // and returns a detached working graph only after the transition completes.
     publication?.assertMatches(registry);
-    if (registry !== observed) {
-      this.#readonlyObservation = ValidatedRuntimeRegistryObservation.fromValidatedRead(registry, snapshot);
-    }
-    this.#publicationBaseline = new RuntimePublicationBaseline(this.#readonlyObservation, new Map([
+    this.#retainRead(registry === observed ? this.#readonlyObservation
+      : ValidatedRuntimeRegistryObservation.fromValidatedRead(registry, snapshot), new Map([
       ["registry.json", snapshot], ["authority.json", anchorSnapshot],
       ...archiveObservation.publicationSnapshots(), ...this.requestStorage.publicationSnapshots(),
     ]));
     if (publication !== null || immutable) return inventory;
     return new RuntimeLogicalInventoryRecords(this.#readonlyObservation.mutableCopy(), inventory.archives);
+  }
+  #retainRead(observation, snapshots) {
+    this.#readonlyObservation = observation;
+    this.#publicationBaseline = new RuntimePublicationBaseline(observation, snapshots);
+  }
+  retainPublicationRead(registry, snapshots, storage) {
+    // The complete prepared readback already validated these exact images.
+    // Retain decoders against the physical store; subsequent reads still
+    // capture every dependency afresh. Calls and private ledgers are never
+    // promoted into the next publication's preserved source inventory.
+    this.requestStorage = storage.retainFor(this, this.requestStorage);
+    this.#retainRead(ValidatedRuntimeRegistryObservation.fromValidatedRead(registry, snapshots.get("registry.json")),
+      new Map([
+        ...[...snapshots].filter(([name]) => name === "registry.json" || name === "authority.json" || name.startsWith("archives/")),
+        ...this.requestStorage.publicationSnapshots(),
+      ]));
   }
   readArchives(archiveObservation = new RuntimeRecordObservation()) {
     return this.#readArchives(archiveObservation).map((archive) => archive.execution);
@@ -3927,10 +3959,12 @@ class ProcessRuntimeStore {
         // generation still takes the complete logical comparison below.
         if (committed !== validated && !intended.matches(committed)) fail("record-corrupt", "Published runtime differs from its exact prepared logical graph");
         for (const target of prepared.targets.filter((target) => target.removal)) this.removePreparedStage(target, target.sourceStage, prepared, selection);
-        const snapshot = this.file.readSnapshot();
-        const publication = new ValidatedRuntimeRegistryObservation(runtimeRegistryObservationAuthority, committed, snapshot);
         this.#readonlyObservation = null;
-        this.#read(archiveObservation, publication, false, prepared);
+        if (!prepared.retainReadback(this, committed)) {
+          const snapshot = this.file.readSnapshot();
+          const publication = new ValidatedRuntimeRegistryObservation(runtimeRegistryObservationAuthority, committed, snapshot);
+          this.#read(archiveObservation, publication, false, prepared);
+        }
         prepared.assertAuthority(this);
         if (!targets.every((target) => target.isPublished(this))) fail("durability-uncertain", "Runtime publication lacks an exact visible dependency");
         this.clearManagedTransitions(prepared, selection);
