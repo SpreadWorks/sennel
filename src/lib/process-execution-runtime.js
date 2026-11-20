@@ -2151,10 +2151,9 @@ class RuntimePreparedPublication {
       runtimeRegistryObservationAuthority, this, registry, snapshots, storage);
     return registry;
   }
-  retainReadback(store, registry) {
-    if (this.constructor !== RuntimePreparedPublication) return false;
-    this.#dataObservation.retain(store, registry);
-    return true;
+  canRetainReadback(registry) { return this.#dataObservation?.canRetain(this, registry) ?? false; }
+  retainReadback(store, registry, snapshots) {
+    this.#dataObservation.retain(store, registry, snapshots);
   }
   assertLogicalInventory(_registry, _inventory) {}
   assertStandaloneResults(inventory, storage, view) {
@@ -2814,14 +2813,12 @@ class ValidatedRuntimeRegistryObservation {
 class ValidatedRuntimePublicationData {
   #meaning;
   #observation;
-  #snapshots;
   #storage;
   constructor(authority, prepared, registry, snapshots, storage) {
     if (authority !== runtimeRegistryObservationAuthority) throw new TypeError("Publication data requires its complete validated readback");
     this.#meaning = new ProcessExecutionValueEncoding(prepared);
     this.#observation = new ValidatedRuntimeRegistryObservation(authority, freezeRuntimeRegistry(registry),
       snapshots.get("registry.json"), snapshots);
-    this.#snapshots = new Map(snapshots);
     this.#storage = storage;
     Object.freeze(this);
   }
@@ -2829,9 +2826,12 @@ class ValidatedRuntimePublicationData {
     if (!this.#meaning.matches(new ProcessExecutionValueEncoding(prepared))) return null;
     return this.#observation.read(snapshots.get("registry.json"), snapshots);
   }
-  retain(store, registry) {
+  canRetain(prepared, registry) {
+    return this.#meaning.matches(new ProcessExecutionValueEncoding(prepared)) && this.#observation.owns(registry);
+  }
+  retain(store, registry, snapshots) {
     if (!this.#observation.owns(registry)) throw new TypeError("Publication readback requires its exact validated registry");
-    store.retainPublicationRead(registry, this.#snapshots, this.#storage);
+    store.retainPublicationRead(registry, snapshots, this.#storage);
   }
 }
 
@@ -3517,7 +3517,7 @@ class ProcessRuntimeStore {
     this.#retainRead(ValidatedRuntimeRegistryObservation.fromValidatedRead(registry, snapshots.get("registry.json")),
       new Map([
         ...[...snapshots].filter(([name]) => name === "registry.json" || name === "authority.json" || name.startsWith("archives/")),
-        ...this.requestStorage.publicationSnapshots(),
+        ...this.requestStorage.referencedBlockPaths().map((name) => [name, snapshots.get(name)]),
       ]));
   }
   readArchives(archiveObservation = new RuntimeRecordObservation()) {
@@ -3953,14 +3953,17 @@ class ProcessRuntimeStore {
           else this.publishOwnedRuntimeStage(owned[index].file, owned[index].stage, prepared, index, selection);
           this.faultInjector({ phase: "after-runtime-dependency-publication", filePath: owned[index].file.filePath });
         }
-        const committed = prepared.validateData(this, selection, intended, archiveObservation);
-        // validateData returns the same immutable graph only after freshly
-        // matching the root and every linked physical snapshot. A changed
-        // generation still takes the complete logical comparison below.
+        const retained = prepared.canRetainReadback(validated);
+        // The prepared image already passed the complete logical validation.
+        // Exact source and owned-target generations prove the same image after
+        // publication. Check all of them before any transition cleanup, then
+        // retain only the final fresh image checked while clearing the marker.
+        const committed = retained ? validated : prepared.validateData(this, selection, intended, archiveObservation);
+        if (retained) prepared.assertPhysical(this, { committed: true });
         if (committed !== validated && !intended.matches(committed)) fail("record-corrupt", "Published runtime differs from its exact prepared logical graph");
         for (const target of prepared.targets.filter((target) => target.removal)) this.removePreparedStage(target, target.sourceStage, prepared, selection);
         this.#readonlyObservation = null;
-        if (!prepared.retainReadback(this, committed)) {
+        if (!retained) {
           const snapshot = this.file.readSnapshot();
           const publication = new ValidatedRuntimeRegistryObservation(runtimeRegistryObservationAuthority, committed, snapshot);
           this.#read(archiveObservation, publication, false, prepared);
@@ -3968,7 +3971,8 @@ class ProcessRuntimeStore {
         prepared.assertAuthority(this);
         if (!targets.every((target) => target.isPublished(this))) fail("durability-uncertain", "Runtime publication lacks an exact visible dependency");
         this.clearManagedTransitions(prepared, selection);
-        this.clearPreparedMarker(prepared, selection);
+        const captured = this.clearPreparedMarker(prepared, selection);
+        if (retained) prepared.retainReadback(this, committed, captured.snapshots());
         return this.#readonlyObservation.mutableCopy();
       } catch (cause) {
         this.#readonlyObservation = null;
@@ -4108,9 +4112,11 @@ class ProcessRuntimeStore {
     }, { preparedTransitions }), { dataRecovery: true });
   }
   clearPreparedMarker(prepared, selection) {
-    const retirement = selection.clear({ clearGuard: () => prepared.assertPhysical(this, { committed: true }) });
+    let captured;
+    const retirement = selection.clear({ clearGuard: () => { captured = prepared.assertPhysical(this, { committed: true }); } });
     if (prepared instanceof RuntimePreparedRecordMigration) this.#lastRecordMigrationPlan = null;
     retirement.retire({ retirementGuard: () => prepared.assertAuthority(this) });
+    return captured;
   }
   clearManagedTransitions(prepared, selection) {
     for (const target of prepared.targets) if (target.relativePath.endsWith(".transition")) {

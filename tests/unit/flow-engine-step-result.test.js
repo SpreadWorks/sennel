@@ -128,6 +128,8 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["ImplReviewPassedResult", "impl-review", "impl-review-passed", "completed"],
     ["ImplReviewAdvisoryResult", "impl-review", "impl-review-advisory", "completed"],
     ["ImplReviewRejectedResult", "impl-review", "impl-review-rejected", "branch-required"],
+    ["ImplReviewDeferredResult", "impl-review", "impl-review-deferred", "completed"],
+    ["ImplReviewExhaustedResult", "impl-review", "impl-review-exhausted", "user-input-required"],
     ["ImplReviewToolingResult", "impl-review", "impl-review-tooling", "user-input-required"],
     ["ImplTriageWorkerRequiredResult", "impl-triage", "impl-triage-worker-required", "loop-required"],
     ["ImplTriageRepairRequiredResult", "impl-triage", "impl-triage-repair-required", "branch-required"],
