@@ -5437,7 +5437,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #latestDraftExecutionLifecycle(resolved, binding) {
+  #latestDraftExecutionLifecycle(resolved, binding, activities = null) {
     const receiptBinding = {
       runId: binding?.runId,
       specId: binding?.specId,
@@ -5445,7 +5445,7 @@ export class CanonicalFlowManagerStore {
       attemptId: binding?.attempt?.id,
       attemptSequence: binding?.attempt?.sequence,
     };
-    const latest = this.#stepSettlementBindingActivities(resolved, receiptBinding)
+    const latest = this.#stepSettlementBindingActivities(resolved, receiptBinding, activities)
       .map((entry) => entry.result.draftSettlementReceipt)
       .filter((receipt) => receipt.executionLifecycle != null)
       .at(-1)?.executionLifecycle ?? null;
@@ -5483,7 +5483,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #settlementExecutionLifecycle({ resolved, binding, settlement, executionLifecycle }) {
+  #settlementExecutionLifecycle({ resolved, binding, settlement, executionLifecycle, activities = null }) {
     if (binding?.stepId === "spec-gate") {
       if (executionLifecycle !== undefined && executionLifecycle !== null) {
         throw new CurrentFlowStateInvariantError("Spec Gate does not use Draft execution lifecycle");
@@ -5496,7 +5496,7 @@ export class CanonicalFlowManagerStore {
       }
       return executionLifecycle;
     }
-    const latest = this.#latestDraftExecutionLifecycle(resolved, binding);
+    const latest = this.#latestDraftExecutionLifecycle(resolved, binding, activities);
     if (settlement instanceof DraftExecutionSettlement) {
       if (latest?.phase === "terminal") {
         throw new CurrentFlowStateConflictError("Draft execution is already terminal");
@@ -5521,8 +5521,9 @@ export class CanonicalFlowManagerStore {
     return latest.phase === "terminal" ? latest : null;
   }
 
-  #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt, acceptedPublication = null }) {
-    const bindingActivities = this.#stepSettlementBindingActivities(resolved, receipt.binding);
+  #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt, activities = null, acceptedPublication = null }) {
+    activities ??= this.activityLedger(resolved);
+    const bindingActivities = this.#stepSettlementBindingActivities(resolved, receipt.binding, activities);
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
     if (replay !== undefined) {
       const latest = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
@@ -5557,7 +5558,7 @@ export class CanonicalFlowManagerStore {
       }
       receipt.assertMatches({ binding, result: stepResult, settlement });
     } else {
-      const resumeReceipts = this.activityLedger(resolved)
+      const resumeReceipts = activities
         .map((entry) => entry.transition?.draftResumeReceipt ?? null)
         .filter((entry) => entry?.binding.attemptId === receipt.binding.attemptId
           && entry.binding.attemptSequence === receipt.binding.attemptSequence);
@@ -5709,12 +5710,13 @@ export class CanonicalFlowManagerStore {
       : hasImplementationStepContract(binding.stepId)
       ? this.#implementationStepReceipt({ binding, stepResult, settlement, executionLifecycle })
       : this.#stepSettlementReceipt({ binding, stepResult, settlement, executionLifecycle, artifactWrites });
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
       throw new CurrentFlowStateConflictError("Draft execution cannot continue a failed Attempt");
     }
     const replay = this.#admitStepSettlement({
-      resolved, state, binding, stepResult, settlement, receipt,
+      resolved, state, binding, stepResult, settlement, receipt, activities: snapshot.activities,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay,
       ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: false } : {}) });
@@ -5830,7 +5832,8 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({ executionContract, newlyClaimed: true });
   }
 
-  readStoredExecutionContract(input) {
+  readStoredExecutionContract({ view = null, ...input }) {
+    if (view !== null) return readStoredExecutionContractFromView(view, input);
     return this.runtime.readCanonicalTransitionView(input.binding.specId,
       (view) => readStoredExecutionContractFromView(view, input));
   }
@@ -6744,8 +6747,9 @@ export class CanonicalFlowManagerStore {
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     ({ references, artifactBaselines } = this.#draftReturnReceiptInput({ resolved, binding,
       stepResult, draftReturn, references, artifactBaselines }));
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
-      resolved, binding, settlement, executionLifecycle,
+      resolved, binding, settlement, executionLifecycle, activities: snapshot.activities,
     });
     const publishesExecutionContract = executionContract !== null && settlement.kind === "execution" && executionLifecycle?.phase === "claimed";
     const executionAdmission = executionContract === null
@@ -6835,9 +6839,9 @@ export class CanonicalFlowManagerStore {
       draftGateRepairSelection,
       preparation,
     });
-    const state = this.runtime.load(resolved);
+    const state = snapshot.state;
     const replay = this.#admitStepSettlement({
-      resolved, state, binding, stepResult, settlement, receipt,
+      resolved, state, binding, stepResult, settlement, receipt, activities: snapshot.activities,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     if (binding.stepId === "draft-gate-repair" && selectedExecutionLifecycle?.phase === "terminal"
@@ -7388,9 +7392,10 @@ export class CanonicalFlowManagerStore {
       artifactBaselines,
       planGateRepairOutcome,
     });
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     const replay = this.#admitStepSettlement({
-      resolved, state, binding, stepResult, settlement, receipt,
+      resolved, state, binding, stepResult, settlement, receipt, activities: snapshot.activities,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
@@ -7478,7 +7483,8 @@ export class CanonicalFlowManagerStore {
       new ExecutionContractPublicationAdmission(executionContract, { allowAbsent: false }));
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     const nodeId = state.current?.at(-1) ?? null;
     if (nodeId === null) throw new CurrentFlowStateInvariantError("Requirement test completion requires an active Attempt");
     let selected;
@@ -7511,7 +7517,7 @@ export class CanonicalFlowManagerStore {
       if (settlement.kind === "failure") {
         const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
           commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest, executionContract });
-        const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
+        const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding: resultBinding,
           stepResult, settlement, receipt });
         if (replay !== null) return Object.freeze({ state, receipt: replay });
         const store = new RequirementTestArtifactStore({ flowManager: this, state });
@@ -7560,7 +7566,7 @@ export class CanonicalFlowManagerStore {
         }
         const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
           commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest, executionContract });
-        const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
+        const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding: resultBinding,
           stepResult, settlement, receipt });
         if (replay !== null) return Object.freeze({ state, receipt: replay });
         const selectedPlan = currentPlan.artifact.plan;
@@ -7674,7 +7680,7 @@ export class CanonicalFlowManagerStore {
       receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement, commandResult,
         artifactWrites: writes, artifactRemovals: removals, artifactBaselines: baselines,
         testSourceBaseline, lifecycleResult: result, references, requestDigest, executionContract });
-      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+      const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding, stepResult, settlement, receipt });
       if (replay !== null) return Object.freeze({ state, receipt: replay });
     }
     const lifecycleAdmission = stepResult === null
@@ -7731,7 +7737,7 @@ export class CanonicalFlowManagerStore {
     return stepResult === null ? next : Object.freeze({ state: next, receipt });
   }
 
-  #implementationStepReceipt(input) {
+  #implementationStepReceipt(input, activities = null) {
     const { binding, stepResult, settlement, executionBinding = null, executionLifecycle = null } = input;
     const candidate = input.nonblockingPublication ?? input.gateDeferralPublication ?? input.taskStagePublication ?? input.testChainPublication ?? input.reviewPublication
       ?? input.gatePublication ?? input.reviewFailurePublication ?? input.sourceTaskReviewStage ?? null;
@@ -7756,7 +7762,7 @@ export class CanonicalFlowManagerStore {
       manifest: input.manifest?.toJSON?.() ?? null });
     let selectedLifecycle = executionLifecycle ?? (executionBinding === null ? null : DraftStepExecutionLifecycle.checkpoint(executionBinding));
     if (selectedLifecycle === null && ["task-review", "impl-review"].includes(binding.stepId) && candidate !== null) {
-      const previous = this.#latestDraftExecutionLifecycle(binding.specId, binding);
+      const previous = this.#latestDraftExecutionLifecycle(binding.specId, binding, activities);
       const boundedToolingAwait = stepResult.kind === "impl-review-tooling" && settlement instanceof ImplementationAwaitDecision;
       selectedLifecycle = previous?.phase === "claimed" ? boundedToolingAwait ? previous.published() : previous.published().terminal()
         : previous?.phase === "terminal" ? previous : null;
@@ -7773,9 +7779,10 @@ export class CanonicalFlowManagerStore {
       || settlement.sourceStepId !== stepResult.stepId || settlement.resultKind !== stepResult.kind
       || settlement.resultType !== stepResult.type) throw new CurrentFlowStateInvariantError("implementation settlement requires its exact typed Result");
     const resolved = this.#resolveSpecId(binding.specId);
-    const state = this.runtime.load(resolved);
-    const receipt = this.#implementationStepReceipt(input);
-    const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt,
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
+    const receipt = this.#implementationStepReceipt(input, snapshot.activities);
+    const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding, stepResult, settlement, receipt,
       acceptedPublication: input.nonblockingPublication ?? input.gateDeferralPublication ?? null });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     if (input.effect != null) {
@@ -7990,9 +7997,10 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateConflictError(error.message);
     }
     const resolved = this.#resolveSpecId(binding.specId);
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     const receipt = this.#finalizationStepReceipt(input);
-    const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+    const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding, stepResult, settlement, receipt });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     if (settlement.kind !== "execution" && (candidate.outbox === null || candidate.outboxAttempt === null)) {
       throw new CurrentFlowStateConflictError("Finalization outcome requires its pending claimed outbox");
@@ -8050,14 +8058,14 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({ state: next, receipt });
   }
 
-  #acceptanceStepReceipt(input) {
+  #acceptanceStepReceipt(input, activities = null) {
     const { binding, stepResult, settlement, commandResult = null,
       executionBinding = null, executionLifecycle = null } = input;
     const candidate = input.nonblockingPublication ?? input.acceptancePublication ?? null;
     const resolved = this.#resolveSpecId(binding.specId);
     let lifecycle = executionLifecycle ?? (executionBinding === null || candidate !== null || settlement.kind !== "execution" ? null : DraftStepExecutionLifecycle.checkpoint(executionBinding));
     if (lifecycle === null && candidate?.settlementAttempt == null) {
-      const previous = this.#latestDraftExecutionLifecycle(resolved, binding);
+      const previous = this.#latestDraftExecutionLifecycle(resolved, binding, activities);
       if (executionBinding !== null && previous !== null && !executionBinding.equals(previous.binding)) {
         throw new CurrentFlowStateConflictError("Acceptance completion changed the claimed execution binding");
       }
@@ -8081,11 +8089,12 @@ export class CanonicalFlowManagerStore {
       || settlement.sourceStepId !== stepResult.stepId || settlement.resultKind !== stepResult.kind
       || settlement.resultType !== stepResult.type) throw new CurrentFlowStateInvariantError("Acceptance settlement requires its exact typed Result");
     const resolved = this.#resolveSpecId(binding.specId);
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved, { required: true });
+    const state = snapshot.state;
     const candidate = input.nonblockingPublication ?? acceptancePublication;
     if (candidate instanceof NonblockingContinuationPublication) {
-      const receipt = this.#acceptanceStepReceipt(input);
-      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt, acceptedPublication: candidate });
+      const receipt = this.#acceptanceStepReceipt(input, snapshot.activities);
+      const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding, stepResult, settlement, receipt, acceptedPublication: candidate });
       if (replay !== null) return Object.freeze({ state, receipt: replay });
       return this.#settleAcceptedNonblockingResult({ resolved, binding, stepResult, settlement, receipt, candidate,
         lifecycleResult: resultWithDraftStepResult(resultFor("done", binding.stepId), binding.stepId, stepResult, receipt) });
@@ -8103,8 +8112,8 @@ export class CanonicalFlowManagerStore {
     }
     candidate?.assertCommand(commandResult);
     candidate?.assertEvidence(acceptanceSourceEvidence(stepResult));
-    const receipt = this.#acceptanceStepReceipt(input);
-    const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt,
+    const receipt = this.#acceptanceStepReceipt(input, snapshot.activities);
+    const replay = this.#admitStepSettlement({ activities: snapshot.activities, resolved, state, binding, stepResult, settlement, receipt,
       acceptedPublication: candidate?.settlementAttempt != null ? candidate : null });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     const executionContract = input.executionContract ?? null;
