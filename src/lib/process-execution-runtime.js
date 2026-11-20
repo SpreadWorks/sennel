@@ -2070,16 +2070,19 @@ class RuntimePreparedPublication {
   }
   #readData(store, intended, archiveObservation) {
     const observation = this.#capturePhysical(store);
+    const registry = this.validateCapturedData(store, observation, intended, archiveObservation);
+    this.#capturePhysical(store);
+    return registry;
+  }
+  validateCapturedData(store, observation, intended, archiveObservation) {
     const view = observation.view();
     const snapshots = view.snapshots;
     const registryTarget = this.targets.at(-1);
     if (!observation.isPublished(registryTarget) && !this.registryBefore.matches(store.file.readSnapshot())) fail("authority-mismatch", "Prepared runtime registry baseline changed");
     const observedData = this.#dataObservation?.read(this, snapshots) ?? null;
     if (observedData !== null) {
-      // Reuse only the complete logical image already decoded in this exact
-      // publication. Both complete physical observations and the enclosing
-      // current owner/selection checks still run on every readback.
-      this.#capturePhysical(store);
+      // Reuse only the logical image of these exact captured generations.
+      // The caller owns the complete fresh physical checks at both boundaries.
       if (store.checkoutAuthority === null) assertClosedRuntimeCheckout(observedData);
       return observedData;
     }
@@ -2142,7 +2145,6 @@ class RuntimePreparedPublication {
       if (captured === null && target.relativePath.endsWith(".transition")) continue;
       if (!isDeepStrictEqual(JSON.parse(captured.bytes.toString("utf8")), json(expected))) fail("record-corrupt", "Prepared private outcome differs from its canonical finish fact");
     }
-    this.#capturePhysical(store);
     if (store.checkoutAuthority === null) assertClosedRuntimeCheckout(registry);
     if (observed === null) this.#registryObservation = ValidatedRuntimeRegistryObservation.fromValidatedRead(registry, registrySnapshot, linkedSnapshots);
     // Migration adds streamed predecessor and namespace proofs; retain its
@@ -3940,9 +3942,21 @@ class ProcessRuntimeStore {
         const prepared = baseline.prepare(json({ version: RUNTIME_RECORD_VERSION, phase: "prepared-publication", checkout: this.checkout,
           runtimeIdentity: this.authority.identity, owner: owner === null ? null : new LockOwnerSession(owner.owner), ownerIdentity: owner?.stat ?? null, registryBefore, sources, directories: [...directories.values()], targets }));
         if (!prepared.registryBefore.matches(this.file.readSnapshot()) || targets.some((target) => target.isPublished(this))) fail("authority-mismatch", "Runtime preparation lost its exact baseline");
-        const validated = prepared.validateData(this, null, intended, archiveObservation);
-        if (!intended.matches(validated)) fail("record-corrupt", "Prepared physical graph differs from the complete next logical runtime");
-        const selection = this.publishPreparedMetadata(prepared);
+        let validated;
+        const validate = (observation) => {
+          validated = observation === null ? prepared.validateData(this, null, intended, archiveObservation)
+            : prepared.validateCapturedData(this, observation, intended, archiveObservation);
+          if (!intended.matches(validated)) fail("record-corrupt", "Prepared physical graph differs from the complete next logical runtime");
+        };
+        // Normal publication decodes the initial selection guard's fresh image
+        // before metadata staging. Its actual root-rename guard captures the
+        // complete graph again before the first canonical effect. Migration
+        // keeps its polymorphic validation and extra streamed source proofs.
+        const validateDuringSelection = prepared.constructor === RuntimePreparedPublication;
+        if (!validateDuringSelection) validate(null);
+        const selection = this.publishPreparedMetadata(prepared, null, {
+          validateCapturedData: validateDuringSelection ? validate : null,
+        });
         durable = true;
         this.faultInjector({ phase: "after-runtime-publication-prepared", filePath: this.transition.filePath });
         for (let index = 0; index < targets.length; index++) {
@@ -3993,15 +4007,18 @@ class ProcessRuntimeStore {
       }
     });
   }
-  publishPreparedMetadata(prepared, previous = null) {
+  publishPreparedMetadata(prepared, previous = null, { validateCapturedData = null } = {}) {
     const encoding = prepared instanceof RuntimePreparedRecordMigration
       ? this.recordMigrationContext().encoding(prepared) : new ProcessExecutionValueEncoding(prepared);
     const update = new RuntimePublicationMetadataUpdate(this.transition, encoding, runtimePublicationMetadataRoot(previous));
     try {
       const publication = update.publish({ selectGuard: () => {
-        prepared.assertPhysical(this);
+        const observation = prepared.assertPhysical(this);
         if (previous === null && (!prepared.registryBefore.matches(this.file.readSnapshot())
           || prepared.targets.some((target) => target.isPublished(this)))) fail("authority-mismatch", "Runtime preparation lost its exact baseline");
+        const validate = validateCapturedData;
+        validateCapturedData = null;
+        validate?.(observation);
       } });
       const selection = prepared instanceof RuntimePreparedRecordMigration
         ? new RuntimeRecordMigrationSelectedPublication(publication.selection, prepared) : publication.selection;
