@@ -233,7 +233,9 @@ export class RuntimePublicationMetadataSelection {
     const assertCurrent = () => { clearGuard(); this.assertCurrent(); };
     state.file.commitGuard = (event) => { original(event); assertCurrent(); };
     let publication;
-    try { assertCurrent(); publication = state.file.remove(); }
+    // The selected root is checked before reading the removal baseline. The
+    // owning semantic guard runs at AtomicFile's actual unlink boundary.
+    try { this.assertCurrent(); publication = state.file.remove(); }
     finally { state.file.commitGuard = original; }
     if (!publication.committed || state.file.readSnapshot() !== null) fail("authority-mismatch", "Runtime metadata root removal was not confirmed absent");
     return new RuntimePublicationMetadataRetirement(metadataAuthority, { file: state.file, pages: state.pages,
@@ -342,7 +344,9 @@ export class RuntimePublicationMetadataUpdate {
     this.#stage();
     const original = this.#file.commitGuard;
     const assertCurrent = () => { selectGuard(); this.#assertPrevious(); this.#assertOwnedPages(); };
-    assertCurrent();
+    // Staging changes only owned private files. Recheck their ownership here;
+    // the full semantic guard ran before staging and runs again at selection.
+    this.#assertPrevious(); this.#assertOwnedPages();
     this.#rootStage = this.#file.createStage(this.#rootWrite.bytes);
     const snapshot = this.#file.inspectStage(this.#rootStage);
     this.#rootWrite.assertBytes(snapshot.bytes);
