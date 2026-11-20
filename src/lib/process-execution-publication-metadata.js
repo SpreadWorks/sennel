@@ -88,12 +88,14 @@ export function removeRuntimePublicationFile(file, generation, { guard = () => {
   const actual = file.readSnapshot();
   if (actual === null) return;
   const original = file.commitGuard;
-  const assertCurrent = () => {
-    guard();
+  const assertGeneration = () => {
     if (!generation.matches(file.readSnapshot())) fail("authority-mismatch", "Prepared runtime cleanup refused a foreign generation");
   };
+  const assertCurrent = () => { guard(); assertGeneration(); };
   file.commitGuard = (event) => { original(event); assertCurrent(); };
-  try { assertCurrent(); file.remove(); }
+  // Preserve the early foreign-generation refusal and its exact error. The
+  // initial semantic guard is repeated only at the actual unlink boundary.
+  try { assertGeneration(); file.remove(); }
   finally { file.commitGuard = original; }
 }
 

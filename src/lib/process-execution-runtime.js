@@ -3939,7 +3939,6 @@ class ProcessRuntimeStore {
         parentObservation.complete();
         const prepared = baseline.prepare(json({ version: RUNTIME_RECORD_VERSION, phase: "prepared-publication", checkout: this.checkout,
           runtimeIdentity: this.authority.identity, owner: owner === null ? null : new LockOwnerSession(owner.owner), ownerIdentity: owner?.stat ?? null, registryBefore, sources, directories: [...directories.values()], targets }));
-        prepared.assertAuthority(this);
         if (!prepared.registryBefore.matches(this.file.readSnapshot()) || targets.some((target) => target.isPublished(this))) fail("authority-mismatch", "Runtime preparation lost its exact baseline");
         const validated = prepared.validateData(this, null, intended, archiveObservation);
         if (!intended.matches(validated)) fail("record-corrupt", "Prepared physical graph differs from the complete next logical runtime");
@@ -3947,7 +3946,8 @@ class ProcessRuntimeStore {
         durable = true;
         this.faultInjector({ phase: "after-runtime-publication-prepared", filePath: this.transition.filePath });
         for (let index = 0; index < targets.length; index++) {
-          prepared.assertAuthority(this);
+          // Each effect below rechecks the full selected authority after its
+          // AtomicFile fault boundary; this probe performs no publication.
           if (targets[index].isPublished(this)) fail("authority-mismatch", "An unpublished owned runtime stage unexpectedly reached its target");
           if (targets[index].removal) this.retireOwnedRuntimeBlock(prepared, index, selection);
           else this.publishOwnedRuntimeStage(owned[index].file, owned[index].stage, prepared, index, selection);
@@ -3968,7 +3968,6 @@ class ProcessRuntimeStore {
           const publication = new ValidatedRuntimeRegistryObservation(runtimeRegistryObservationAuthority, committed, snapshot);
           this.#read(archiveObservation, publication, false, prepared);
         }
-        prepared.assertAuthority(this);
         if (!targets.every((target) => target.isPublished(this))) fail("durability-uncertain", "Runtime publication lacks an exact visible dependency");
         this.clearManagedTransitions(prepared, selection);
         const captured = this.clearPreparedMarker(prepared, selection);
