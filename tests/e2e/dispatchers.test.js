@@ -144,7 +144,8 @@ describe("sennel dispatcher", () => {
   });
 
   it("routes 'hook list --json' and includes the current configured command", () => {
-    const tmp = createHookConfigProject("printf hook-json");
+    const command = { kind: "node-script", script: "hook-json.js", args: ["{{CWD}}"] };
+    const tmp = createHookConfigProject(command);
     try {
       const result = execFileSync("node", [SENNEL, "hook", "list", "--json"], {
         encoding: "utf8",
@@ -153,7 +154,7 @@ describe("sennel dispatcher", () => {
       const hooks = JSON.parse(result);
       const postWorktree = hooks.find((hook) => hook.name === "PostWorktree");
       assert.ok(postWorktree);
-      assert.equal(postWorktree.command, "printf hook-json");
+      assert.deepEqual(postWorktree.command, command);
       assert.deepEqual(postWorktree.placeholders, ["CWD"]);
     } finally {
       removeTmpDir(tmp);

@@ -33,6 +33,7 @@ import { todayLocal, readJsonl } from "../../support/infrastructure/log-fixtures
 import { FlowRepositoryRuntimeArtifactRegistry } from "../../../src/flow/lib/flow-repository-runtime-artifacts.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 function initRepo(dir) {
   initGitRepo(dir);
@@ -48,11 +49,19 @@ function registerLogger(logDir) {
   return logger;
 }
 
+function ownedFixtureControlRoot(t, prefix) {
+  const root = createTestDirectory(prefix);
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
+  return root;
+}
+
 describe("runGit — basic logging", () => {
   let tmpDir;
+  let controlRoot;
   let logger;
 
-  beforeEach(() => {
+  beforeEach((t) => {
+    controlRoot = ownedFixtureControlRoot(t, "rungit-control-");
     tmpDir = createTestDirectory("rungit-");
     initRepo(tmpDir);
     logger = registerLogger(path.join(tmpDir, "logs"));
@@ -102,11 +111,11 @@ describe("runGit — basic logging", () => {
     const untracked = "untracked.txt";
     fs.writeFileSync(path.join(tmpDir, committedDeletion), "committed deletion\n");
     fs.writeFileSync(path.join(tmpDir, trackedDeletion), "tracked deletion\n");
-    runCmd("git", ["-C", tmpDir, "add", committedDeletion, trackedDeletion]);
-    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "add deletion fixtures"]);
+    runCmd("git", ["-C", tmpDir, "add", committedDeletion, trackedDeletion], { cwd: tmpDir, repositoryRoot: controlRoot });
+    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "add deletion fixtures"], { cwd: tmpDir, repositoryRoot: controlRoot });
     fs.unlinkSync(path.join(tmpDir, committedDeletion));
-    runCmd("git", ["-C", tmpDir, "add", "-A", "--", committedDeletion]);
-    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "commit one deletion"]);
+    runCmd("git", ["-C", tmpDir, "add", "-A", "--", committedDeletion], { cwd: tmpDir, repositoryRoot: controlRoot });
+    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "commit one deletion"], { cwd: tmpDir, repositoryRoot: controlRoot });
     fs.unlinkSync(path.join(tmpDir, trackedDeletion));
     fs.writeFileSync(path.join(tmpDir, untracked), "untracked\n");
 
@@ -128,9 +137,9 @@ describe("runGit — basic logging", () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "ignored*.txt\n");
     fs.writeFileSync(path.join(tmpDir, "tracked.txt"), "tracked\n");
     fs.writeFileSync(path.join(tmpDir, "ignored-tracked.txt"), "tracked despite ignore\n");
-    assert.equal(runCmd("git", ["-C", tmpDir, "add", "--", ".gitignore", "tracked.txt"]).ok, true);
-    assert.equal(runCmd("git", ["-C", tmpDir, "add", "-f", "--", "ignored-tracked.txt"]).ok, true);
-    assert.equal(runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "seed exact file selection"]).ok, true);
+    assert.equal(runCmd("git", ["-C", tmpDir, "add", "--", ".gitignore", "tracked.txt"], { cwd: tmpDir, repositoryRoot: controlRoot }).ok, true);
+    assert.equal(runCmd("git", ["-C", tmpDir, "add", "-f", "--", "ignored-tracked.txt"], { cwd: tmpDir, repositoryRoot: controlRoot }).ok, true);
+    assert.equal(runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "seed exact file selection"], { cwd: tmpDir, repositoryRoot: controlRoot }).ok, true);
     fs.unlinkSync(path.join(tmpDir, "tracked.txt"));
     fs.writeFileSync(path.join(tmpDir, "ignored-new.txt"), "ignored\n");
     fs.writeFileSync(path.join(tmpDir, "allowed [literal].txt"), "allowed\n");
@@ -174,8 +183,8 @@ describe("runGit — basic logging", () => {
     const literalPath = "src/routes/[dataKey]/page.js";
     fs.mkdirSync(path.dirname(path.join(tmpDir, literalPath)), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, literalPath), "export const page = true;\n");
-    runCmd("git", ["-C", tmpDir, "add", "--", `:(literal)${literalPath}`]);
-    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "add literal route"]);
+    runCmd("git", ["-C", tmpDir, "add", "--", `:(literal)${literalPath}`], { cwd: tmpDir, repositoryRoot: controlRoot });
+    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "add literal route"], { cwd: tmpDir, repositoryRoot: controlRoot });
 
     const resolved = GitCommitPathSet.resolve({
       root: tmpDir,
@@ -196,7 +205,7 @@ describe("runGit — worktree regression (R2)", () => {
     mainDir = createTestDirectory("rungit-main-");
     initRepo(mainDir);
     worktreeDir = path.join(testTemporaryRoot().path, `rungit-wt-${Date.now()}`);
-    const r = runCmd("git", ["-C", mainDir, "worktree", "add", "-b", "feature-x", worktreeDir]);
+    const r = runCmd("git", ["-C", mainDir, "worktree", "add", "-b", "feature-x", worktreeDir], { cwd: mainDir });
     if (!r.ok) throw new Error("worktree add failed: " + r.stderr);
 
     // Simulate container init with main-repo-side log dir (matches buildPaths behavior).
@@ -205,7 +214,7 @@ describe("runGit — worktree regression (R2)", () => {
 
   afterEach(async () => {
     await logger.flush();
-    runCmd("git", ["-C", mainDir, "worktree", "remove", "--force", worktreeDir]);
+    runCmd("git", ["-C", mainDir, "worktree", "remove", "--force", worktreeDir], { cwd: mainDir });
     fs.rmSync(mainDir, { recursive: true, force: true });
     fs.rmSync(worktreeDir, { recursive: true, force: true });
     container.reset();
@@ -254,16 +263,18 @@ describe("runCmd no longer logs git commands", () => {
 
 describe("getWorktreeStatus pathspec exclusions", () => {
   let tmpDir;
+  let controlRoot;
 
-  beforeEach(() => {
+  beforeEach((t) => {
     tmpDir = createTestDirectory("worktree-status-excludes-");
+    controlRoot = ownedFixtureControlRoot(t, "worktree-status-control-");
     initRepo(tmpDir);
     container.reset();
     fs.mkdirSync(path.join(tmpDir, ".sennel"));
     fs.writeFileSync(path.join(tmpDir, ".sennel", "config.json"), "{}\n");
-    const added = runGit(["add", ".sennel/config.json"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
+    const added = runGit(["add", ".sennel/config.json"], { cwd: tmpDir, repositoryRoot: controlRoot });
     assert.equal(added.ok, true, added.stderr);
-    const committed = runGit(["commit", "-q", "-m", "Track project config"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
+    const committed = runGit(["commit", "-q", "-m", "Track project config"], { cwd: tmpDir, repositoryRoot: controlRoot });
     assert.equal(committed.ok, true, committed.stderr);
   });
 
@@ -357,11 +368,11 @@ describe("getWorktreeStatus pathspec exclusions", () => {
     fs.mkdirSync(sibling);
     fs.writeFileSync(path.join(cwd, ".sennel", "config.json"), "{}\n");
     fs.writeFileSync(path.join(sibling, "README.md"), "sibling seed\n");
-    const added = runGit(["add", "packages"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
+    const added = runGit(["add", "packages"], { cwd: tmpDir, repositoryRoot: controlRoot });
     assert.equal(added.ok, true, added.stderr);
-    const committed = runGit(["commit", "-q", "-m", "Track configured nested project"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
+    const committed = runGit(["commit", "-q", "-m", "Track configured nested project"], { cwd: tmpDir, repositoryRoot: controlRoot });
     assert.equal(committed.ok, true, committed.stderr);
-    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
+    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir, repositoryRoot: controlRoot });
     assert.equal(configured.ok, true, configured.stderr);
 
     fs.mkdirSync(path.join(cwd, ".sennel", "process-runtime"), { recursive: true });
@@ -508,8 +519,10 @@ describe("listChangedFilesDetailed pathspec exclusions", () => {
 
 describe("Git porcelain v2 difference authority", () => {
   let tmpDir;
+  let controlRoot;
 
-  beforeEach(() => {
+  beforeEach((t) => {
+    controlRoot = ownedFixtureControlRoot(t, "git-status-v2-control-");
     tmpDir = createTestDirectory("git-status-v2-");
     initRepo(tmpDir);
     container.reset();
@@ -550,8 +563,8 @@ describe("Git porcelain v2 difference authority", () => {
     for (const relativePath of [ordinary, deleted, typeChanged]) {
       fs.writeFileSync(path.join(tmpDir, relativePath), `${relativePath}\n`);
     }
-    runCmd("git", ["-C", tmpDir, "add", "--", ordinary, deleted, typeChanged]);
-    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "status fixtures"]);
+    runCmd("git", ["-C", tmpDir, "add", "--", ordinary, deleted, typeChanged], { cwd: tmpDir, repositoryRoot: controlRoot });
+    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "status fixtures"], { cwd: tmpDir, repositoryRoot: controlRoot });
     fs.writeFileSync(path.join(tmpDir, ordinary), "changed\n");
     fs.unlinkSync(path.join(tmpDir, deleted));
     fs.unlinkSync(path.join(tmpDir, typeChanged));
@@ -570,10 +583,10 @@ describe("Git porcelain v2 difference authority", () => {
   });
 
   it("supports scoped typed status with detected file modes while preserving the raw index and default arguments", async () => {
-    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"]);
+    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"], { cwd: tmpDir, repositoryRoot: controlRoot });
     const stagedPath = "staged source.json";
     fs.writeFileSync(path.join(tmpDir, stagedPath), "independent staged blob\n");
-    runCmd("git", ["-C", tmpDir, "add", "--", stagedPath]);
+    runCmd("git", ["-C", tmpDir, "add", "--", stagedPath], { cwd: tmpDir, repositoryRoot: controlRoot });
     fs.writeFileSync(path.join(tmpDir, stagedPath), "authentic working bytes\n");
     fs.writeFileSync(path.join(tmpDir, "README.md"), "parent user edit\n");
     const cwd = path.join(tmpDir, "packages", "app");
@@ -614,7 +627,7 @@ describe("Git porcelain v2 difference authority", () => {
   });
 
   it("forces executable-bit observation when repository core.fileMode is false", () => {
-    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"]);
+    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"], { cwd: tmpDir, repositoryRoot: controlRoot });
     const readme = path.join(tmpDir, "README.md");
     fs.chmodSync(readme, 0o755);
 

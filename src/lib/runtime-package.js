@@ -12,7 +12,7 @@ import { runCmd, runManagedCmdAsync } from "./process.js";
 import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { ProcessExecutionStopReceipt } from "./process-execution-values.js";
-import { immutableCommandEnvironment } from "./command-invocation.js";
+import { immutableCommandEnvironment, nativeCommandEnvironment } from "./command-invocation.js";
 
 export { RuntimePackageIdentity } from "./runtime-package-identity.js";
 
@@ -199,7 +199,7 @@ export class RuntimeChildExecution {
   }
   options(options = {}) {
     this.#assertOpen();
-    return { ...options, env: this.environment, stdio: options.stdio ?? ["pipe", "pipe", "pipe"] };
+    return { ...options, env: nativeCommandEnvironment(this.environment), stdio: options.stdio ?? ["pipe", "pipe", "pipe"] };
   }
   /** Workers must not inherit the parent's test/preload argv or a shared environment. */
   workerOptions(options = {}) {

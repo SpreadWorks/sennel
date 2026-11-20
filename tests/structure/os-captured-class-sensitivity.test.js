@@ -52,8 +52,8 @@ function inspect(context = { Type: Metadata }) { return context.Type; }
 inspect();`));
 });
 test("a class capture retains a later bound filesystem capability", () => {
-  const report = check(`const fs = require('node:fs'); class Metadata {}
-function inspect(Type = Metadata, read = fs.readFileSync) {
+  const report = check(`const fs = require('node:fs');
+function inspect(Type = class Metadata { reader() { return read; } }, read = fs.readFileSync) {
   unknownConsumer(Type);
 }
 inspect();`);
@@ -61,23 +61,23 @@ inspect();`);
 });
 test("a class capture retains a later bound native path", () => {
   const report = check(`class Metadata {}
-function inspect(Type = Metadata, file = '/proc/self/stat') {
+function inspect(Type = class Metadata { path() { return file; } }, file = '/proc/self/stat') {
   unknownConsumer(Type);
 }
 inspect();`);
   escape(report, 3);
 });
 test("array capture cycles retain later bound filesystem capabilities", () => {
-  const report = check(`const fs = require('node:fs'); class Metadata {}
-function inspect(context = [Metadata], read = fs.readFileSync) {
+  const report = check(`const fs = require('node:fs');
+function inspect(context = [class Metadata { reader() { return read; } }], read = fs.readFileSync) {
   unknownConsumer(context[0]);
 }
 inspect();`);
   escape(report, 3);
 });
 test("object capture cycles retain later bound filesystem capabilities", () => {
-  const report = check(`const fs = require('node:fs'); class Metadata {}
-function inspect(context = { Type: Metadata }, read = fs.readFileSync) {
+  const report = check(`const fs = require('node:fs');
+function inspect(context = { Type: class Metadata { reader() { return read; } } }, read = fs.readFileSync) {
   unknownConsumer(context.Type);
 }
 inspect();`);

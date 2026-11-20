@@ -95,10 +95,10 @@ inspect('/proc/self/stat');`);
     && item.classification === "violation"), report.diagnostics.join("\n"));
 });
 
-test("escaping class metadata retains its current invocation input environment", () => {
+test("escaping nested class metadata retains its lexical input environment", () => {
   const report = check(`const fs = require('node:fs');
 class Metadata {}
-function metadata(input) { return Metadata; }
+function metadata(input) { return class Metadata { reader() { return input; } }; }
 opaque(metadata('snapshot.json'));
 opaque(metadata(fs.readFileSync));`);
   assert.equal(report.complete, false);

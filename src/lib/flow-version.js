@@ -10,7 +10,7 @@ import { AtomicJsonFile, AtomicJsonWriteError } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessExecutionRuntime } from "./process-execution-runtime.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { RealDirectoryAuthority, RealDirectoryTreeLimitError } from "./real-directory-authority.js";
 import {
   captureRegularFile,
   RegularFileCaptureRequest,
@@ -188,14 +188,16 @@ function assertFilesystemAuthority(authority, target, { mustExist = false } = {}
   const resolved = path.resolve(target);
   const directoryAuthority = resolved !== root ? new NativeAbsolutePath(resolved).resolveAuthority(authority).directoryAuthority : null;
   if (resolved === root) authority.assertStable();
-  if (mustExist) {
-    try { fs.lstatSync(resolved); }
-    catch (cause) {
-      if (cause.code === "ENOENT") throw new Error(`Version authority path does not exist: ${path.relative(root, resolved)}`, { cause });
-      throw cause;
-    }
-  }
+  if (mustExist) assertPathExists(root, resolved);
   return directoryAuthority;
+}
+
+function assertPathExists(root, resolved) {
+  try { fs.lstatSync(resolved); }
+  catch (cause) {
+    if (cause.code === "ENOENT") throw new Error(`Version authority path does not exist: ${path.relative(root, resolved)}`, { cause });
+    throw cause;
+  }
 }
 
 function catalogManagedPath(value) {
@@ -209,20 +211,18 @@ function knownNoncatalogedPath(value) {
 
 function managedFiles(location, {
   authority = location.repositoryAuthority.descendant(location.directory),
-  result = [],
-  scan = { count: 0 },
   maxEntries = Infinity,
 } = {}) {
-  for (const entry of authority.entries({ withFileTypes: true })) {
-    scan.count += 1;
-    if (scan.count > maxEntries) throw new Error("Version storage entry count exceeds the managed artifact limit");
-    const absolute = path.join(authority.directory, entry.name);
-    const rel = path.relative(location.directory, absolute).split(path.sep).join("/");
-    // `.runtime/` is the sole explicitly transient subtree. Its contents
-    // include locks and untrusted worker handoff work units, so catalog
-    // verification must neither classify nor recursively inspect them. The
-    // root itself remains a real directory authority; a symlink there would
-    // still escape the Version and is rejected.
+  let observed;
+  try { observed = authority.observeTreeEntries({ pruneDirectories: [".runtime"], maxEntries }); }
+  catch (error) {
+    if (error instanceof RealDirectoryTreeLimitError) throw new Error("Version storage entry count exceeds the managed artifact limit");
+    throw error;
+  }
+  const result = [];
+  for (const entry of observed.entries) {
+    const rel = entry.relativePath.split(path.sep).join("/");
+    // The transient subtree is not traversed; its entry remains kind-checked.
     if (rel === ".runtime") {
       if (!entry.isDirectory() || entry.isSymbolicLink()) {
         throw new Error("Version runtime authority must be a real directory");
@@ -230,18 +230,13 @@ function managedFiles(location, {
       continue;
     }
     if (entry.isSymbolicLink()) throw new Error(`Version storage must not contain symbolic links: ${rel}`);
-    if (entry.isDirectory()) {
-      managedFiles(location, { authority: authority.descendant(absolute), result, scan, maxEntries });
-      continue;
-    }
+    if (entry.isDirectory()) continue;
     if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${rel}`);
-    const stat = fs.lstatSync(absolute);
-    if (stat.nlink !== 1) throw new Error(`Version storage artifact must not be hard linked: ${rel}`);
+    if (entry.linkCount !== 1) throw new Error(`Version storage artifact must not be hard linked: ${rel}`);
     if (rel === ARTIFACT_CATALOG_RELATIVE_PATH || VERSION_TRANSIENT_FILES.has(rel) || knownNoncatalogedPath(rel)) continue;
     if (!catalogManagedPath(rel)) throw new Error(`Version storage contains an unclassified artifact: ${rel}`);
     result.push(rel);
   }
-  authority.assertStable();
   return result.sort(codeUnitOrder);
 }
 
@@ -261,13 +256,32 @@ async function readBoundedRealFile(location, file, maxBytes) {
     requireSingleLink: true }).bytes;
 }
 
+/** One transaction-image file, captured by the shared fresh forest reader. */
+class VersionTreeFileCapture extends RegularFileCaptureRequest {
+  #relativePath;
+  constructor(absolute, relative, directoryAuthority) {
+    super(absolute, { label: `Version storage artifact ${relative}`,
+      maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true, directoryAuthority });
+    this.#relativePath = relative;
+  }
+  toTreeEntry(snapshots) {
+    return new FileTreeEntry(this.#relativePath, snapshots.get(this.filePath).bytes);
+  }
+}
+
 export class VersionTreeSnapshot {
   constructor(location, { image = null } = {}) {
     this.location = location;
     this.authority = new RealDirectoryAuthority(location.directory);
     if (image !== null && !(image instanceof FileTreeImage)) throw new TypeError("Version tree snapshot requires a FileTreeImage");
-    const entries = image === null ? [new DirectoryTreeEntry("")] : image.entries;
-    if (image === null) this.#capture(location.directory, entries);
+    let entries = image === null ? [new DirectoryTreeEntry("")] : image.entries;
+    if (image === null) {
+      const captures = [], authorities = [];
+      this.#capture(location.directory, entries, captures, authorities);
+      const snapshots = RegularFileSnapshotGroup.capture(captures);
+      RealDirectoryAuthority.assertAllStable(authorities);
+      entries = entries.map(entry => entry instanceof VersionTreeFileCapture ? entry.toTreeEntry(snapshots) : entry);
+    }
     this.image = image ?? new FileTreeImage(entries);
     for (const entry of this.image.entries) {
       if (entry.path === ".runtime" || entry.path.startsWith(".runtime/")) throw new Error("Version transaction image is runtime-owned");
@@ -277,8 +291,9 @@ export class VersionTreeSnapshot {
     }
     Object.freeze(this);
   }
-  #capture(directory, entries) {
+  #capture(directory, entries, captures, authorities) {
     const authority = this.authority.descendant(directory);
+    authorities.push(authority);
     for (const entry of authority.entries({ withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(this.location.directory, absolute).split(path.sep).join("/");
@@ -292,13 +307,13 @@ export class VersionTreeSnapshot {
       if (VERSION_TRANSIENT_FILES.has(relative) || (relative !== ARTIFACT_CATALOG_RELATIVE_PATH && knownNoncatalogedPath(relative))) continue;
       if (entry.isDirectory()) {
         entries.push(new DirectoryTreeEntry(relative));
-        this.#capture(absolute, entries);
+        this.#capture(absolute, entries, captures, authorities);
         continue;
       }
       if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${relative}`);
-      const snapshot = captureRegularFile(absolute, { label: `Version storage artifact ${relative}`,
-        maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true, directoryAuthority: authority });
-      entries.push(new FileTreeEntry(relative, snapshot.bytes));
+      const capture = new VersionTreeFileCapture(absolute, relative, authority);
+      captures.push(capture);
+      entries.push(capture);
     }
     authority.assertStable();
     this.authority.assertStable();
@@ -780,6 +795,12 @@ export class FlowVersionLocation {
   fileDirectoryAuthority(value, options = {}) {
     return assertFilesystemAuthority(this.#repositoryAuthority, this.resolve(value), options);
   }
+  fileDirectoryAuthorities(values, { mustExist = false } = {}) {
+    const paths = values.map(value => new NativeAbsolutePath(this.resolve(value)));
+    const resolutions = NativeAbsolutePath.resolveAuthorities(this.#repositoryAuthority, paths);
+    if (mustExist) for (const native of paths) assertPathExists(this.repositoryRoot, native.value);
+    return Object.freeze(resolutions.map(value => value.directoryAuthority));
+  }
   relativePath(value) { return path.posix.join(this.relativeDirectory, relativePath(value, "version-relative path")); }
   resolve(value) { return path.join(this.directory, ...relativePath(value, "version-relative path").split("/")); }
   /** Migration-only preservation location; normal callers use artifact(logicalKey). */
@@ -1085,15 +1106,15 @@ class FlowArtifactCaptureBatch {
     }
     this.#location = location;
     this.artifacts = Object.freeze([...artifacts]);
-    const directories = new Map();
-    const requests = this.artifacts.map((artifact) => {
-      const filePath = location.resolve(artifact.relativePath);
-      const parent = path.dirname(filePath);
-      if (!directories.has(parent)) {
-        directories.set(parent, location.fileDirectoryAuthority(artifact.relativePath, { mustExist: true }));
-      }
-      return new FlowArtifactCaptureRequest(location, artifact, directories.get(parent));
-    });
+    const representatives = new Map();
+    for (const artifact of this.artifacts) {
+      const directory = path.dirname(location.resolve(artifact.relativePath));
+      if (!representatives.has(directory)) representatives.set(directory, artifact.relativePath);
+    }
+    const captured = location.fileDirectoryAuthorities([...representatives.values()], { mustExist: true });
+    const directories = new Map([...representatives.keys()].map((directory, index) => [directory, captured[index]]));
+    const requests = this.artifacts.map(artifact =>
+      new FlowArtifactCaptureRequest(location, artifact, directories.get(path.dirname(location.resolve(artifact.relativePath)))));
     this.#snapshots = RegularFileSnapshotGroup.capture(requests);
     Object.freeze(this);
   }

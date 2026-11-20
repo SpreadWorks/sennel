@@ -7,7 +7,9 @@ export class GitCommandExecution extends CommandExecution {
     const { gitPolicy = new GitRepositoryPolicy({ repositoryRoot: opts.cwd ?? null }), env = process.env, cwd, stdio, ...executionOptions } = opts;
     if (!(gitPolicy instanceof GitRepositoryPolicy)) throw new TypeError("gitPolicy must be a GitRepositoryPolicy");
     super(gitPolicy.invocation(args, { cwd: cwd ?? null, env, stdio: stdio ?? "pipe" }), [],
-      { ...executionOptions, readOnly: gitPolicy.readOnly });
+      { ...executionOptions, readOnly: gitPolicy.readOnly,
+        retainedControl: !gitPolicy.readOnly && executionOptions.repositoryRoot == null
+          && executionOptions.processExecutionBinding === undefined });
   }
 }
 

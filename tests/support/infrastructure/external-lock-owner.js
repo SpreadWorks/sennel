@@ -2,6 +2,8 @@ import { createTmpDir as createTestDirectory } from "../builders/tmp-dir.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
 function waitForFile(filePath, completion) {
   if (fs.existsSync(filePath)) return Promise.resolve();
@@ -44,18 +46,11 @@ export class ExternalProcessLockOwner {
     this.readyPath = path.join(this.supportRoot, "ready");
     this.stderr = "";
     this.stdinError = null;
-    const fileLockModule = new URL("../../../src/lib/file-lock.js", import.meta.url).href;
-    const authorityModule = new URL("../../../src/lib/real-directory-authority.js", import.meta.url).href;
-    const script = [
-      `import fs from ${JSON.stringify("node:fs")};`,
-      `import { FileLock, FileLockWaitPolicy } from ${JSON.stringify(fileLockModule)};`,
-      `import { RealDirectoryAuthority } from ${JSON.stringify(authorityModule)};`,
-      `const lock = new FileLock({ directoryAuthority: new RealDirectoryAuthority(${JSON.stringify(directory)}), fileName: ${JSON.stringify(fileName)}, kind: ${JSON.stringify(kind)}, authority: ${JSON.stringify(authority)}, waitPolicy: new FileLockWaitPolicy(${JSON.stringify(waitPolicy)}) });`,
-      "process.stdin.once('data', () => { lock.release(); process.exit(0); });",
-      "lock.acquire();",
-      `fs.writeFileSync(${JSON.stringify(this.readyPath)}, "ready");`,
-    ].join("\n");
-    this.child = spawn(process.execPath, ["--input-type=module", "--eval", script], { stdio: ["pipe", "ignore", "pipe"] });
+    const invocation = new NativeExecutableInvocation({ executable: process.execPath,
+      args: [fileURLToPath(new URL("./external-lock-owner-worker.mjs", import.meta.url)),
+        JSON.stringify({ directory, fileName, kind, authority, waitPolicy, readyPath: this.readyPath })],
+      stdio: ["pipe", "ignore", "pipe"] });
+    this.child = spawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });
     this.child.stderr.on("data", (chunk) => { this.stderr += chunk; });
     this.child.stdin.on("error", (error) => { this.stdinError ??= error; });
     this.completion = new Promise((resolve, reject) => {

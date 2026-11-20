@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { Worker } from "node:worker_threads";
 import { setTimeout as delay } from "node:timers/promises";
 import { ProcessExecutionCoordinator, ProcessExecutionRuntime, ProcessExecutionGrant } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessExecutorIdentity, ChildExitObservation, ProcessOutputState, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
@@ -18,6 +19,8 @@ import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocatio
 import { ProcessExecutionControlEndpoint } from "../../../src/lib/process-execution-endpoint.js";
 import { testTemporaryRoot } from "../../test-environment.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { InitialInventoryObservationGate, InitialInventoryCatchCheckpoint }
+  from "../../support/infrastructure/initial-inventory-observation.js";
 
 class ExclusiveBarrier {
   constructor() {
@@ -27,7 +30,7 @@ class ExclusiveBarrier {
   async hold() { this.markEntered(); await this.released; }
 }
 
-function fixture(t, { beforeClose = null } = {}) {
+function fixture(t, { beforeClose = null, beforeConstruct = null } = {}) {
   const root = createTmpDir("coordinator-inflight-");
   let coordinator;
   t.after(async () => {
@@ -46,6 +49,7 @@ function fixture(t, { beforeClose = null } = {}) {
   const endpointWorkspace = ReadOnlyInvocationWorkspace.create();
   const endpoint = ProcessExecutionControlEndpoint.create(endpointWorkspace.processRuntimeStorage(), root).toJSON();
   const { responses } = endpoint.mailbox;
+  beforeConstruct?.({ root, endpoint });
   coordinator = new ProcessExecutionCoordinator({ mainRoot: root,
     endpoint,
     publishResponse(response) {
@@ -62,6 +66,211 @@ function committedRequest(coordinator, requestId) {
 function eventsRequest(grant, requestId = randomUUID()) {
   return new ManagedProcessMessage(grant, "events", { grant, data: {} }, { requestId });
 }
+
+test("a first-start inventory reader reobserves genuine registry absence after the staged writer commits", { timeout: 45000 }, async t => {
+  const gate = new InitialInventoryObservationGate();
+  let checkpoint;
+  let worker, observed, writerHook, coordinator, grant, call, request;
+  let writerBefore, stageObservation, writerFinished, observation;
+  const proofPath = path.join(testTemporaryRoot().path, `initial-inventory-observation-${randomUUID()}.json`);
+  const saveProof = (cause = null) => {
+    const target = cause === null ? proofPath : `${proofPath}.failure.json`;
+    fs.writeFileSync(target, JSON.stringify({ writerBefore, stageObservation, writerFinished,
+      writerInitialCaptureCompleted: writerBefore?.captureCompleted === true,
+      observationReceived: observation !== undefined, observation, checkpoint: checkpoint?.toJSON(),
+      requestId: request?.requestId,
+      actualRecordCorruptError: observation?.error?.typedControlFailure === true
+        && observation.error.reason === "record-corrupt" && observation.error.code === "PROCESS_EXECUTION_RECORD_CORRUPT",
+      originalFailure: cause === null ? null : { name: cause.name, code: cause.code,
+        message: cause.message, stack: String(cause.stack).split("\n").slice(0, 10).join("\n") },
+      regressionQualification: "Requires every fixture premise before the final success assertion, and a separate same-input after-fix pass; other errors or exhausted setup timing do not qualify" }, null, 2), { flag: "wx" });
+  };
+  t.after(async () => {
+    gate.abort();
+    writerHook?.mock.restore();
+    if (worker) await worker.terminate();
+  });
+  try {
+    checkpoint = InitialInventoryCatchCheckpoint.capture(
+      new URL("../../../src/lib/process-execution-runtime.js", import.meta.url));
+    const value = fixture(t, {
+      beforeConstruct({ root }) {
+        worker = new Worker(new URL("../../fixtures/process-runtime-initial-inventory-observer.mjs", import.meta.url),
+          { workerData: { mainRoot: root, state: gate.buffer, checkpoint: checkpoint.toJSON() } });
+        observed = once(worker, "message").then(([result]) => result,
+          error => ({ workerError: { name: error.name, message: error.message, stack: error.stack } }));
+        assert.equal(gate.wait("ready"), true, "bootstrap must finish before initial absence is observed");
+        const original = AtomicFile.prototype.readSnapshot;
+        const prefix = path.join(root, ".sennel", "process-runtime") + path.sep;
+        writerHook = t.mock.method(AtomicFile.prototype, "readSnapshot", function () {
+          const snapshot = Reflect.apply(original, this, []);
+          if (writerBefore === undefined && this.filePath.startsWith(prefix)
+            && path.basename(this.filePath) === "registry.json") {
+            writerBefore = { filePath: this.filePath, captureCompleted: true, missing: snapshot === null };
+            gate.mark("start");
+            writerBefore.readerCaptured = gate.wait("before");
+          }
+          return snapshot;
+        });
+      },
+      async beforeClose() {
+        if (!coordinator) return;
+        coordinator.store.faultInjector = () => {};
+        if (call) {
+          const revoked = await coordinator.handle(new ManagedProcessMessage(grant, "revoke-reservation", { grant,
+            data: { call: { callId: call.callId, capability: call.capability, bindingDigest: grant.bindingDigest } } }));
+          assert.equal(revoked.payload.ok, true);
+        }
+      },
+    });
+    ({ coordinator, grant } = value);
+    writerHook.mock.restore();
+    writerHook = null;
+    request = new ManagedProcessMessage(grant, "reserve", { grant, data: { binding: null, graceMs: 500 } });
+    coordinator.store.faultInjector = ({ phase, filePath, tempPath }) => {
+      if (stageObservation !== undefined || phase !== "before-runtime-dependency-temp-close"
+        || !filePath.includes(`${path.sep}requests${path.sep}`)
+        || path.basename(path.dirname(filePath)) !== "blocks") return;
+      const snapshot = coordinator.store.file.readSnapshot();
+      stageObservation = { phase, filePath, tempPath, exists: fs.existsSync(tempPath),
+        transitionAbsent: coordinator.store.transition.readSnapshot() === null,
+        registry: snapshot === null ? null : { digest: snapshot.digest, identity: snapshot.identity.toJSON(), bytes: snapshot.byteLength } };
+      gate.mark("stage");
+      stageObservation.readerReachedAfter = gate.wait("after");
+    };
+    const reserved = await coordinator.handle(request);
+    assert.equal(reserved.payload.ok, true);
+    call = reserved.payload.value;
+    coordinator.store.faultInjector = () => {};
+    const snapshot = coordinator.store.file.readSnapshot();
+    writerFinished = { transitionAbsent: coordinator.store.transition.readSnapshot() === null,
+      admissionAbsent: coordinator.store.admission.inspect() === null,
+      registry: snapshot === null ? null : { digest: snapshot.digest, identity: snapshot.identity.toJSON(), bytes: snapshot.byteLength } };
+    gate.mark("done");
+    observation = await observed;
+    saveProof();
+    t.diagnostic(JSON.stringify({ proofPath, requestId: request.requestId, checkpoint: checkpoint.toJSON(),
+      timingPremise: observation.timingPremise, elapsedMs: observation.elapsedMs,
+      reads: observation.reads?.map(({ ordinal, catchSide, captureCompleted, snapshot, startedElapsedMs, completedElapsedMs }) =>
+        ({ ordinal, catchSide, captureCompleted, snapshot, startedElapsedMs, completedElapsedMs })),
+      observerError: observation.error }));
+    assert.equal(observation.workerError, undefined, JSON.stringify(observation));
+    assert.equal(observation.setupInterrupted, undefined, JSON.stringify(observation));
+    assert.deepEqual(writerBefore, { filePath: coordinator.store.file.filePath,
+      captureCompleted: true, missing: true, readerCaptured: true });
+    assert.equal(stageObservation?.exists, true, JSON.stringify(stageObservation));
+    assert.equal(stageObservation.transitionAbsent, true);
+    assert.equal(stageObservation.readerReachedAfter, true);
+    assert.equal(observation.timingPremise, true, "the warmed real writer must finish inside the unchanged observation window");
+    const [before, inventoryRead, after] = observation.reads;
+    assert.equal(before.captureCompleted, true);
+    assert.equal(before.snapshot, null, "the original snapshot method must capture actual absence");
+    assert.deepEqual(inventoryRead.snapshot, stageObservation.registry);
+    assert.equal(after.catchSide, true, JSON.stringify(after));
+    assert.equal(after.captureCompleted, true);
+    assert.deepEqual(after.snapshot, writerFinished.registry);
+    assert.notEqual(after.snapshot, null);
+    assert.equal(writerFinished.transitionAbsent, true);
+    assert.equal(writerFinished.admissionAbsent, true);
+    assert.equal(observation.error, undefined, JSON.stringify(observation.error));
+    const execution = observation.inventory.executions.find(entry => entry.executionId === coordinator.executionId);
+    assert.equal(execution.ownerEpoch, grant.ownerEpoch);
+    assert.equal(execution.requests.find(entry => entry.requestId === request.requestId).operation, "reserve");
+    assert.equal(execution.calls.length, 1);
+    assert.equal(execution.calls[0].callId, call.callId);
+    assert.equal(execution.calls[0].status, "intent");
+    assert.equal(execution.calls[0].receipt, null);
+  } catch (cause) {
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+    try { saveProof(cause); }
+    catch (proofFailure) {
+      throw new AggregateError([cause, proofFailure], "Initial inventory failure proof could not be saved", { cause });
+    }
+    t.diagnostic(JSON.stringify({ proofPath, writerBefore, stageObservation, writerFinished,
+      observerError: observation?.error, observerElapsedMs: observation?.elapsedMs, originalFailure: cause.message }));
+    throw cause;
+  } finally {
+    gate.abort();
+    writerHook?.mock.restore();
+    if (coordinator) coordinator.store.faultInjector = () => {};
+  }
+});
+
+test("a public inventory reader reobserves an owned request stage before its publication journal is selected", { timeout: 45000 }, async t => {
+  const { root, coordinator, grant } = fixture(t);
+  const state = new Int32Array(new SharedArrayBuffer(8));
+  let worker;
+  t.after(async () => {
+    Atomics.store(state, 0, 1); Atomics.notify(state, 0);
+    Atomics.store(state, 1, 1); Atomics.notify(state, 1);
+    if (worker) await worker.terminate();
+  });
+  worker = new Worker(new URL("../../fixtures/process-runtime-inventory-observer.mjs", import.meta.url),
+    { workerData: { mainRoot: root, state: state.buffer } });
+  assert.deepEqual((await once(worker, "message"))[0], { phase: "ready" });
+  const observed = once(worker, "message");
+  let staged = false;
+  coordinator.store.faultInjector = ({ phase, filePath, tempPath }) => {
+    if (staged || phase !== "before-runtime-dependency-temp-close"
+      || !filePath.includes(`${path.sep}requests${path.sep}`)) return;
+    staged = true;
+    assert.equal(coordinator.store.transition.readSnapshot(), null);
+    assert.equal(fs.existsSync(tempPath), true);
+    Atomics.store(state, 0, 1); Atomics.notify(state, 0);
+    assert.notEqual(Atomics.wait(state, 1, 0, 20000), "timed-out", "the independently scheduled reader must reach the preparation window");
+  };
+  const request = new ManagedProcessMessage(grant, "reserve", { grant, data: { binding: null, graceMs: 500 } });
+  const reserved = await coordinator.handle(request);
+  coordinator.store.faultInjector = () => {};
+  assert.equal(staged, true);
+  assert.equal(reserved.payload.ok, true);
+  const call = reserved.payload.value;
+  try {
+    const result = (await observed)[0];
+    assert.equal(result.error, undefined, JSON.stringify(result.error));
+    const saved = result.inventory.executions.find(entry => entry.executionId === coordinator.executionId);
+    // The first publication accepts the request before its operation executes.
+    // A coherent live read may therefore precede the call's reservation.
+    const accepted = saved.requests.find(entry => entry.requestId === request.requestId);
+    assert.ok(accepted, "the reader must observe the committed acceptance whose preparation it crossed");
+    assert.equal(accepted.operation, "reserve");
+    assert.equal(saved.ownerEpoch, grant.ownerEpoch);
+    for (const entry of saved.calls) {
+      assert.equal(entry.callId, call.callId);
+      assert.equal(entry.status, "intent");
+      assert.equal(entry.receipt, null);
+    }
+  } finally {
+    const revoked = await coordinator.handle(new ManagedProcessMessage(grant, "revoke-reservation", { grant,
+      data: { call: { callId: call.callId, capability: call.capability, bindingDigest: grant.bindingDigest } } }));
+    assert.equal(revoked.payload.ok, true);
+  }
+});
+
+test("published writer exclusion never makes a stable foreign request block valid", async t => {
+  const { coordinator, grant } = fixture(t);
+  const response = await coordinator.handle(new ManagedProcessMessage(grant, "reserve",
+    { grant, data: { binding: null, graceMs: 500 } }));
+  assert.equal(response.payload.ok, true);
+  const call = response.payload.value;
+  const revoked = await coordinator.handle(new ManagedProcessMessage(grant, "revoke-reservation", { grant,
+    data: { call: { callId: call.callId, capability: call.capability, bindingDigest: grant.bindingDigest } } }));
+  assert.equal(revoked.payload.ok, true);
+  const directory = coordinator.store.requestBlockDirectory(coordinator.executionId, { create: false }).directory;
+  const foreign = path.join(directory, `${randomUUID()}.json`);
+  fs.writeFileSync(foreign, "foreign block");
+  try {
+    coordinator.store.admission.runExclusive(() => {
+      assert.equal(coordinator.store.admission.ownerSession, coordinator.store.ownerLock.ownerSession);
+      assert.throws(() => coordinator.store.readConsistentInventory(), error => {
+        assert.equal(error.code, "PROCESS_EXECUTION_DURABILITY_UNCERTAIN");
+        assert.equal(error.cause.code, "PROCESS_EXECUTION_RECORD_CORRUPT");
+        return true;
+      });
+      assert.equal(fs.readFileSync(foreign, "utf8"), "foreign block");
+    });
+  } finally { fs.unlinkSync(foreign); }
+});
 
 // This is the real shared TCP/mailbox coordinator boundary and physical store
 // lock. No transport timing, provider, child launch, sleep or shorter budget.

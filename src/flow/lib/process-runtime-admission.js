@@ -70,7 +70,8 @@ function processOwnedFlow(ctx) {
 }
 
 export function flowProcessRuntimeRequired({ ctx, envelopeType, envelopeKey, input, readOnly }) {
-  if ((envelopeType === "get" && readOnly !== false) || envelopeKey === "resume" || input?.dryRun === true) return false;
+  if (readOnly === true || (envelopeType === "get" && readOnly !== false)
+    || envelopeKey === "resume" || input?.dryRun === true) return false;
   return processOwnedFlow(ctx)
     || ctx?.flowManager != null && ctx?.root != null
       && ["init", "prepare-spec"].includes(envelopeKey);

@@ -7,11 +7,30 @@ and the exit status. Exit `0` means every target passed the bounded static check
 it does not prove equivalent runtime behavior. Violations and incomplete
 inspection always return nonzero. An incomplete audit returns `2`.
 
-The developer audit is deliberately separate from the standard test gate. Existing
-product violations remain failures in the audit. Selftests use synthetic source
-graphs and isolated filesystem roots, so removing a product violation does not
-break a fixed violation baseline. `npm run test:structure` always includes checker
-selftests and the existing Flow architecture rules.
+The standard structure gate calls the same `auditOsIndependenceAt(root)` entrypoint
+as the developer CLI, using `process.cwd()` as the selected root and without exclusions.
+`tests/run.js` derives its root from its own location and launches suite processes
+with `cwd: root`, so normal `npm test`, `npm run test:structure`, and
+`npm run test:all` execute this gate from the repository root. Its
+complete report must be clean for `npm run test:structure`, `npm test`, and
+`npm run test:all` to pass. Product violations and incomplete inspection are
+therefore ordinary gate failures. Synthetic checker selftests and isolated
+filesystem CLI tests continue to verify individual rules and process behavior.
+
+Linux CI runs the same `npm test` command at the minimum Node version derived from
+`package.json`'s `engines.node` and at `lts/*` (the repository's existing
+current-LTS lane).
+The minimum lane generator accepts the repository's exact `>=MAJOR.MINOR.PATCH`
+engine range and fails if the manifest uses a different form, so the workflow
+cannot silently drift from the package minimum. As of 2026-11-13 the minimum is
+18.19.0. Node.js's official [release status table](https://nodejs.org/en/about/previous-releases)
+listed v26.13.1 as the latest LTS release and v27 as Alpha. The existing
+`lts/*` lane therefore selects the current supported stable LTS release under
+the repository's policy; `check-latest` is enabled on this lane so it does not
+reuse an older runner-cached LTS version. This is the existing repo policy plus
+the release status on the recorded date, not a general definition that all
+supported-current policies must mean LTS. macOS and Windows CI lanes and
+real-machine acceptance were not run for this task.
 
 ## Cross-platform policy
 
@@ -125,6 +144,14 @@ or host OS as the inspected program's environment. An unconditional OS-specific
 path, or one used on an incompatible selected platform, is a violation. An
 appropriate path inside a complete shared boundary is allowed. Uncertain
 composition that retains a sensitive origin is incomplete.
+
+Repeated writes join identical composed-path audit summaries without retaining
+duplicates. Both native syntaxes, nullable logical texts, ordered inputs, live
+dependency edges, traces and retained metadata remain part of the comparison,
+including nested summaries. Unresolved ambient inputs remain unknown. Producers
+and their effects run before each join; joining establishes neither runtime path
+equality nor a proven normal value.
+
 Template interpolation uses the shared reader's expression boundaries and keeps
 origins through templates and concatenation. Diagnostic OS text remains allowed;
 URL pathname I/O remains rejected. Unsupported sensitive

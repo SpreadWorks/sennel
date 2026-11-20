@@ -8,6 +8,7 @@ import { completeManagedOperation } from "./process-execution-completion.js";
 const port = workerData.port;
 const scopes = new Map();
 const readOnlyScopes = new Map();
+const retainedScopes = new Map();
 let pending = Promise.resolve();
 
 async function standaloneScope(root, ProcessExecutionRuntime, temporaryParent) {
@@ -36,13 +37,14 @@ async function executeCommandInvocation({ invocation, inheritedEnvironment, opti
 }
 
 function encodeCompletion(result) {
-  return result?.processExecutionStopReceipt === undefined ? result : {
-    ...result, processExecutionStopReceipt: result.processExecutionStopReceipt.toJSON(),
-    stopEvidence: result.stopEvidence.toJSON(),
-  };
+  if (result?.processExecutionHistory === undefined && result?.processExecutionStopReceipt === undefined) return result;
+  return { ...result,
+    ...(result?.processExecutionHistory === undefined ? {} : { processExecutionHistory: result.processExecutionHistory.toJSON() }),
+    ...(result?.processExecutionStopReceipt === undefined ? {} : {
+      processExecutionStopReceipt: result.processExecutionStopReceipt.toJSON(), stopEvidence: result.stopEvidence.toJSON() }) };
 }
 function encodeFailure(error) {
-  return error instanceof ProcessExecutionControlFailure
+  const failure = error instanceof ProcessExecutionControlFailure
     ? { control: error.toJSON(), ...(error.processExecutionStopReceipt === undefined ? {} : { completion: {
       stdout: error.stdout, stderr: error.stderr, signal: error.signal, killed: error.killed,
       timing: error.timing, providerStarted: error.providerStarted,
@@ -51,6 +53,21 @@ function encodeFailure(error) {
     : { message: error.message, fields: { code: error.code, stdout: error.stdout, stderr: error.stderr,
       killed: error.killed, signal: error.signal, stopEvidence: error.stopEvidence?.toJSON(),
       processExecutionStopReceipt: error.processExecutionStopReceipt?.toJSON() } };
+  if (error.processExecutionHistory !== undefined) failure.history = error.processExecutionHistory.toJSON();
+  return failure;
+}
+
+async function releaseOwnedScope(owners, data, label) {
+  const { ProcessExecutionGrant } = await import("./process-execution-runtime.js");
+  const grant = new ProcessExecutionGrant(data.grant).toJSON();
+  const scope = owners.get(grant.executionId);
+  if (scope === undefined || !isDeepStrictEqual(scope.runtime.remoteGrant(), grant)
+    || typeof data.successful !== "boolean") {
+    throw new ProcessExecutionControlFailure("delegation-refused", `${label} scope lease does not match its owned generation`);
+  }
+  await scope.close({ successful: data.successful });
+  owners.delete(grant.executionId);
+  return null;
 }
 async function executeCommands({ commands, grant }, ProcessExecutionRuntime) {
   if (!Array.isArray(commands) || commands.length === 0) throw new TypeError("Command group requires its complete nonempty invocation list");
@@ -66,32 +83,28 @@ async function executeCommands({ commands, grant }, ProcessExecutionRuntime) {
 
 async function execute({ operation, data }) {
   if (operation === "control") return managedRequest(data.grant, data.operation, { grant: data.grant, data: data.data });
-  const { ProcessExecutionRuntime, ProcessExecutionGrant } = await import("./process-execution-runtime.js");
+  const { ProcessExecutionRuntime } = await import("./process-execution-runtime.js");
   if (operation === "scope") return (await standaloneScope(data.root, ProcessExecutionRuntime, data.temporaryParent)).remoteGrant();
   if (operation === "release-scope") return releaseScope(data.root);
-  if (operation === "read-only-scope") {
-    const { OwnedReadOnlyProcessScope } = await import("./managed-process.js");
-    const scope = await OwnedReadOnlyProcessScope.acquire(data);
-    readOnlyScopes.set(scope.runtime.executionId, scope);
-    return scope.runtime.remoteGrant();
+  if (operation === "read-only-scope" || operation === "retained-scope") {
+    const { OwnedReadOnlyProcessScope, OwnedRetainedProcessScope } = await import("./managed-process.js");
+    const Scope = operation === "read-only-scope" ? OwnedReadOnlyProcessScope : OwnedRetainedProcessScope;
+    const scope = await Scope.acquire(data);
+    const owners = operation === "read-only-scope" ? readOnlyScopes : retainedScopes;
+    owners.set(scope.runtime.executionId, scope);
+    return operation === "read-only-scope" ? scope.runtime.remoteGrant()
+      : { grant: scope.runtime.remoteGrant(), history: scope.history.toJSON() };
   }
-  if (operation === "release-read-only-scope") {
-    const grant = new ProcessExecutionGrant(data.grant).toJSON();
-    const scope = readOnlyScopes.get(grant.executionId);
-    if (scope === undefined || !isDeepStrictEqual(scope.runtime.remoteGrant(), grant)
-      || typeof data.successful !== "boolean") {
-      throw new ProcessExecutionControlFailure("delegation-refused", "Read-only scope lease does not match its owned generation");
-    }
-    await scope.close({ successful: data.successful });
-    readOnlyScopes.delete(grant.executionId);
-    return null;
-  }
+  if (operation === "release-read-only-scope") return releaseOwnedScope(readOnlyScopes, data, "Read-only");
+  if (operation === "release-retained-scope") return releaseOwnedScope(retainedScopes, data, "Retained");
   if (operation === "close") {
     for (const lease of scopes.values()) await lease.runtime.close();
     scopes.clear();
     for (const scope of readOnlyScopes.values()) await scope.close({ successful: false });
-    if (readOnlyScopes.size !== 0) {
-      throw new ProcessExecutionControlFailure("bridge-unavailable", "Read-only scope release was not acknowledged; its diagnostics are retained");
+    for (const scope of retainedScopes.values()) await scope.close({ successful: false });
+    if (readOnlyScopes.size !== 0 || retainedScopes.size !== 0) {
+      const label = readOnlyScopes.size !== 0 ? "Read-only" : "Retained";
+      throw new ProcessExecutionControlFailure("bridge-unavailable", `${label} scope release was not acknowledged; its diagnostics are retained`);
     }
     return null;
   }

@@ -6,6 +6,8 @@ import { RuntimeChildExecution } from "./runtime-package.js";
 import { immutableCommandEnvironment } from "./command-invocation.js";
 import { ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "./process-execution-values.js";
 import { ReadOnlyInvocationWorkspace, ReadOnlyProcessRuntimeStorage } from "./readonly-invocation-workspace.js";
+import { ProcessExecutionHistoryReference } from "./process-execution-history-reference.js";
+import { completeManagedOperationSync, retainExecutionCompletion } from "./process-execution-completion.js";
 
 let bridge = null;
 let nextRequest = 0;
@@ -92,18 +94,23 @@ class SynchronousExecutionBridge {
   }
   result(message) {
     if (message.error !== undefined) {
+      let error;
       if (message.error.control !== undefined) {
-        const error = ProcessExecutionControlFailure.fromStored(message.error.control);
+        error = ProcessExecutionControlFailure.fromStored(message.error.control);
         if (message.error.completion !== undefined) {
           const completion = message.error.completion;
           const receipt = new ProcessExecutionStopReceipt(completion.processExecutionStopReceipt);
           Object.assign(error, completion, { processExecutionStopReceipt: receipt, stopEvidence: receipt.stopEvidence });
         }
-        throw error;
+      } else {
+        error = new Error(message.error.message);
+        Object.assign(error, message.error.fields);
       }
-      const error = new Error(message.error.message);
-      Object.assign(error, message.error.fields);
+      if (message.error.history !== undefined) error.processExecutionHistory = ProcessExecutionHistoryReference.fromStored(message.error.history);
       throw error;
+    }
+    if (message.result?.processExecutionHistory !== undefined) {
+      return { ...message.result, processExecutionHistory: ProcessExecutionHistoryReference.fromStored(message.result.processExecutionHistory) };
     }
     return message.result;
   }
@@ -167,9 +174,28 @@ export class SynchronousCommandOutcome {
 
 export function runCommandInSynchronousBridge(invocation, options, grant = null) {
   const timeoutMs = (options.timeout ?? 300000) + 30000;
-  return currentBridge(grant?.mainRoot ?? options.repositoryRoot ?? invocation.cwd ?? process.cwd(), grant?.storage ?? null)
-    .request("execute", { ...synchronousCommandData(invocation, options), grant,
-      temporaryParent: grant === null ? path.resolve(os.tmpdir()) : null }, timeoutMs);
+  const root = grant?.mainRoot ?? options.repositoryRoot ?? invocation.cwd ?? process.cwd();
+  const bridge = currentBridge(root, grant?.storage ?? null);
+  const data = { ...synchronousCommandData(invocation, options), grant,
+    temporaryParent: grant === null ? path.resolve(os.tmpdir()) : null };
+  if (grant !== null || options.retainedControl !== true) return bridge.request("execute", data, timeoutMs);
+  // Resolve and retain the exact storage location before requesting native work.
+  const acquired = bridge.request("retained-scope", { mainRoot: root, executionRoot: root,
+    environment: {}, temporaryParent: data.temporaryParent }, 30000);
+  let history;
+  let result;
+  try {
+    return completeManagedOperationSync(() => {
+      history = ProcessExecutionHistoryReference.fromStored(acquired.history);
+      result = bridge.request("execute", { ...data, grant: acquired.grant }, timeoutMs);
+      result.processExecutionHistory = history;
+      return result;
+    }, (successful) => bridge.request("release-retained-scope", { grant: acquired.grant, successful }, 30000));
+  } catch (error) {
+    retainExecutionCompletion(error, result);
+    if (history !== undefined) error.processExecutionHistory = history;
+    throw error;
+  }
 }
 
 /** Independent invocations; every result or refusal is settled before return. */

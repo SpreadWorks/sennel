@@ -1,0 +1,2114 @@
+[
+  {
+    "name": "original36/cases.json",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs'; export function run(choice,consume){function make(input){return new WeakMap();}const input=choice?{}:{};const map=make(input);const key={};map.set(key,fs.readFileSync);consume(map.get(key));}",
+    "cases": [
+      {
+        "name": "parent-r2-object",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 195,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "ordinary-object",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            177,
+            180,
+            "'o"
+          ],
+          [
+            181,
+            182,
+            "din"
+          ],
+          [
+            183,
+            189,
+            "r"
+          ],
+          [
+            190,
+            192,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "different-callsite-object",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            158,
+            158,
+            "second=make(input);const "
+          ],
+          [
+            202,
+            205,
+            "second"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "parent-r2-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            124,
+            126,
+            "'first'"
+          ],
+          [
+            127,
+            129,
+            "'second'"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 206,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "ordinary-primitives",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            124,
+            126,
+            "'first'"
+          ],
+          [
+            127,
+            129,
+            "'second'"
+          ],
+          [
+            177,
+            180,
+            "'o"
+          ],
+          [
+            181,
+            182,
+            "din"
+          ],
+          [
+            183,
+            189,
+            "r"
+          ],
+          [
+            190,
+            192,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "different-callsite-primitives",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            124,
+            126,
+            "'first'"
+          ],
+          [
+            127,
+            129,
+            "'second'"
+          ],
+          [
+            139,
+            139,
+            "=make(input);const second"
+          ],
+          [
+            202,
+            205,
+            "second"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "original36/annex-r3-cases.json",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs'; export function run(choice,consume){function make(input){return new WeakMap();}const input=choice===true?{}:{};const map=make(input);const key={};map.set(key,fs.readFileSync);consume(map.get(key));}",
+    "cases": [
+      {
+        "name": "equality-object",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 202,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "negation-object",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            117,
+            117,
+            "!"
+          ],
+          [
+            122,
+            129,
+            ""
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 196,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "class-home-object",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            33,
+            34,
+            "class R"
+          ],
+          [
+            36,
+            40,
+            ""
+          ],
+          [
+            41,
+            42,
+            "er{"
+          ],
+          [
+            122,
+            129,
+            ""
+          ],
+          [
+            224,
+            224,
+            "}"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 199,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "class-home-ordinary-object",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            33,
+            34,
+            "class R"
+          ],
+          [
+            36,
+            40,
+            ""
+          ],
+          [
+            41,
+            42,
+            "er{"
+          ],
+          [
+            123,
+            130,
+            ""
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ],
+          [
+            224,
+            224,
+            "}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "arrow-home-object",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            62,
+            62,
+            "const work=()=>{"
+          ],
+          [
+            122,
+            129,
+            ""
+          ],
+          [
+            224,
+            224,
+            ";work();}"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 211,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "arrow-home-ordinary-object",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            62,
+            62,
+            "const work=()=>{"
+          ],
+          [
+            123,
+            130,
+            ""
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ],
+          [
+            224,
+            224,
+            ";work();}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "equality-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            131,
+            133,
+            "'first'"
+          ],
+          [
+            134,
+            136,
+            "'second'"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 213,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "negation-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            117,
+            117,
+            "!"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            129,
+            "':'s"
+          ],
+          [
+            130,
+            136,
+            "cond'"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 207,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "class-home-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            33,
+            34,
+            "class R"
+          ],
+          [
+            36,
+            40,
+            ""
+          ],
+          [
+            41,
+            42,
+            "er{"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            129,
+            "':'s"
+          ],
+          [
+            130,
+            136,
+            "cond'"
+          ],
+          [
+            224,
+            224,
+            "}"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 210,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "class-home-ordinary-primitives",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            33,
+            34,
+            "class R"
+          ],
+          [
+            36,
+            40,
+            ""
+          ],
+          [
+            41,
+            42,
+            "er{"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            129,
+            "':'s"
+          ],
+          [
+            130,
+            136,
+            "cond'"
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ],
+          [
+            224,
+            224,
+            "}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "arrow-home-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            62,
+            62,
+            "const work=()=>{"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            129,
+            "':'s"
+          ],
+          [
+            130,
+            136,
+            "cond'"
+          ],
+          [
+            224,
+            224,
+            ";work();}"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 222,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "arrow-home-ordinary-primitives",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            62,
+            62,
+            "const work=()=>{"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            129,
+            "':'s"
+          ],
+          [
+            130,
+            136,
+            "cond'"
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ],
+          [
+            224,
+            224,
+            ";work();}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "actual-method-nested-object",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            25,
+            25,
+            "class"
+          ],
+          [
+            26,
+            29,
+            "Fact"
+          ],
+          [
+            31,
+            45,
+            "y{make"
+          ],
+          [
+            51,
+            59,
+            ""
+          ],
+          [
+            71,
+            74,
+            "n"
+          ],
+          [
+            75,
+            75,
+            "sted"
+          ],
+          [
+            123,
+            130,
+            ""
+          ],
+          [
+            136,
+            136,
+            ";return nested(input);}}export function run(choice,consume){const factory=new Factory()"
+          ],
+          [
+            147,
+            147,
+            "factory."
+          ],
+          [
+            152,
+            152,
+            "cho"
+          ],
+          [
+            153,
+            157,
+            "ce"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 283,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "actual-method-ordinary-object",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            25,
+            25,
+            "class"
+          ],
+          [
+            26,
+            29,
+            "Fact"
+          ],
+          [
+            31,
+            45,
+            "y{make"
+          ],
+          [
+            51,
+            59,
+            ""
+          ],
+          [
+            71,
+            74,
+            "n"
+          ],
+          [
+            75,
+            75,
+            "sted"
+          ],
+          [
+            123,
+            130,
+            ""
+          ],
+          [
+            136,
+            136,
+            ";return nested(input);}}export function run(choice,consume){const factory=new Factory()"
+          ],
+          [
+            147,
+            147,
+            "factory."
+          ],
+          [
+            152,
+            152,
+            "cho"
+          ],
+          [
+            153,
+            157,
+            "ce"
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "actual-method-nested-primitives",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            25,
+            25,
+            "class"
+          ],
+          [
+            26,
+            29,
+            "Fact"
+          ],
+          [
+            31,
+            45,
+            "y{make"
+          ],
+          [
+            51,
+            59,
+            ""
+          ],
+          [
+            71,
+            74,
+            "n"
+          ],
+          [
+            75,
+            75,
+            "sted"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            127,
+            "':'second';return nested(input);}}export function "
+          ],
+          [
+            129,
+            129,
+            "n(choic"
+          ],
+          [
+            130,
+            131,
+            ",consume)"
+          ],
+          [
+            132,
+            136,
+            "const factory=new Factory()"
+          ],
+          [
+            147,
+            147,
+            "factory."
+          ],
+          [
+            152,
+            152,
+            "cho"
+          ],
+          [
+            153,
+            157,
+            "ce"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 294,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "actual-method-ordinary-primitives",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            25,
+            25,
+            "class"
+          ],
+          [
+            26,
+            29,
+            "Fact"
+          ],
+          [
+            31,
+            45,
+            "y{make"
+          ],
+          [
+            51,
+            59,
+            ""
+          ],
+          [
+            71,
+            74,
+            "n"
+          ],
+          [
+            75,
+            75,
+            "sted"
+          ],
+          [
+            123,
+            126,
+            "?'firs"
+          ],
+          [
+            127,
+            127,
+            "':'second';return nested(input);}}export function "
+          ],
+          [
+            129,
+            129,
+            "n(choic"
+          ],
+          [
+            130,
+            131,
+            ",consume)"
+          ],
+          [
+            132,
+            136,
+            "const factory=new Factory()"
+          ],
+          [
+            147,
+            147,
+            "factory."
+          ],
+          [
+            152,
+            152,
+            "cho"
+          ],
+          [
+            153,
+            157,
+            "ce"
+          ],
+          [
+            184,
+            187,
+            "'o"
+          ],
+          [
+            188,
+            189,
+            "din"
+          ],
+          [
+            190,
+            196,
+            "r"
+          ],
+          [
+            197,
+            199,
+            "'"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "original36/branch-operation-cases.json",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs'; export function run(choice,consume){function make(input){return new WeakMap();}const input=choice?{}:({}||{});const map=make(input);const key={};map.set(key,fs.readFileSync);consume(map.get(key));}",
+    "cases": [
+      {
+        "name": "logical-object-branch",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 201,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "logical-object-branch-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            183,
+            186,
+            "'o"
+          ],
+          [
+            187,
+            188,
+            "din"
+          ],
+          [
+            189,
+            195,
+            "r"
+          ],
+          [
+            196,
+            198,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "numeric-operation-branch",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            124,
+            126,
+            "1"
+          ],
+          [
+            128,
+            134,
+            "2+3"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 197,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "numeric-operation-branch-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            124,
+            126,
+            "1"
+          ],
+          [
+            128,
+            134,
+            "2+3"
+          ],
+          [
+            183,
+            186,
+            "'o"
+          ],
+          [
+            187,
+            188,
+            "din"
+          ],
+          [
+            189,
+            195,
+            "r"
+          ],
+          [
+            196,
+            198,
+            "'"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "original36/derived-cases.json",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs'; export function run(choice,consume){function make(input){return new WeakMap();}const input=String(choice)?{}:{};const map=make(input);const key={};map.set(key,fs.readFileSync);consume(map.get(key));}",
+    "cases": [
+      {
+        "name": "string-condition",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 203,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "string-condition-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            185,
+            188,
+            "'o"
+          ],
+          [
+            189,
+            190,
+            "din"
+          ],
+          [
+            191,
+            197,
+            "r"
+          ],
+          [
+            198,
+            200,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "string-branch",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            117,
+            117,
+            "choice?"
+          ],
+          [
+            131,
+            134,
+            ""
+          ],
+          [
+            135,
+            137,
+            "'other'"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 212,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "string-branch-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            117,
+            117,
+            "choice?"
+          ],
+          [
+            131,
+            134,
+            ""
+          ],
+          [
+            135,
+            137,
+            "'other'"
+          ],
+          [
+            185,
+            188,
+            "'o"
+          ],
+          [
+            189,
+            190,
+            "din"
+          ],
+          [
+            191,
+            197,
+            "r"
+          ],
+          [
+            198,
+            200,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "literal-string-condition",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            124,
+            126,
+            "'"
+          ],
+          [
+            127,
+            127,
+            "rd"
+          ],
+          [
+            128,
+            130,
+            "nary'"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 207,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "literal-string-condition-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            124,
+            126,
+            "'"
+          ],
+          [
+            127,
+            127,
+            "rd"
+          ],
+          [
+            128,
+            130,
+            "nary'"
+          ],
+          [
+            185,
+            188,
+            "'o"
+          ],
+          [
+            189,
+            190,
+            "din"
+          ],
+          [
+            191,
+            197,
+            "r"
+          ],
+          [
+            198,
+            200,
+            "'"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "original36/exec",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs';const r=/a/;const match=r.exec('ordinary');function wrap(input){return new WeakMap();}const map=wrap(match),key={};map.set(key,fs.readFileSync);opaque(map.get(key));",
+    "cases": [
+      {
+        "name": "owner-exact-exec",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 170,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "owner-exact-exec-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "parent-exact-exec",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            34,
+            34,
+            "ordin"
+          ],
+          [
+            35,
+            35,
+            "ry"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 177,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "parent-exact-exec-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            34,
+            34,
+            "ordin"
+          ],
+          [
+            35,
+            35,
+            "ry"
+          ],
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "source-origin",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs';const r=/a/;const match=r.exec('ordinary');function wrap(input){return new WeakMap();}const map=wrap(match),key={};map.set(key,fs.readFileSync);r.exec=foreign;opaque(map.get(key));",
+    "cases": [
+      {
+        "name": "receiver-method-change",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 185,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "ordinary-payload",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "formal",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            25,
+            25,
+            "export function run(foreign,consume){"
+          ],
+          [
+            184,
+            184,
+            "c"
+          ],
+          [
+            185,
+            188,
+            "ns"
+          ],
+          [
+            189,
+            189,
+            "m"
+          ],
+          [
+            205,
+            205,
+            "}"
+          ]
+        ],
+        "expected": {
+          "file": "src/uncertain-input.mjs",
+          "rule": "OS02",
+          "line": 1,
+          "column": 222,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "formal-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            25,
+            25,
+            "export function run(foreign,consume){"
+          ],
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ],
+          [
+            184,
+            184,
+            "c"
+          ],
+          [
+            185,
+            188,
+            "ns"
+          ],
+          [
+            189,
+            189,
+            "m"
+          ],
+          [
+            205,
+            205,
+            "}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "class-lexical-arrow",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            25,
+            25,
+            "class Factory{make(foreign){"
+          ],
+          [
+            68,
+            71,
+            ""
+          ],
+          [
+            72,
+            74,
+            ""
+          ],
+          [
+            76,
+            76,
+            "st"
+          ],
+          [
+            81,
+            82,
+            "="
+          ],
+          [
+            87,
+            96,
+            "=>"
+          ],
+          [
+            110,
+            111,
+            ""
+          ],
+          [
+            205,
+            205,
+            "}}export function run(foreign){new Factory().make(foreign);}"
+          ]
+        ],
+        "expected": {
+          "file": "src/uncertain-input.mjs",
+          "rule": "OS02",
+          "line": 1,
+          "column": 202,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "class-lexical-arrow-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            25,
+            25,
+            "class Factory{make(foreign){"
+          ],
+          [
+            68,
+            71,
+            ""
+          ],
+          [
+            72,
+            74,
+            ""
+          ],
+          [
+            76,
+            76,
+            "st"
+          ],
+          [
+            81,
+            82,
+            "="
+          ],
+          [
+            87,
+            96,
+            "=>"
+          ],
+          [
+            110,
+            111,
+            ""
+          ],
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ],
+          [
+            205,
+            205,
+            "}}export function run(foreign){new Factory().make(foreign);}"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "extra-args",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            65,
+            65,
+            "','extra"
+          ]
+        ],
+        "expected": {
+          "file": "src/uncertain-input.mjs",
+          "rule": "OS02",
+          "line": 1,
+          "column": 193,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "extra-args-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            65,
+            65,
+            "','extra"
+          ],
+          [
+            152,
+            155,
+            "'o"
+          ],
+          [
+            156,
+            157,
+            "din"
+          ],
+          [
+            158,
+            164,
+            "r"
+          ],
+          [
+            165,
+            167,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "distinct-source-return",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            43,
+            45,
+            "firs"
+          ],
+          [
+            46,
+            48,
+            ""
+          ],
+          [
+            65,
+            65,
+            "');const second=r.exec('other"
+          ],
+          [
+            126,
+            127,
+            "first),other=wr"
+          ],
+          [
+            128,
+            129,
+            "p(se"
+          ],
+          [
+            130,
+            131,
+            "ond"
+          ],
+          [
+            169,
+            169,
+            "other.set(key,'ordinary');"
+          ],
+          [
+            191,
+            194,
+            "other"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "distinct-receiver-return",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            36,
+            36,
+            ",s=/a/"
+          ],
+          [
+            43,
+            45,
+            "firs"
+          ],
+          [
+            46,
+            48,
+            ""
+          ],
+          [
+            50,
+            50,
+            ".exec('ordinary');const second=s"
+          ],
+          [
+            126,
+            127,
+            "first),other=wr"
+          ],
+          [
+            128,
+            129,
+            "p(se"
+          ],
+          [
+            130,
+            131,
+            "ond"
+          ],
+          [
+            169,
+            169,
+            "othe"
+          ],
+          [
+            170,
+            170,
+            ".set(key,'ordinary');r.exec=foreign;s"
+          ],
+          [
+            191,
+            194,
+            "other"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "distinct-callee-return",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            43,
+            45,
+            "firs"
+          ],
+          [
+            46,
+            48,
+            ""
+          ],
+          [
+            66,
+            66,
+            ");const second=String(choice"
+          ],
+          [
+            126,
+            127,
+            "first),other=wr"
+          ],
+          [
+            128,
+            129,
+            "p(se"
+          ],
+          [
+            130,
+            131,
+            "ond"
+          ],
+          [
+            169,
+            169,
+            "other.set(key,'ordinary');"
+          ],
+          [
+            191,
+            194,
+            "other"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "ordered-args-return",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            43,
+            45,
+            "firs"
+          ],
+          [
+            46,
+            48,
+            ""
+          ],
+          [
+            56,
+            56,
+            "'ordinary','extra');const second=r.exec('extra',"
+          ],
+          [
+            126,
+            127,
+            "first),other=wr"
+          ],
+          [
+            128,
+            129,
+            "p(se"
+          ],
+          [
+            130,
+            131,
+            "ond"
+          ],
+          [
+            169,
+            169,
+            "other.set(key,'ordinary');"
+          ],
+          [
+            191,
+            194,
+            "other"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "distinct-caller-return",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            25,
+            25,
+            "function build(){"
+          ],
+          [
+            111,
+            111,
+            "return wrap(match);}"
+          ],
+          [
+            121,
+            122,
+            "build(),othe"
+          ],
+          [
+            123,
+            125,
+            "=build"
+          ],
+          [
+            126,
+            131,
+            ""
+          ],
+          [
+            169,
+            169,
+            "othe"
+          ],
+          [
+            171,
+            171,
+            "s"
+          ],
+          [
+            172,
+            173,
+            "t(k"
+          ],
+          [
+            174,
+            177,
+            "y,'"
+          ],
+          [
+            179,
+            180,
+            "d"
+          ],
+          [
+            181,
+            182,
+            ""
+          ],
+          [
+            183,
+            183,
+            "ary')"
+          ],
+          [
+            191,
+            194,
+            "other"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "home",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs';class Factory{make(choice){const work=()=>{function nested(input){return new WeakMap();}return nested(choice?{}:{});};return work();}}export function run(choice,consume){const factory=new Factory();const map=factory.make(choice);const key={};map.set(key,fs.readFileSync);consume(map.get(key));}",
+    "cases": [
+      {
+        "name": "lexical-arrow",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 297,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "lexical-arrow-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            279,
+            282,
+            "'o"
+          ],
+          [
+            283,
+            284,
+            "din"
+          ],
+          [
+            285,
+            291,
+            "r"
+          ],
+          [
+            292,
+            294,
+            "'"
+          ]
+        ],
+        "expected": null
+      },
+      {
+        "name": "unbound-home",
+        "positive": false,
+        "complete": false,
+        "edits": [
+          [
+            51,
+            67,
+            ""
+          ],
+          [
+            142,
+            158,
+            ""
+          ],
+          [
+            230,
+            232,
+            "ethod"
+          ],
+          [
+            245,
+            245,
+            ";const map=method"
+          ]
+        ],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 285,
+          "classification": "incomplete"
+        }
+      },
+      {
+        "name": "unbound-home-ordinary",
+        "positive": true,
+        "complete": true,
+        "edits": [
+          [
+            51,
+            67,
+            ""
+          ],
+          [
+            142,
+            158,
+            ""
+          ],
+          [
+            230,
+            232,
+            "ethod"
+          ],
+          [
+            245,
+            245,
+            ";const map=method"
+          ],
+          [
+            279,
+            282,
+            "'o"
+          ],
+          [
+            283,
+            284,
+            "din"
+          ],
+          [
+            285,
+            291,
+            "r"
+          ],
+          [
+            292,
+            294,
+            "'"
+          ]
+        ],
+        "expected": null
+      }
+    ]
+  },
+  {
+    "name": "nullable-key-spec-review",
+    "sourceFile": "src/uncertain-input.mjs",
+    "seed": "import fs from 'node:fs';const r=/a/;const match=r.exec('ordinary');const map=new WeakMap();map.set(match,fs.readFileSync);opaque(map.get(match));",
+    "cases": [
+      {
+        "name": "nullable-exec-weak-key",
+        "positive": false,
+        "complete": false,
+        "edits": [],
+        "expected": {
+          "rule": "OS02",
+          "file": "src/uncertain-input.mjs",
+          "line": 1,
+          "column": 93,
+          "classification": "incomplete",
+          "message": "weak collection insertion has no inspected normal completion"
+        }
+      }
+    ]
+  }
+]

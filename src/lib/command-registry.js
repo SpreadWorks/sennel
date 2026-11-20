@@ -110,6 +110,7 @@ export class CommandDefinition {
     allowInvalidConfig = false,
     routed = false,
     readOnly = false,
+    readOnlyFlags = [],
     migration = false,
   }) {
     if (typeof name !== "string" || !COMMAND_NAME_RE.test(name)) {
@@ -120,6 +121,10 @@ export class CommandDefinition {
     }
     if (command && outputMode !== "raw" && outputMode !== "envelope") {
       throw new Error(`command outputMode is required: ${name}`);
+    }
+    if (!Array.isArray(readOnlyFlags) || new Set(readOnlyFlags).size !== readOnlyFlags.length
+      || readOnlyFlags.some((flag) => typeof flag !== "string" || !Array.isArray(args?.flags) || !args.flags.includes(flag))) {
+      throw new TypeError(`read-only flags must be unique declared flags: ${name}`);
     }
     this.name = name;
     this.command = command;
@@ -144,6 +149,7 @@ export class CommandDefinition {
     this.allowInvalidConfig = Boolean(allowInvalidConfig);
     this.routed = Boolean(routed);
     this.readOnly = readOnly === true;
+    this.readOnlyFlags = Object.freeze([...readOnlyFlags]);
     this.migration = migration === true;
     Object.assign(this, dispatch);
 
@@ -321,12 +327,13 @@ const flowGroupHelp = {
 
 function flowDefinition(name, entry, group = null) {
   if (typeof entry?.command === "function") {
-    const { command, help, args, ...dispatch } = entry;
+    const { command, help, args, readOnlyFlags, ...dispatch } = entry;
     return new CommandDefinition({
       name,
       command,
       outputMode: "envelope",
       readOnly: entry.readOnly ?? (group === "get" || ["query", "resume"].includes(name)),
+      readOnlyFlags,
       args: args || {},
       help: {
         section: "Flow",

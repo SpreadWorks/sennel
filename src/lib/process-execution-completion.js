@@ -2,6 +2,7 @@ import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic, Proc
 
 /** Keep physical completion separate from publication or reporting failures. */
 export function retainExecutionCompletion(target, source) {
+  if (source?.processExecutionHistory !== undefined) target.processExecutionHistory = source.processExecutionHistory;
   if (source?.processExecutionStopReceipt == null) return;
   const receipt = source.processExecutionStopReceipt instanceof ProcessExecutionStopReceipt
     ? source.processExecutionStopReceipt : new ProcessExecutionStopReceipt(source.processExecutionStopReceipt);
@@ -69,8 +70,13 @@ export function combineProcessExecutionFailures(primary, completion) {
   const messages = [primary, completion].map(failure => failure instanceof Error ? failure.message : String(failure));
   const causes = new AggregateError([primary, completion],
     `Operation and managed-process completion both failed: ${messages.join("; ")}`, { cause: primary });
-  return processExecutionControlFailureFromCause(causes)
-    ?? processExecutionControlFailureFromCause(causes, completion) ?? causes;
+  const selected = processExecutionControlFailureFromCause(causes)
+    ?? processExecutionControlFailureFromCause(causes, completion);
+  if (selected !== null) return selected;
+  // No typed control failure selected another completion. Keep the original
+  // body's actual receipt rather than losing it in the generic aggregate.
+  retainExecutionCompletion(causes, primary);
+  return causes;
 }
 
 /** Run mandatory completion after an operation and preserve the operation's failure first. */

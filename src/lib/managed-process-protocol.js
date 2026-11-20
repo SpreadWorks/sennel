@@ -287,7 +287,7 @@ function createManagedTransportRequest({ socketRequest = managedSocketRequest } 
 export class ManagedProcessRequestBatch {
   static get maximumWidth() { return 8; }
   static cohortKey(message) {
-    if (ManagedProcessMessage.reservesCall(message.operation) || ["claim-launch", "finish"].includes(message.operation)) return message.operation;
+    if (ManagedProcessMessage.reservesCall(message.operation) || ["claim-launch", "finish", "persist-call-output"].includes(message.operation)) return message.operation;
     return message.operation === "observe" && ["started", "exit"].includes(message.payload.data?.type)
       ? `observe-${message.payload.data.type}` : null;
   }

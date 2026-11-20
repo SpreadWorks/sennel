@@ -884,7 +884,8 @@ async function executeDispatch({
   };
 
   publication.stage = "COMMAND_FAILED";
-  const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input, readOnly: entry.readOnly });
+  const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input,
+    readOnly: readonlyInvocation || entry.readOnly });
   try {
     await withFlowProcessRuntime(hookCtx, async () => {
       try { await executeLifecycle(); }

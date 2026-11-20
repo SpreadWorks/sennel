@@ -407,7 +407,7 @@ function stateCreatedActivityId(state) {
   return `flow-created-${identityDigest}`;
 }
 
-function replayCanonicalState(state, activities, attemptHistory) {
+function replayCanonicalState(state, activities) {
   if (!(state instanceof CurrentFlowState) || !Array.isArray(activities)) {
     throw new Error("canonical state replay requires typed state and Activities");
   }
@@ -443,9 +443,9 @@ function replayCanonicalState(state, activities, attemptHistory) {
     // execution history. Once a historical record does claim confirmed
     // Activities, however, validate that prefix through the same transition
     // reducer and resulting-state comparison used by native Flows.
-    if (activities.length === 0) return state;
+    if (activities.length === 0) return new CurrentFlowAttemptHistory();
   }
-  let replayed = CurrentFlowState.create({
+  const initial = CurrentFlowState.create({
     definition: state.definition,
     execution: state.execution.toJSON(),
     version: state.version,
@@ -457,24 +457,14 @@ function replayCanonicalState(state, activities, attemptHistory) {
     outbox: state.outbox.toJSON(),
     context: state.context.toJSON(),
   });
-  const priorActivities = [];
-  for (const activity of activities) {
-    const node = replayed.findNode(activity.nodeId);
-    if (!node || node.key !== activity.nodeKey) {
-      throw new Error("Activity must reference a state node by stable id and semantic key");
-    }
-    const before = replayed;
-    replayed = activity.transition.apply(replayed, activity, { priorActivities })
-      .withConfirmationOrder(activity.confirmationOrder);
-    attemptHistory.recordTransition(before, replayed, activity);
-    priorActivities.push(activity);
-  }
+  const replay = initial.replayActivities(activities);
+  const replayed = replay.state;
   const expectedState = state.toJSON();
   if (state.history !== null) expectedState.history = null;
   if (JSON.stringify(replayed.toJSON()) !== JSON.stringify(expectedState)) {
     throw new Error("flow state content conflicts with its Activity prefix");
   }
-  return state;
+  return replay.attemptHistory;
 }
 
 function validateIdKey(value, label) {
@@ -891,9 +881,9 @@ class CanonicalFlowVersionReader {
     if (state.specId !== specId || spec.specId.toString() !== specId) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical identity does not match the selected Spec");
     const confirmedLedger = this.readConfirmedLedger(ledgerBytes, state.confirmationOrder);
     const activities = confirmedLedger.activities;
-    const attemptHistory = new CurrentFlowAttemptHistory();
+    let attemptHistory;
     try {
-      replayCanonicalState(state, activities, attemptHistory);
+      attemptHistory = replayCanonicalState(state, activities);
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical state and Activity ledger are inconsistent", { cause: error });
     }
@@ -1495,12 +1485,12 @@ export async function bootstrapFlowQueryCli(argv = []) {
   return runFlowQueryCli(argv, { prepared });
 }
 
-function repositoryRoot() {
+export function flowQueryRoot() {
   return path.resolve(process.env[PRODUCT.env("WORK_ROOT")] ?? process.cwd());
 }
 
 async function queryConfiguration() {
-  const configPath = path.join(repositoryRoot(), ".sennel", "config.json");
+  const configPath = path.join(flowQueryRoot(), ".sennel", "config.json");
   let config;
   try { config = JSON.parse(await fs.promises.readFile(configPath, "utf8")); } catch (error) {
     throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "Flow configuration could not be read", { cause: error });
@@ -1544,7 +1534,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     request.validateCursor();
     const configuration = await queryConfiguration();
     language = configuration.language ?? language;
-    reader = new CanonicalFlowVersionReader({ repositoryRoot: repositoryRoot(), specRoot: configuration.specRoot });
+    reader = new CanonicalFlowVersionReader({ repositoryRoot: flowQueryRoot(), specRoot: configuration.specRoot });
     available = await reader.listAvailableVersions(request.specId);
     if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");

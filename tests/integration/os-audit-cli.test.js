@@ -41,6 +41,22 @@ class AuditFixture {
     assert.equal(execution.status, report.exitCode, execution.stderr);
     return report;
   }
+  installStandardGate() {
+    this.standardGate = path.resolve("tests/structure/os-independence.test.js");
+  }
+  runStandardGate() {
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const execution = spawnSync(process.execPath, ["--test", this.standardGate], {
+      cwd: this.root,
+      encoding: "utf8",
+      timeout: 30000,
+      env,
+    });
+    assert.equal(execution.error, undefined);
+    assert.equal(execution.signal, null);
+    return execution;
+  }
 }
 
 const platformRead = `import fs from 'node:fs';
@@ -117,6 +133,58 @@ test("audit CLI inspects unreachable source, reports status, and recovers after 
   assert.equal(incomplete.complete, false);
   assert.notEqual(incomplete.exitCode, 0);
   assert.ok(incomplete.diagnostics.some((entry) => entry.file === "src/broken.cjs" && entry.classification === "incomplete"));
+});
+
+test("CLI and the standard audit gate find an aliased re-export violation and recover after removal", (t) => {
+  const fixture = new AuditFixture(t);
+  const entry = 'import { inspect } from "./new-module.mjs"; export const run = inspect;';
+  const cleanImplementation = 'import fs from "node:fs"; export function read() { return fs.readFileSync("snapshot.json"); }';
+  fixture.write("src/entry.js", entry);
+  fixture.write("src/new-module.mjs", 'export { read as inspect } from "./inner-module.mjs";');
+  fixture.write("src/inner-module.mjs", cleanImplementation);
+  fixture.installStandardGate();
+
+  const cleanCli = fixture.run();
+  const cleanGate = auditOsIndependenceAt(fixture.root);
+  const cleanStandardGate = fixture.runStandardGate();
+  assert.equal(cleanCli.exitCode, 0, JSON.stringify(cleanCli.diagnostics));
+  assert.equal(cleanGate.ok, true, JSON.stringify(cleanGate.diagnostics));
+  assert.equal(cleanStandardGate.status, 0, cleanStandardGate.stderr || cleanStandardGate.stdout);
+  assert.equal(cleanCli.source.digest, cleanGate.source.digest);
+
+  fixture.write("src/inner-module.mjs", platformRead.replace(
+    "return fs.readFileSync('snapshot.json');",
+    "return;",
+  ));
+  const rejectedCli = fixture.run();
+  const rejectedGate = auditOsIndependenceAt(fixture.root);
+  const rejectedStandardGate = fixture.runStandardGate();
+  const cliDiagnostic = rejectedCli.diagnostics.find((entry) => entry.rule === "OS01" && entry.file === "src/inner-module.mjs");
+  const gateDiagnostic = rejectedGate.diagnostics.find((entry) => entry.rule === "OS01" && entry.file === "src/inner-module.mjs");
+  assert.equal(rejectedCli.exitCode, 1, JSON.stringify(rejectedCli.diagnostics));
+  assert.equal(rejectedGate.ok, false);
+  assert.notEqual(rejectedStandardGate.status, 0,
+    `${rejectedStandardGate.stdout}\n${rejectedStandardGate.stderr}`);
+  assert.ok(cliDiagnostic, JSON.stringify(rejectedCli.diagnostics));
+  assert.ok(gateDiagnostic, JSON.stringify(rejectedGate.diagnostics));
+  assert.deepEqual(
+    { rule: cliDiagnostic.rule, file: cliDiagnostic.file, line: cliDiagnostic.line, column: cliDiagnostic.column },
+    { rule: gateDiagnostic.rule, file: gateDiagnostic.file, line: gateDiagnostic.line, column: gateDiagnostic.column },
+  );
+  const standardGateOutput = `${rejectedStandardGate.stdout}\n${rejectedStandardGate.stderr}`;
+  assert.match(standardGateOutput, new RegExp(`"rule":\\s*"OS01",\\s*"file":\\s*"src/inner-module\\.mjs",\\s*"line":\\s*${cliDiagnostic.line},\\s*"column":\\s*${cliDiagnostic.column}`));
+  assert.notEqual(rejectedCli.source.digest, cleanCli.source.digest);
+  assert.equal(rejectedCli.source.digest, rejectedGate.source.digest);
+
+  fixture.write("src/inner-module.mjs", cleanImplementation);
+  const recoveredCli = fixture.run();
+  const recoveredGate = auditOsIndependenceAt(fixture.root);
+  const recoveredStandardGate = fixture.runStandardGate();
+  assert.equal(recoveredCli.exitCode, 0, JSON.stringify(recoveredCli.diagnostics));
+  assert.equal(recoveredGate.ok, true, JSON.stringify(recoveredGate.diagnostics));
+  assert.equal(recoveredStandardGate.status, 0, recoveredStandardGate.stderr || recoveredStandardGate.stdout);
+  assert.equal(recoveredCli.source.digest, cleanCli.source.digest);
+  assert.equal(recoveredGate.source.digest, cleanGate.source.digest);
 });
 
 test("audit CLI rejects arguments instead of allowing a narrowed successful scope", (t) => {

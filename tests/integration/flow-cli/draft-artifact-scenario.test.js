@@ -452,7 +452,7 @@ for (const phase of ["questions", "coverage"]) {
   }
 }
 
-it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async () => {
+it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async (t) => {
   const root = fixtureRepository("draft-artifact-scenario-");
   let gateAgentLookup;
   let reviewProcess;
@@ -747,6 +747,37 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
 
   } catch (error) {
     testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    // TAP otherwise reports the selected close refusal without its original
+    // body/communication cause. Keep the actual bounded chain, then rethrow.
+    const pending = [{ failure: error, parentIndex: null, via: "thrown" }];
+    const seen = new Set();
+    for (let index = 0; index < pending.length && index < 12; index += 1) {
+      const { failure, parentIndex, via } = pending[index];
+      if (failure == null || seen.has(failure)) continue;
+      seen.add(failure);
+      t.diagnostic(JSON.stringify({ draftPhaseBoundaryFailure: {
+        index, parentIndex, via,
+        name: typeof failure.name === "string" ? failure.name.slice(0, 80) : null,
+        code: typeof failure.code === "string" ? failure.code.slice(0, 160) : null,
+        reason: typeof failure.reason === "string" ? failure.reason.slice(0, 160) : null,
+        messageHead: String(failure.message ?? failure).slice(0, 512),
+        frames: typeof failure.stack === "string" ? failure.stack.split("\n").slice(1, 7).map((line) => line.slice(0, 512)) : [],
+        executionId: failure.executionId ?? null, callId: failure.callId ?? null,
+        primaryCause: failure.primaryCause == null ? null : {
+          code: failure.primaryCause.code,
+          messageHead: failure.primaryCause.message.slice(0, 512),
+          executionId: failure.primaryCause.executionId, callId: failure.primaryCause.callId,
+        },
+        diagnostic: failure.diagnostic?.toJSON() ?? null,
+        communication: failure.communication?.toJSON() ?? null,
+      } }));
+      if (failure.cause != null && pending.length < 12) pending.push({ failure: failure.cause, parentIndex: index, via: "cause" });
+      if (failure instanceof AggregateError) {
+        for (const member of failure.errors.slice(0, 12 - pending.length)) {
+          pending.push({ failure: member, parentIndex: index, via: "errors" });
+        }
+      }
+    }
     throw error;
   } finally {
     reviewProcess?.mock.restore();

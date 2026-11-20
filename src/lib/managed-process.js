@@ -8,8 +8,9 @@ import { ensureStandaloneExecutionGrant, releaseStandaloneExecutionGrant,
   acquireStandaloneExecutionGrantSync, releaseStandaloneExecutionGrantSync } from "./process-execution-sync.js";
 import { assertManagedRecordIdentity, readManagedRecordSnapshot } from "./managed-process-record.js";
 import { readManagedOutput } from "./managed-process-output.js";
-import { ReadOnlyInvocationWorkspace } from "./readonly-invocation-workspace.js";
-import { completeManagedOperation, completeManagedOperationSync } from "./process-execution-completion.js";
+import { InvocationControlWorkspace, ReadOnlyInvocationWorkspace } from "./readonly-invocation-workspace.js";
+import { ProcessExecutionHistoryReference } from "./process-execution-history-reference.js";
+import { completeManagedOperation, completeManagedOperationSync, retainExecutionCompletion } from "./process-execution-completion.js";
 
 function inheritedExecutionGrant(executionRoot, environment) {
   const serialized = environment[PROCESS_EXECUTION_SCOPE_ENV];
@@ -23,37 +24,61 @@ function inheritedExecutionGrant(executionRoot, environment) {
   return grant;
 }
 
-/** A single owned workspace/runtime lifetime, also held across worker messages. */
-export class OwnedReadOnlyProcessScope {
+/** One actual control workspace/runtime lifetime, including its joined coordinator. */
+class OwnedInvocationProcessScope {
+  static Workspace = InvocationControlWorkspace;
   #closure = null;
   constructor(runtime, workspace) {
-    if (!(runtime instanceof ProcessExecutionRuntime) || !(workspace instanceof ReadOnlyInvocationWorkspace)) {
-      throw new TypeError("Read-only scope requires its actual runtime and minted workspace");
+    if (!(runtime instanceof ProcessExecutionRuntime) || !(workspace instanceof InvocationControlWorkspace)) {
+      throw new TypeError("Control scope requires its actual runtime and minted workspace");
     }
     this.runtime = runtime;
     this.workspace = workspace;
   }
   static async acquire({ mainRoot, executionRoot = mainRoot, environment = process.env, temporaryParent }) {
-    const workspace = ReadOnlyInvocationWorkspace.create({ temporaryParent, outsideRoots: [mainRoot, executionRoot] });
+    const workspace = this.Workspace.create({ temporaryParent, outsideRoots: [mainRoot, executionRoot] });
     const runtime = await ProcessExecutionRuntime.acquire({ mainRoot, executionRoot, workspace, environment, temporaryParent: path.dirname(workspace.path) });
-    return new this(runtime, workspace);
+    try { return new this(runtime, workspace); }
+    catch (error) {
+      return completeManagedOperation(() => { throw error; }, () => runtime.close());
+    }
   }
   enter(callback) { return this.runtime.enter(() => callback(this.runtime, this.workspace)); }
   close({ successful }) {
-    // A failed or uncertain completion is retained, never retried as a new success.
     this.#closure ??= this.#closeOnce(successful);
     return this.#closure;
   }
   async #closeOnce(successful) {
     await this.runtime.close();
+    this.completeWorkspace(successful);
+  }
+  completeWorkspace() { throw new TypeError("Control scope must own its retention policy"); }
+}
+
+/** Read-only application scratch is removable only after confirmed success. */
+export class OwnedReadOnlyProcessScope extends OwnedInvocationProcessScope {
+  static Workspace = ReadOnlyInvocationWorkspace;
+  completeWorkspace(successful) {
     if (!successful) return;
     this.workspace.complete({ generation: this.workspace.generation, normalExit: true, resourcesReleased: true });
     this.workspace.cleanup({ generation: this.workspace.generation });
   }
 }
 
+/** Independent native writers retain their closed inventory outside the checkout. */
+export class OwnedRetainedProcessScope extends OwnedInvocationProcessScope {
+  constructor(runtime, workspace) {
+    super(runtime, workspace);
+    this.history = new ProcessExecutionHistoryReference({ storage: runtime.remoteGrant().storage,
+      checkoutIdentity: runtime.checkoutIdentity.toJSON() });
+  }
+  completeWorkspace() {
+    this.workspace.complete({ generation: this.workspace.generation, normalExit: true, resourcesReleased: true });
+  }
+}
+
 /** Reuse authenticated execution authority, or own a standalone scope. */
-export async function withManagedProcessScope({ executionRoot, standaloneRoot = executionRoot ?? process.cwd(), environment = process.env, readOnly = false }, callback) {
+export async function withManagedProcessScope({ executionRoot, standaloneRoot = executionRoot ?? process.cwd(), environment = process.env, readOnly = false, retainedControl = false }, callback) {
   const current = ProcessExecutionRuntime.current();
   if (current !== null) return callback(current);
   let runtime;
@@ -65,6 +90,9 @@ export async function withManagedProcessScope({ executionRoot, standaloneRoot = 
     const root = path.resolve(standaloneRoot);
     if (readOnly) {
       return withReadOnlyManagedProcessScope({ mainRoot: root, executionRoot: executionRoot ?? root, environment }, callback);
+    }
+    if (retainedControl) {
+      return withRetainedManagedProcessScope({ mainRoot: root, executionRoot: executionRoot ?? root, environment }, callback);
     }
     ownedRoot = root;
     runtime = await ProcessExecutionRuntime.fromRemoteGrant(await ensureStandaloneExecutionGrant(root));
@@ -87,6 +115,26 @@ export async function withReadOnlyManagedProcessScope({ mainRoot, executionRoot 
   }, async () => {
     if (scope !== undefined) await scope.close({ successful });
   });
+}
+
+/** Retain locator provenance even when native work, publication or closure fails. */
+export async function withRetainedManagedProcessScope(options, callback) {
+  let scope;
+  let result;
+  try {
+    return await completeManagedOperation(async () => {
+      scope = await OwnedRetainedProcessScope.acquire(options);
+      result = await scope.enter(callback);
+      result.processExecutionHistory = scope.history;
+      return result;
+    }, async () => {
+      if (scope !== undefined) await scope.close({ successful: false });
+    });
+  } catch (error) {
+    retainExecutionCompletion(error, result);
+    if (scope !== undefined) error.processExecutionHistory = scope.history;
+    throw error;
+  }
 }
 
 /** One owned synchronous operation, using the same grant and completion APIs. */
@@ -126,7 +174,7 @@ function withSynchronousProcessScope({ mainRoot, executionRoot, environment, rea
 export async function executeManagedProcess(command, args, options = {}) {
   const runtime = options.runtime ?? ProcessExecutionRuntime.current();
   if (runtime !== null) return DirectChildExecutor.execute(command, args, { ...options, runtime });
-  return withManagedProcessScope({ standaloneRoot: options.repositoryRoot ?? command.cwd ?? options.cwd ?? process.cwd(), environment: options.env ?? process.env, readOnly: options.readOnly === true },
+  return withManagedProcessScope({ standaloneRoot: options.repositoryRoot ?? command.cwd ?? options.cwd ?? process.cwd(), environment: options.env ?? process.env, readOnly: options.readOnly === true, retainedControl: options.retainedControl === true },
     (scope) => DirectChildExecutor.execute(command, args, { ...options, runtime: scope }));
 }
 

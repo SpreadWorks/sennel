@@ -38,3 +38,47 @@ for (const name of ["ServiceClass", "RenamedDependency"]) {
     });
   }
 }
+
+for (const text of ["{", "}", "[", "]", "(", ")", ","]) {
+  test(`object property delimiters in literal data retain exact initializer and following key: ${text}`, () => {
+    const literal = JSON.stringify(text);
+    const tokens = readTokens(`{ marker: ${literal}, selected: Target }`);
+    const marker = readObjectProperty(tokens, "marker");
+    const selected = readObjectProperty(tokens, "selected");
+    assert.ok(marker instanceof SourceInitializer);
+    assert.deepEqual(marker.tokens, tokens.slice(3, 4));
+    assert.equal(marker.tokens[0].kind, "string");
+    assert.ok(selected instanceof SourceInitializer);
+    assert.equal(selected.matches("Target"), true);
+    assert.equal(readObjectProperty(readTokens(`{ ${literal}: Target }`), text).matches("Target"), true);
+  });
+}
+
+test("object property template interpolations use the existing comma-separated expression boundary", () => {
+  const tokens = readTokens('{ text: `before ${first, second} after`, selected: Target }');
+  const property = readObjectProperty(tokens, "text");
+  assert.ok(property instanceof SourceInitializer);
+  assert.equal(property.matches('`before ${first, second} after`'), true);
+  assert.equal(readObjectProperty(tokens, "selected").matches("Target"), true);
+});
+
+test("object property data does not reinterpret a matching identifier inside an initializer as a method", () => {
+  assert.equal(readObjectProperty(readTokens('{ other: selected() }'), "selected"), null);
+  assert.equal(readObjectProperty(readTokens('{ other: { selected() {} } }'), "selected"), null);
+  assert.equal(readObjectProperty(readTokens('{ [selected]: Target }'), "selected"), null);
+});
+
+for (const member of ['get slot() { return other; }', 'set slot(value) {}', '*slot() { yield other; }', 'async *slot() { yield other; }', 'get "slot"() { return other; }']) {
+  for (const properties of [`slot: safe, ${member}`, `${member}, slot: safe`]) {
+    test(`direct property queries preserve accessor and generator duplicate refusal: ${properties}`, () => {
+      assert.equal(readObjectProperty(readTokens(`{ ${properties} }`), "slot"), null);
+    });
+  }
+}
+for (const source of ['{ 0: Selected }', '{ "0": Selected }']) {
+  test(`direct property queries preserve numeric source property names: ${source}`, () => {
+    const property = readObjectProperty(readTokens(source), "0");
+    assert.ok(property instanceof SourceInitializer);
+    assert.equal(property.matches("Selected"), true);
+  });
+}

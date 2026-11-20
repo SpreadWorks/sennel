@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
 export class InterruptedChildResult {
   constructor(exitCode, stdout, stderr, pid) {
@@ -37,7 +38,9 @@ export class FailedChildResult extends ExitedChildResult {
 
 /** The caller owns this child and always waits for its resources to close. */
 async function childAtCheckpoint(command, args, { cwd, env, checkpoint, timeout = 30_000 } = {}, interrupt, Result = FailedChildResult) {
-  const child = spawn(command, args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  const invocation = new NativeExecutableInvocation({ executable: command, args, cwd, env,
+    stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(invocation.executable, invocation.args, { ...invocation.processOptions(), shell: false });
   const closed = once(child, "close");
   let stdout = "";
   let stderr = "";

@@ -40,10 +40,14 @@ const selected = input ? () => '/proc/self/stat' : opaque;
 fs.readFileSync(selected());`, 3);
 });
 
-test("uncertain method receivers refuse an unproven this binding", () => {
-  rejects(`import fs from 'node:fs';
+test("finite method receivers identify the actual native path sink", () => {
+  const report = check(`import fs from 'node:fs';
 const selected = input ? { file: '/proc/self/stat', read() { fs.readFileSync(this.file); } } : { file: 'snapshot.json', read() { fs.readFileSync(this.file); } };
-selected.read();`, 3);
+selected.read();`);
+  assert.equal(report.ok, false, report.diagnostics.join("\n"));
+  assert.equal(report.complete, true, report.diagnostics.join("\n"));
+  assert.ok(report.diagnostics.some(item => item.file === entry && item.line === 2 && item.column === 62
+    && item.rule === "OS01" && item.classification === "violation"), report.diagnostics.join("\n"));
 });
 
 test("portable callable alternatives remain completely inspected", () => {

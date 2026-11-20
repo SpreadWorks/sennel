@@ -1,3 +1,4 @@
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
 import { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";
 import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { readRuntimeResource } from "../../lib/runtime-package.js";
@@ -650,7 +651,7 @@ function retryRecoveryPlanFor({ ctx, state, descriptor, target }) {
     flowManager: ctx.flowManager,
     state: canonical,
     executionRoot: ctx.executionRoot || ctx.root,
-    artifactRoot: ctx.mainRoot || ctx.root,
+    artifactRoot: flowArtifactRoot(ctx),
   });
   return recoveryPlan;
 }
@@ -788,7 +789,7 @@ export function projectApprovalRequirements({
  * established field order; only the source of identity and lifecycle facts
  * changes from mutable state to the Version Store.
  */
-function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding, missingProducerArtifactRoute = null, selectedFinalRegressionAction = null, interruptedRuntimeLog = null) {
+function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding, missingProducerArtifactRoute = undefined, selectedFinalRegressionAction = null, interruptedRuntimeLog = null) {
   const target = new CanonicalNextActionTarget({ state: typedState, descriptor });
   const preparationDirective = target.scope === "flow" && prepareStepRegistration(target.stepId) !== null
     ? projectPrepareStepExecution({ ctx, stepId: target.stepId }) : null;
@@ -918,8 +919,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     binding,
     recoveryPlan,
   });
-  const missingRoute = missingProducerArtifactRoute
-    ?? missingProducerArtifactRouteFor({ ctx, typedState });
+  const missingRoute = missingProducerArtifactRoute === undefined
+    ? missingProducerArtifactRouteFor({ ctx, typedState }) : missingProducerArtifactRoute;
   const planGateRepair = null;
   const lifecycleDirective = selectedFinalRegressionAction?.directive ?? new NextActionDirectiveResolver({
     state,
@@ -1066,7 +1067,7 @@ export default class GetNextActionCommand extends FlowCommand {
       specId: ctx.flowState.specId,
     }));
     if (taskExecutionOverrun !== null) {
-      const result = buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null);
+      const result = buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding);
       return {
         ...result,
         definitionTransition: taskExecutionOverrun.toJSON(),

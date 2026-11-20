@@ -15,6 +15,7 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { DraftLifecycle } from "../../../src/flow/lib/draft-lifecycle.js";
+import { RegisteredCommandLineage } from "./registered-command-lineage.js";
 import { currentRuntimePackage, listRuntimeResources, readRuntimeResource,
   RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 
@@ -113,7 +114,7 @@ class RuntimeScenarioChild {
 /** A production-created Flow plus an actual deterministic external provider. */
 export class ProcessRuntimeFlowScenario {
   constructor(seed, { test, specId = "runtime-admission", runId = "runtime-admission-run", step = "draft", sealed = false,
-    descendant = false, sourceMutation = false, nestedUpgrade = false } = {}) {
+    descendant = false, sourceMutation = false, nestedUpgrade = false, commandLineage = false, stopLineage = false } = {}) {
     this.work = new SeedWorkRoot(seed, { prefix: "sennel-runtime-flow-" });
     this.root = this.work.root;
     this.specId = specId;
@@ -138,6 +139,8 @@ export class ProcessRuntimeFlowScenario {
     this.providerDraining = path.join(this.root, ".tmp", "provider-draining.json");
     this.memberRelease = path.join(this.root, ".tmp", "member-release");
     this.memberExited = path.join(this.root, ".tmp", "member-exited.json");
+    this.lineage = commandLineage ? new RegisteredCommandLineage({ root: this.root,
+      started: this.memberStarted, release: this.memberRelease, exited: this.memberExited, stop: stopLineage }) : null;
     this.reviewSource = path.join(this.root, ".tmp", "review-source.json");
     this.reviewInput = path.join(this.root, ".tmp", "review-input.json");
     const worker = path.join(this.root, ".tmp", "runtime-provider.mjs");
@@ -189,7 +192,7 @@ export class ProcessRuntimeFlowScenario {
         'fs.writeFileSync(path.join(root,"source.txt"),"partial worker edit\\n");',
         'fs.writeFileSync(path.join(root,".sennel","process-runtime-lookalike.txt"),"worker source outside the runtime prefix\\n");',
       ] : []),
-      ...(descendant ? [
+      ...(this.lineage !== null ? this.lineage.startSource : descendant ? [
         `const member=runCmdAsync(process.execPath,[${JSON.stringify(memberWorker)}],{cwd:root,timeout:120000});`,
         'member.catch(()=>{});',
         `const memberStarted=${JSON.stringify(this.memberStarted)};`,
@@ -204,7 +207,9 @@ export class ProcessRuntimeFlowScenario {
       `const release=${JSON.stringify(this.release)};`,
       'await new Promise((resolve)=>{const watcher=fs.watch(path.dirname(release),()=>{if(fs.existsSync(release)){watcher.close();resolve();}});if(fs.existsSync(release)){watcher.close();resolve();}});',
       `writeMarker(${JSON.stringify(this.providerDraining)},{draining:true});`,
-      `if(member!==null){const result=await member;writeMarker(${JSON.stringify(this.memberExited)},{status:result.status,receipt:result.processExecutionStopReceipt.toJSON()});if(!result.ok)throw new Error(result.stderr);}`,
+      ...(this.lineage !== null ? this.lineage.finishSource : [
+        `if(member!==null){const result=await member;writeMarker(${JSON.stringify(this.memberExited)},{status:result.status,receipt:result.processExecutionStopReceipt.toJSON()});if(!result.ok)throw new Error(result.stderr);}`,
+      ]),
       'process.stdout.write(JSON.stringify({sealed:!!requestPath}));',
     ].join("\n"));
     fs.writeFileSync(path.join(this.root, ".sennel", "config.json"), JSON.stringify({
@@ -304,6 +309,7 @@ export class ProcessRuntimeFlowScenario {
     fs.writeFileSync(path.join(evidence, "canonical-readback.json"), JSON.stringify(this.snapshot(), null, 2));
     for (const file of [this.started, this.request, this.count, this.calls, this.nestedUpgrade,
       this.nestedUpgradeStarted, this.memberStarted, this.providerDraining, this.memberRelease, this.memberExited, `${this.nestedUpgrade}.stdout`, `${this.nestedUpgrade}.stderr`, this.reviewSource, this.reviewInput,
+      ...(this.lineage === null ? [] : [this.lineage.effect, this.lineage.replay]),
       path.join(this.root, "source.txt")]) {
       if (fs.existsSync(file)) fs.copyFileSync(file, path.join(evidence, path.basename(file)));
     }

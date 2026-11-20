@@ -11,6 +11,7 @@ import { extractMakeTestTarget, readMakefile } from "../../lib/makefile.js";
 import { collectTestCommandSources, selectTestCommandSource } from "../../lib/test-command-sources.js";
 import { projectFilePathsFromAnalysis } from "../../docs/lib/analysis-entry.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { stableStringify } from "./review-observation-values.js";
 import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -32,6 +33,7 @@ export const CHILD_PROCESS_RESULT_KINDS = Object.freeze([
   "timeout",
   "max-buffer",
 ]);
+const REGRESSION_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
 const MAX_BUFFER_ERROR_CODES = new Set(["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "ENOBUFS"]);
 const ASSERTION_EVIDENCE_PATTERN = /\bERR_ASSERTION\b|\bAssertionError\b|\bassert(?:ion)?(?:\s+(?:failed|failure|detail))\b/i;
 const CHILD_PROCESS_RECORD_PREFIX = "[sennel] child process execution record ";
@@ -804,7 +806,10 @@ export function listRegressionChangedFiles({ root, state, pathspecExcludes = [] 
     repositoryRoot: root,
     baseBranch: state.baseBranch || "main",
     untrackedFiles: "all",
-    pathspecExcludes,
+    pathspecExcludes: [
+      ...REGRESSION_RUNTIME_ARTIFACTS.gitPathspecExcludes({ relativeToCwd: true }),
+      ...pathspecExcludes,
+    ],
   });
 }
 

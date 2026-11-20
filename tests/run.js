@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, statSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +31,11 @@ const {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const CHILD_PROCESS_RECORD_CODEC = new ChildProcessExecutionRecordCodec();
+
+function writeOutput(fd, text) {
+  const stream = fd === 1 ? process.stdout : process.stderr;
+  stream.write(text);
+}
 
 class SuiteOutput {
   constructor(fd, write) {
@@ -105,7 +110,7 @@ function formatExecutionSummary(counts, incompleteCategories) {
 
 export async function executeFiles(files, {
   executeProcess = executeManagedProcess,
-  write = writeSync,
+  write = writeOutput,
   root = ROOT,
   executionRoot = root,
   jobs = null,
@@ -156,7 +161,7 @@ export async function executeFiles(files, {
 
 export async function executeFilesInTemporaryRoot(files, {
   temporaryRoot = TestTemporaryRoot.select({ repositoryRoot: ROOT }),
-  write = writeSync,
+  write = writeOutput,
   ...options
 } = {}) {
   write(2, `[sennel] test temporary storage: repository ${temporaryRoot.path} (cleanup requires confirmed execution completion)\n`);
@@ -185,8 +190,8 @@ export async function main(args = process.argv.slice(2)) {
     },
   });
   const result = await runner.run(args);
-  if (result.stdout) writeSync(1, result.stdout);
-  if (result.stderr) writeSync(2, result.stderr);
+  if (result.stdout) writeOutput(1, result.stdout);
+  if (result.stderr) writeOutput(2, result.stderr);
   return result.exitCode;
 }
 

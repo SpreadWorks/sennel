@@ -88,7 +88,6 @@ for (const [name, source, rule] of [
   // incomplete inspection rather than a violation merely for using the OS.
   ["unresolved OS predicate", `function select(expected) { if (process.platform === expected) return 1; return 0; }`, "OS01"],
   ["computed filesystem", `import fs from 'node:fs'; fs[operation](file);`, "OS01"],
-  ["computed literal member", `import fs from 'node:fs'; fs['readFileSync'](file);`, "OS01"],
   ["computed launch", `import * as child from 'node:child_process'; child[method](command);`, "OS02"],
   ["computed load", `const capability = await import(name);`, "OS02"],
   ["dynamic require", `const capability = require(name);`, "OS02"],
@@ -105,7 +104,6 @@ for (const [name, source, rule] of [
   ["conditional helper return", `import fs from 'node:fs'; function choose(flag) { return flag ? fs : {}; } const io = choose(condition); io.readFileSync('/proc/self/stat');`, "OS02"],
   ["created dynamic require", `import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); load(name);`, "OS02"],
   ["vm source execution", `import vm from 'node:vm'; vm.runInNewContext(source);`, "OS02"],
-  ["computed global capability", `globalThis['process']['kill'](-pid);`, "OS02"],
   ["unsupported builtin transform", `import fs from 'node:fs'; const io = Object.assign({}, fs); io.readFileSync('/proc/self/stat');`, "OS01"],
 ]) test(`${name} makes the relevant rule incomplete`, () => {
   const report = check(source);
@@ -113,6 +111,29 @@ for (const [name, source, rule] of [
   assert.equal(report.complete, false, report.diagnostics.join("\n"));
   assert.ok(report.diagnostics.some((entry) => entry.rule === rule && entry.classification === "incomplete"), report.diagnostics.join("\n"));
   assert.equal(report.coverage.byRule[rule].complete, false);
+});
+
+
+test("literal computed filesystem member has the same native contract as dot access", () => {
+  const source = `import fs from 'node:fs'; fs['readFileSync'](file);`;
+  const report = check(source);
+  const dot = check(`import fs from 'node:fs'; fs.readFileSync(file);`);
+  for (const result of [report, dot]) {
+    assert.equal(result.ok, true);
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.diagnostics, []);
+  }
+  assert.deepEqual(report.coverage, dot.coverage);
+});
+
+test("literal global kill retains its unresolved Windows PID contract", () => {
+  const report = check(`globalThis['process']['kill'](-pid);`);
+  assert.equal(report.ok, false);
+  assert.equal(report.complete, false);
+  assert.deepEqual(report.diagnostics.map(entry => [entry.rule, entry.file, entry.line, entry.column, entry.classification, entry.trace]),
+    [["OS01", "src/renamed-entry.mjs", 1, 1, "incomplete", ["src/renamed-entry.mjs"]]]);
+  assert.match(report.diagnostics[0].message, /PID\/PGID.*Windows.*unresolved/);
+  assert.equal(report.coverage.byRule.OS01.complete, false);
 });
 
 test("namespace reexports and renamed aliases retain the dependency route", () => {

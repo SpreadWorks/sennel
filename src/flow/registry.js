@@ -2488,6 +2488,7 @@ export const FLOW_COMMANDS = {
     "recover-spec-gate-repair": {
       helpKey: "flow.run.recover-spec-gate-repair",
       requiresFlow: true,
+      readOnlyFlags: ["--preview"],
       runtimeLog: { stepMetadata: false },
       explicitTargetResolution: true,
       command: () => import("./lib/run-recover-spec-gate-repair.js"),
