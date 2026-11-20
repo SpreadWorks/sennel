@@ -5522,7 +5522,7 @@ export class CanonicalFlowManagerStore {
   }
 
   #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt, activities = null, acceptedPublication = null }) {
-    activities ??= this.activityLedger(resolved);
+    activities = activities === null ? this.activityLedger(resolved) : projectedActivityLedger(activities);
     const bindingActivities = this.#stepSettlementBindingActivities(resolved, receipt.binding, activities);
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
     if (replay !== undefined) {
