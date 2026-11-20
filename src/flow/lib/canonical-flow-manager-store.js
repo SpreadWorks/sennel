@@ -9240,38 +9240,39 @@ export class CanonicalFlowManagerStore {
   missingProducerArtifactRoute({ specId = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) return null;
-    const state = this.runtime.load(resolved);
-    const catalog = this.runtime.catalog(resolved);
-    const activities = this.activityLedger(resolved);
-    const historical = this.#historicalMissingProducerArtifactCandidate(state, resolved);
-    if (historical !== null && !historical.readiness.isReady({ state, catalog, activities })) {
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const { state, catalog } = view;
+      const activities = projectedActivityLedger(view.activities);
+      const historical = this.#historicalMissingProducerArtifactCandidate(state, resolved, activities);
+      if (historical !== null && !historical.readiness.isReady({ state, catalog, activities })) {
+        return new MissingProducerArtifactRoute({
+          kind: historical.consumerAttempt === null ? "historical-gap" : "historical-consumer",
+          producerNodeId: historical.producerNodeId,
+          consumerNodeId: historical.consumerNodeId,
+          readiness: historical.readiness,
+        });
+      }
+      const producerNodeId = state.current?.at(-1) ?? null;
+      const failed = state.attempt?.failure == null ? null : state.attempt;
+      if (producerNodeId === null || failed === null) return null;
+      const failureDisposition = state.nextAction();
+      if (failureDisposition?.operation !== "record") return null;
+      const failure = [...activities].reverse().find((activity) => (
+        activity.nodeId === producerNodeId
+        && activity.attemptId === failed.id
+        && activity.sequence === failed.sequence
+        && activity.transition.operation === "fail_attempt"
+      )) ?? null;
+      if (failure?.result === undefined) return null;
+      const readiness = producerArtifactReadinessesForProducer({ producerNodeId })
+        .find((candidate) => !candidate.isReady({ state, catalog, activities })) ?? null;
+      if (readiness === null) return null;
       return new MissingProducerArtifactRoute({
-        kind: historical.consumerAttempt === null ? "historical-gap" : "historical-consumer",
-        producerNodeId: historical.producerNodeId,
-        consumerNodeId: historical.consumerNodeId,
-        readiness: historical.readiness,
+        kind: "active-producer",
+        producerNodeId,
+        consumerNodeId: readiness.consumerNodeId,
+        readiness,
       });
-    }
-    const producerNodeId = state.current?.at(-1) ?? null;
-    const failed = state.attempt?.failure == null ? null : state.attempt;
-    if (producerNodeId === null || failed === null) return null;
-    const failureDisposition = state.nextAction();
-    if (failureDisposition?.operation !== "record") return null;
-    const failure = [...activities].reverse().find((activity) => (
-      activity.nodeId === producerNodeId
-      && activity.attemptId === failed.id
-      && activity.sequence === failed.sequence
-      && activity.transition.operation === "fail_attempt"
-    )) ?? null;
-    if (failure?.result === undefined) return null;
-    const readiness = producerArtifactReadinessesForProducer({ producerNodeId })
-      .find((candidate) => !candidate.isReady({ state, catalog, activities })) ?? null;
-    if (readiness === null) return null;
-    return new MissingProducerArtifactRoute({
-      kind: "active-producer",
-      producerNodeId,
-      consumerNodeId: readiness.consumerNodeId,
-      readiness,
     });
   }
 
@@ -10629,11 +10630,11 @@ export class CanonicalFlowManagerStore {
       : this.runtime.startAttempt(input);
   }
 
-  #historicalMissingProducerArtifactCandidate(state, specId) {
+  #historicalMissingProducerArtifactCandidate(state, specId, activities = null) {
     const consumerAttempt = state.attempt;
     const consumerNodeId = state.current?.at(-1) ?? null;
     const leaves = state.definition.orderedLeaves(state.root);
-    const activities = this.activityLedger(specId);
+    activities ??= this.activityLedger(specId);
     const candidateFor = ({ readiness, consumer = null }) => {
       const producerNodeId = readiness.producerNodeId;
       const producer = state.findNode(producerNodeId);

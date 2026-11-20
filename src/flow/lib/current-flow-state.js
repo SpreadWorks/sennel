@@ -10382,7 +10382,10 @@ export class CurrentFlowVersionStore {
     }
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
-      read: (catalog) => read(this.#canonicalTransitionView(catalog)),
+      read: (catalog) => {
+        this.#assertSpecRevisionAuthority(catalog);
+        return read(this.#canonicalTransitionView(catalog));
+      },
     });
   }
 
