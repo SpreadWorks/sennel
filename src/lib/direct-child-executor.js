@@ -12,7 +12,7 @@ import { ChildExitObservation, ProcessExecutorIdentity, ProcessOutputState,
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { DEFAULT_REGISTERED_CHILD_GRACE_MS } from "./agent-timeout.js";
 import { AgentTimeoutError, DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS } from "./process-supervisor.js";
-import { processExecutionPublicationFailure, retainExecutionCompletion } from "./process-execution-completion.js";
+import { processExecutionPublicationFailure, retainExecutionCompletion, combineProcessExecutionFailures } from "./process-execution-completion.js";
 
 const executorSession = randomUUID();
 const executions = new Map();
@@ -313,9 +313,14 @@ export class DirectChildExecutor {
       this.child?.stdout?.destroy(); this.child?.stderr?.destroy(); this.child?.stdin?.destroy();
       const output = new ProcessOutputState({ stdoutBytes: stdout.buffer.toBuffer().length, stderrBytes: stderr.buffer.toBuffer().length,
         completion: outputFailure !== null ? "truncated" : closed ? "complete" : "incomplete", cutoffAt });
-      const outputReferences = { maximum,
-        stdout: await this.runtime.persistCallOutput(this.call, { executor: this.identity, stream: "stdout", maximum, bytes: stdout.buffer.toBuffer() }),
-        stderr: await this.runtime.persistCallOutput(this.call, { executor: this.identity, stream: "stderr", maximum, bytes: stderr.buffer.toBuffer() }) };
+      // Both streams are already captured from this exited handle. Submit their
+      // independent transfers together and settle every original request before
+      // reporting a failure or requesting the call receipt.
+      const transfers = await Promise.allSettled([["stdout", stdout], ["stderr", stderr]].map(([stream, spool]) =>
+        this.runtime.persistCallOutput(this.call, { executor: this.identity, stream, maximum, bytes: spool.buffer.toBuffer() })));
+      const failures = transfers.filter((transfer) => transfer.status === "rejected");
+      if (failures.length !== 0) throw failures.map((transfer) => transfer.reason).reduce(combineProcessExecutionFailures, undefined);
+      const outputReferences = { maximum, stdout: transfers[0].value, stderr: transfers[1].value };
       let closure = await this.runtime.readCallControl(this.call, { executor: this.identity });
       interpretControl(closure);
       if (!closure.descendantsSettled) {

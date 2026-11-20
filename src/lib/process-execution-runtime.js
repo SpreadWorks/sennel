@@ -2980,6 +2980,33 @@ class RuntimeAcceptedRequestObservation {
     this.snapshot = snapshot;
     Object.freeze(this);
   }
+  matches(executionId, requestId) { return this.relativePath === `requests/${executionId}/${requestId}.json`; }
+}
+
+/** One completed private request, bound to its original pending generation. */
+class RuntimeStandaloneRequestResultPublication {
+  #content;
+  constructor(ledger, executionId, request, acceptance) {
+    if (!(ledger instanceof AtomicFile) || !(request instanceof RuntimeRequestRecord)
+      || !(acceptance instanceof RuntimeAcceptedRequestObservation) || request.response === null
+      || !acceptance.matches(executionId, request.requestId)) throw new TypeError("Standalone result requires its exact pending request");
+    this.ledger = ledger; this.acceptance = acceptance; this.executionId = executionId;
+    this.#content = encodeRuntimeRequest(executionId, request);
+    Object.freeze(this);
+  }
+  publish() {
+    const assertAccepted = () => {
+      if (!sameRuntimeRecordSnapshot(this.acceptance.snapshot, this.ledger.readSnapshot())) {
+        fail("authority-mismatch", "Pending output request changed its accepted generation", { executionId: this.executionId });
+      }
+    };
+    assertAccepted();
+    const guard = this.ledger.commitGuard;
+    this.ledger.commitGuard = (event) => { guard(event); assertAccepted(); };
+    try { return this.ledger.write(this.#content); }
+    catch (cause) { throw processExecutionControlFailureFromCause(cause) ?? cause; }
+    finally { this.ledger.commitGuard = guard; }
+  }
 }
 
 class RuntimePublicationBaseline {
@@ -4510,15 +4537,31 @@ class RuntimeRequestCohort {
   #publications;
   #prepared = null;
   #effects = [];
+  #standaloneResults = [];
   static key(message) { return ManagedProcessRequestBatch.cohortKey(message); }
+  static usesRequestLedger(operation) { return operation === "observe" || operation === "persist-call-output"; }
   static independent(root, messages) {
     if (ManagedProcessMessage.reservesCall(messages[0].operation)) return true;
     const ids = messages.map((message) => message.payload.data?.call?.callId);
-    if (new Set(ids).size !== messages.length) return false;
-    if (!["observe", "finish"].includes(messages[0].operation)) return true;
+    const outputCapture = messages[0].operation === "persist-call-output";
+    if (outputCapture) {
+      const streams = new Map();
+      for (const message of messages) {
+        const callId = message.payload.data?.call?.callId;
+        const stream = message.payload.data?.stream;
+        let names = streams.get(callId);
+        if (names === undefined) { names = new Set(); streams.set(callId, names); }
+        if (names.has(stream)) return false;
+        names.add(stream);
+      }
+    } else if (new Set(ids).size !== messages.length) return false;
+    if (!outputCapture && !["observe", "finish"].includes(messages[0].operation)) return true;
     return ids.every((id) => {
       const call = root.calls.find((entry) => entry.callId === id);
-      return call !== undefined && descendantsOf(root, call).length === 0;
+      // Only already-exited independent producers share the physical transfer
+      // boundary. Active producers and repeated streams keep the scalar path.
+      return call !== undefined && (!outputCapture || call.observation !== null)
+        && descendantsOf(root, call).length === 0;
     });
   }
   constructor(registry, messages, store, { physicalBaseline = null, requestPublications = new RuntimeRequestPublications(), preview = false } = {}) {
@@ -4529,7 +4572,7 @@ class RuntimeRequestCohort {
       throw new TypeError("Runtime request cohort requires distinct homogeneous independent requests");
     }
     this.registry = registry; this.store = store; this.preview = preview;
-    this.physicalBaseline = physicalBaseline; this.usesRequestLedger = messages[0].operation === "observe";
+    this.physicalBaseline = physicalBaseline; this.usesRequestLedger = RuntimeRequestCohort.usesRequestLedger(messages[0].operation);
     this.#publications = requestPublications;
     this.#requests = new Map(messages.map((message) => [message.requestId, new PendingCoordinatorRequest(message)]));
   }
@@ -4542,10 +4585,12 @@ class RuntimeRequestCohort {
   }
   request(context) { return this.usesRequestLedger ? context.newRequest() : context.prior; }
   beginRequest() {
+    if (Object.isFrozen(this.registry)) { this.#checkpoint = this.registry; return; }
     this.#checkpoint = this.#prepared?.registry ?? freezeRuntimeRegistry(new RuntimeRegistry(this.registry,
       new RuntimeRecordPreparation(runtimeRegistryObservationAuthority)));
   }
   restore() {
+    if (this.#checkpoint === this.registry) return this.registry;
     Object.assign(this.registry, this.#checkpoint.mutableCopy(runtimeRegistryObservationAuthority));
     return this.registry;
   }
@@ -4569,6 +4614,18 @@ class RuntimeRequestCohort {
   publication(archiveObservation) {
     return { archiveObservation, requestPublications: this.#publications, effects: this.#effects,
       preparedRegistry: this.#prepared };
+  }
+  stageStandaloneResult(context, request) {
+    const acceptance = this.#publications.acceptedObservations()
+      .find((entry) => entry.matches(context.root.executionId, request.requestId));
+    this.#standaloneResults.push(new RuntimeStandaloneRequestResultPublication(
+      context.ledger, context.root.executionId, request, acceptance));
+  }
+  commit(archiveObservation) {
+    if (this.#prepared !== null) return this.store.save(this.registry, this.publication(archiveObservation));
+    if (this.#standaloneResults.length !== this.#requests.size) throw new TypeError("Output cohort requires every original result before acknowledgement");
+    for (const publication of this.#standaloneResults) publication.publish();
+    return this.registry;
   }
 }
 
@@ -4845,9 +4902,12 @@ export class ProcessExecutionCoordinator {
   }
   #applyCohort(messages, store, archiveObservation) {
     const base = store.read({ archiveObservation, immutable: true });
-    const accepted = base.mutableCopy(runtimeRegistryObservationAuthority);
-    const planned = base.mutableCopy(runtimeRegistryObservationAuthority);
-    const usesRequestLedger = messages[0].operation === "observe";
+    const usesRequestLedger = RuntimeRequestCohort.usesRequestLedger(messages[0].operation);
+    const outputCapture = messages[0].operation === "persist-call-output";
+    // Private output IO never changes the registry. Retain its validated frozen
+    // source instead of copying all historical calls for planning and rollback.
+    const accepted = outputCapture ? base : base.mutableCopy(runtimeRegistryObservationAuthority);
+    const planned = outputCapture ? null : base.mutableCopy(runtimeRegistryObservationAuthority);
     let acceptedPreparation;
     if (!RuntimeRequestCohort.independent(this.#root(base), messages)) return null;
     // Preparation is speculative and invokes only the same read/logical
@@ -4866,12 +4926,16 @@ export class ProcessExecutionCoordinator {
           this.#root(planned).requests.push(context.newRequest());
         }
       }
-      acceptedPreparation = new PreparedRuntimeRegistryPublication(accepted, store);
-      const preview = new RuntimeRequestCohort(planned, messages, store, { preview: true, physicalBaseline: base });
-      for (const message of messages) {
-        preview.beginRequest();
-        if (!this.#applyRequest(store, archiveObservation, message, null, preview).payload.ok) return null;
+      if (!outputCapture) {
+        acceptedPreparation = new PreparedRuntimeRegistryPublication(accepted, store);
+        const preview = new RuntimeRequestCohort(planned, messages, store, { preview: true, physicalBaseline: base });
+        for (const message of messages) {
+          preview.beginRequest();
+          if (!this.#applyRequest(store, archiveObservation, message, null, preview).payload.ok) return null;
+        }
       }
+      // Output capture has no speculative IO: each original request is accepted
+      // before its existing spool validates and writes its own captured bytes.
     } catch {
       // No durable acceptance or execution effect has occurred. The normal
       // request handler freshly reads authority and owns its failure/result.
@@ -4886,7 +4950,7 @@ export class ProcessExecutionCoordinator {
       }
       // A physical read after all owned ledger publications is mandatory.
       physicalBaseline = store.read({ archiveObservation, immutable: true });
-      registry = physicalBaseline.mutableCopy(runtimeRegistryObservationAuthority);
+      registry = outputCapture ? physicalBaseline : physicalBaseline.mutableCopy(runtimeRegistryObservationAuthority);
     } else {
       // The preview changed a separate graph. Reuse this acceptance's checked
       // plan through save's complete validation and exact-input comparison.
@@ -4898,7 +4962,11 @@ export class ProcessExecutionCoordinator {
       cohort.beginRequest();
       return this.#applyRequest(store, archiveObservation, message, null, cohort);
     });
-    const committed = store.save(cohort.registry, cohort.publication(archiveObservation));
+    // Every ledger is durable and the complete physical source is freshly
+    // captured before this group. Revalidate it after the detached observations
+    // or independent exited-producer transfers, before any result can escape.
+    if (physicalBaseline !== null) this.#assertRequestEffectRegistry(store, archiveObservation, physicalBaseline, messages);
+    const committed = cohort.commit(archiveObservation);
     const root = this.#root(committed);
     this.#synchronizeCommittedLifecycle(root); this.#scheduleTick(root); this.#notifyPublication(root);
     return responses;
@@ -4932,6 +5000,20 @@ export class ProcessExecutionCoordinator {
       { deadline: pending?.deadline ?? Infinity, deadlineFailure: pending === null ? undefined : () => pending.failure(), retainedClosed })
       .catch((cause) => { this.#wakePendingPublications(); throw cause; });
   }
+  #assertRequestEffectRegistry(store, archiveObservation, expectedRegistry, messages) {
+    const freshRegistry = store.read({ archiveObservation, immutable: true });
+    const freshRoot = this.#root(freshRegistry);
+    for (const message of messages) {
+      const freshParent = this.#authenticate(freshRoot, message);
+      this.#call(freshRoot, message.payload.data?.call, freshParent);
+    }
+    if (freshRegistry === expectedRegistry) return;
+    if (!new RuntimePublicationExpectedRegistry(expectedRegistry).matches(freshRegistry)) {
+      fail("authority-mismatch", messages[0].operation === "persist-call-output"
+        ? "Runtime registry changed during output transfer" : "Runtime registry changed during observation",
+      { executionId: freshRoot.executionId });
+    }
+  }
   #applyRequest(store, archiveObservation, message, pending = null, cohort = null) {
     pending?.assertLive();
     const pureRequest = ["authenticate", "events", "runtime-snapshot"].includes(message.operation);
@@ -4953,25 +5035,12 @@ export class ProcessExecutionCoordinator {
     if (this.#assertNewRequest(registry, context, message, pending)) return pending;
     const request = cohort === null ? context.newRequest() : cohort.request(context);
     const requestEffectRegistry = outputTransferRequest || observationRequest ? cohort?.physicalBaseline ?? registry : null;
-    let requestEffectBaseline = null;
-    // Independent leaf observation previews change detached memory only. Actual
-    // accepted observations retain both fresh checks around their real effects.
+    // Scalar requests retain both fresh guards. Independent cohorts own one
+    // complete physical boundary around all original effects; their replies
+    // remain private until its final check and each exact pending readback.
     const assertRequestEffectRegistry = requestEffectRegistry === null
-      || observationRequest && cohort?.preview === true ? null : () => {
-      const freshRegistry = store.read({ archiveObservation, immutable: true });
-      const freshRoot = this.#root(freshRegistry);
-      const freshParent = this.#authenticate(freshRoot, message);
-      this.#call(freshRoot, message.payload.data?.call, freshParent);
-      // Identity here proves an immutable graph recaptured from the exact
-      // same physical bytes, after all fresh authority/inventory checks.
-      if (freshRegistry === requestEffectRegistry) return;
-      // Both ordinary and cohort baselines are validated frozen observations;
-      // effects mutate detached copies, so defer encoding until it is needed.
-      requestEffectBaseline ??= new RuntimePublicationExpectedRegistry(requestEffectRegistry);
-      if (!requestEffectBaseline.matches(freshRegistry)) {
-        fail("authority-mismatch", outputTransferRequest ? "Runtime registry changed during output transfer"
-          : "Runtime registry changed during observation", { executionId: root.executionId });
-      }
+      || cohort !== null ? null : () => {
+      this.#assertRequestEffectRegistry(store, archiveObservation, requestEffectRegistry, [message]);
     };
     let workingRegistry = registry;
     let acceptedRequest = null;
@@ -5088,7 +5157,10 @@ export class ProcessExecutionCoordinator {
       if (cohort === null) store.save(registry, publication);
       else cohort.stage(registry, publication);
     }
-    if (usesRequestLedger && !observationRequest && !publishesRegistry) ledger.write(encodeRuntimeRequest(root.executionId, request));
+    if (usesRequestLedger && !observationRequest && !publishesRegistry) {
+      if (cohort === null) ledger.write(encodeRuntimeRequest(root.executionId, request));
+      else cohort.stageStandaloneResult(context, request);
+    }
     const response = message.respond(result);
     if (cohort === null) {
       this.#synchronizeCommittedLifecycle(committedRoot);
@@ -5735,7 +5807,7 @@ export class ProcessExecutionRuntime {
     if (callAdmission !== null && !(callAdmission instanceof ProcessExecutionCallAdmission)) throw new TypeError("Typed process call admission is required");
     if (eventWriter !== null && !ProcessEventPublicationBatch.accepts(eventWriter)) throw new TypeError("Process event writer requires a function or typed batch writer");
     if (requestTransport !== null && !(requestTransport instanceof ManagedRequestTransportCohort)) throw new TypeError("Runtime transport requires its nominal request cohort");
-    this.#requestTransport = requestTransport;
+    this.#requestTransport = requestTransport ?? new ManagedRequestTransportCohort();
     this.store = store;
     this.mainRoot = store.checkout.mainRoot; this.executionRoot = store.checkout.executionRoot;
     this.executionId = record.executionId; this.ownerEpoch = record.ownerEpoch;
