@@ -405,6 +405,26 @@ const definitions = [
   }),
   new CommandDefinition({
     name: "setup",
+    args: {
+      flags: ["--dry-run"],
+      options: [
+        "--name", "--path", "--work-root",
+        "--type", "--purpose", "--tone",
+        "--agent",
+        "--lang",
+      ],
+      defaults: {
+        name: "",
+        path: "",
+        workRoot: "",
+        type: "",
+        purpose: "",
+        tone: "",
+        agent: "",
+        lang: "",
+        dryRun: false,
+      },
+    },
     entrypoint: { modulePath: "../setup.js", invocation: "main" },
     help: { section: "Project", summary: "Register project + generate config (interactive)", usage: "Usage: sennel setup", options: ["-h, --help"], localeKey: "ui:help.commands.setup" },
   }),
