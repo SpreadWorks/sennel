@@ -2897,7 +2897,7 @@ class RuntimeRecordObservation {
     return this.readCaptured(file, file.readSnapshot(), checkout, name, retainedObservations, store);
   }
   readCaptured(file, snapshot, checkout, name, retainedObservations, store) {
-    const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath)?.deref();
+    const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath);
     if (snapshot !== null && previous?.matches(snapshot, checkout, name, store)) {
       this.#observations.set(file.filePath, previous);
       return previous.archive;
@@ -2908,9 +2908,9 @@ class RuntimeRecordObservation {
     // Both callers own a complete captured archive/block graph and its exact
     // namespaces. Prepared publication also recaptures that complete graph
     // after decoding; no per-archive Native reread belongs inside this interval.
-    // Retain decoded values within this RPC; cross-RPC history remains weak.
+    // The immutable decoder survives RPC boundaries; its complete physical graph is still fresh.
     const snapshot = file.readSnapshot();
-    const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath)?.deref();
+    const previous = this.#observations.get(file.filePath) ?? retainedObservations.get(file.filePath);
     if (snapshot !== null && previous?.matchesSnapshot(snapshot, checkout, name)) {
       this.#observations.set(file.filePath, previous);
       return previous.archive;
@@ -2922,7 +2922,7 @@ class RuntimeRecordObservation {
     retainedObservations.delete(file.filePath);
     const observation = new ValidatedRuntimeArchiveObservation(snapshot, file.filePath, checkout, name, storage);
     this.#observations.set(file.filePath, observation);
-    retainedObservations.set(file.filePath, new WeakRef(observation));
+    retainedObservations.set(file.filePath, observation);
     return observation.archive;
   }
 }
@@ -3273,9 +3273,8 @@ class ProcessRuntimeStore {
   // Data reuse only: every read still revalidates physical authority/inventory.
   #readonlyObservation = null;
   #publicationBaseline = null;
-  // Expanded closed history is never kept alive between requests by the Store.
-  // GC misses take the same full validation path; current requests hold their
-  // own strong observations until all inventory and publication checks finish.
+  // Keep immutable decoders for the current archive inventory while this Store
+  // is alive. Every request still verifies complete physical bytes and identity.
   #archiveObservations = new Map();
   constructor({ mainRoot, executionRoot, faultInjector = () => {}, create = true, retainedClosed = false, historical = false, storagePolicy = null, migrationSource = false }) {
     if ((retainedClosed || historical) && create) throw new TypeError("Historical checkout inspection cannot create runtime authority");
@@ -3556,11 +3555,11 @@ class ProcessRuntimeStore {
     this.archivesAuthority.assertStable();
     const names = fs.readdirSync(this.archivesAuthority.directory);
     const paths = new Set(names.map((name) => path.join(this.archivesAuthority.directory, name)));
-    for (const [filePath, observation] of this.#archiveObservations) {
-      if (!paths.has(filePath) || observation.deref() === undefined) this.#archiveObservations.delete(filePath);
+    for (const filePath of this.#archiveObservations.keys()) {
+      if (!paths.has(filePath)) this.#archiveObservations.delete(filePath);
     }
     // Recheck the complete archived physical graph in one streaming forest.
-    // Decode its freshly matched images even when weak expanded graphs expired.
+    // Decoders are reused only after their complete physical images match afresh.
     // Singleton reads retain their ordinary boundary; misses decode normally.
     if (names.length > 1) {
       const files = names.map(name => {
