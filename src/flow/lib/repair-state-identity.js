@@ -595,7 +595,8 @@ class RepairGitMetadataObservation {
     Object.freeze(this);
   }
   static read(root) {
-    const status = new GitPorcelainV2StatusExecution(root, { repositoryRoot: root, forceFileMode: false });
+    const status = new GitPorcelainV2StatusExecution(root, { repositoryRoot: root, forceFileMode: false,
+      pathspecs: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes({ relativeToCwd: true }) });
     const configuration = new LoggedGitCommandExecution(["config", "--null", "--get-regexp", "^(core\\.(autocrlf|eol|symlinks|filemode|ignorecase|precomposeunicode)|filter\\..*\\.(clean|smudge|process|required))$"], { cwd: root });
     const head = new LoggedGitCommandExecution(["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: root });
     let results;

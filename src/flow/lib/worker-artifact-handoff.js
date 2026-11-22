@@ -2061,7 +2061,8 @@ class GitAuthoritySnapshotReads {
   #attributeQueries(input) {
     this.#attributeRead = new GitAuthorityRead(this.#root, ["check-attr", "--all", "--stdin", "-z"], "Git materialization attributes", input);
     this.#cachedAttributeRead = new GitAuthorityRead(this.#root, ["check-attr", "--cached", "--all", "--stdin", "-z"], "Git immutable attribute policy", input);
-    this.#statusRead = new GitPorcelainV2StatusExecution(this.#root, { repositoryRoot: this.#root, forceFileMode: false });
+    this.#statusRead = new GitPorcelainV2StatusExecution(this.#root, { repositoryRoot: this.#root, forceFileMode: false,
+      pathspecs: FLOW_REPOSITORY_RUNTIME_ARTIFACTS.gitPathspecExcludes({ relativeToCwd: true }) });
     return [this.#attributeRead, this.#cachedAttributeRead, this.#statusRead];
   }
   #assertIndexEncoding(index) {
