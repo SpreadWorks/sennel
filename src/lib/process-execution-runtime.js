@@ -5781,6 +5781,8 @@ class ProcessEventPublicationBatch {
 /** Public clients authenticate capabilities; only the coordinator mutates inventory. */
 /** One authenticated hydration boundary for asynchronous and blocking clients. */
 class RemoteRuntimeAuthentication {
+  static #previous = null;
+  #store = null;
   constructor(grant, binding) {
     try { this.grant = new ProcessExecutionGrant(grant).toJSON(); }
     catch (cause) { fail("delegation-refused", "Coordinator grant is malformed or unsupported", { cause }); }
@@ -5794,13 +5796,21 @@ class RemoteRuntimeAuthentication {
   restore(Runtime, response, { callAdmission = null, eventWriter = null, faultInjector = null, requestTransport = null } = {}) {
     const result = Runtime.prototype.decodeResponse(response);
     const grant = this.grant;
-    const store = new ProcessRuntimeStore({ mainRoot: grant.mainRoot, executionRoot: grant.executionRoot, create: false,
+    const previous = RemoteRuntimeAuthentication.#previous;
+    const store = previous !== null && isDeepStrictEqual(previous.grant, grant) ? previous.#store
+      : new ProcessRuntimeStore({ mainRoot: grant.mainRoot, executionRoot: grant.executionRoot, create: false,
       storagePolicy: grant.storage === null ? null : ReadOnlyProcessRuntimeStorage.fromGrant(grant.storage) });
+    store.assertStable();
     if (!store.checkout.matches(new ProcessExecutionCheckoutIdentity(result.checkout))) fail("authority-mismatch", "Coordinator response belongs to another physical checkout");
     const borrowed = grant.callId !== grant.executionId;
     const view = ProcessExecutionClientView.fromStored(result.record);
-    return new Runtime(store, view, { grant: result.grant, borrowed,
+    const runtime = new Runtime(store, view, { grant: result.grant, borrowed,
       binding: borrowed ? view.parentBinding : this.binding, callAdmission, eventWriter, faultInjector, requestTransport, nonOwning: true });
+    // Retain only decoder data; every hydration authenticates and every read
+    // reobserves the physical inventory. Client views and grants remain fresh.
+    this.#store = store;
+    RemoteRuntimeAuthentication.#previous = this;
+    return runtime;
   }
 }
 
