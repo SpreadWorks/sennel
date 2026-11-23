@@ -89,6 +89,7 @@ const authorityMembers = new Set(["uid", "gid", "mode", "getuid", "geteuid", "ge
 const pseudoPath = /^(?:\/proc(?:\/|$)|\/sys(?:\/|$)|\/dev(?:\/|$)|[A-Za-z]:\\(?:Windows|WINDOWS)(?:\\|$))/;
 const literalIdentifierValues = new Map([["true", true], ["false", false], ["null", null], ["undefined", undefined], ["NaN", NaN], ["Infinity", Infinity]]);
 const emptyEnvironment = new Map();
+const noSourceCallRoute = () => null;
 const maximumModuleEvaluations = 6000;
 const lexicalReceiver = Symbol("source invocation receiver");
 const lexicalHomeClass = Symbol("source method home class");
@@ -1198,7 +1199,7 @@ class CallableValue extends OsValue {
   constructor(module, declaration, environment, trace, origins, receiver = null, home = null) {
     super(trace);
     Object.assign(this, { module, declaration, environment, home });
-    this.captures = new SourceCapturedEnvironment(module, declaration, environment);
+    this.captures = new SourceCapturedEnvironment(module, declaration, environment, origins);
     this.effects = origins.effectsFor(this, receiver);
   }
   get sensitivityInputs() { return [...this.captures.values, this.effects]; }
@@ -1276,7 +1277,7 @@ class SourceEffectSummary extends OsValue {
     origins.deepCalls = origins.scanHelpers = true;
     origins.route = [];
     origins.callers = [];
-    origins.selectCallRoute = () => null;
+    origins.selectCallRoute = noSourceCallRoute;
     [origins.onCall, origins.onMember, origins.onUnsupported] = origins.effectObservers;
     try {
       const value = this.evaluate();
@@ -1386,12 +1387,13 @@ class SourceClassEffects extends SourceEffectSummary {
 class SourceCapturedEnvironment {
   #bindings = new Map();
   #contextBindings;
-  constructor(module, declaration, environment) {
+  constructor(module, declaration, environment, origins = null) {
     if (!(module instanceof SourceModule) || !(declaration instanceof SourceDeclaration) || !(environment instanceof Map)) {
       throw new TypeError("source lexical capture context required");
     }
     this.expression = new SourceExpression(module, declaration.tokens);
     this.environment = environment;
+    this.origins = origins;
     this.lexicalThis = declaration.lexicalThis;
   }
   get contextBindings() {
@@ -1403,8 +1405,11 @@ class SourceCapturedEnvironment {
       const binding = token.kind === "identifier" ? module.bindingAt(token) : null;
       if (!binding || module.moduleBinding(token.value) === binding
         || module.bindingDeclarations(binding).some(declaration => this.expression.contains(module, declaration))) return true;
-      if (!this.environment.has(binding) || module.bindingWrites([binding]).length > 0) return false;
-      bindings.set(binding, this.environment.get(binding));
+      if (module.bindingWrites([binding]).length > 0) return false;
+      const value = this.environment.has(binding) ? this.environment.get(binding)
+        : this.origins?.recalledOrigin(module, binding, this.environment) ?? null;
+      if (value === null) return false;
+      bindings.set(binding, value);
       return true;
     });
     this.#contextBindings = complete ? bindings : null;
@@ -3565,7 +3570,7 @@ class OsSourceOrigins {
     this.scanning = null;
     this.deepCalls = true;
     this.scanHelpers = true;
-    this.selectCallRoute = () => null;
+    this.selectCallRoute = noSourceCallRoute;
     this.conditionExpression = () => new PlatformExpression(false, supportedPlatforms.map(() => null));
     this.observing = false;
     this.effectSummary = null;
@@ -3935,9 +3940,32 @@ class OsSourceOrigins {
 
   get evaluationMode() { return `${this.observing}:${this.deepCalls}:${this.scanHelpers}:${this.effectSummary !== null}:${this.resolvingIterationInputs}`; }
 
+  rootOrigins(module, binding) {
+    const entries = this.values.entries(emptyEnvironment, module);
+    if (!entries.has(binding)) entries.set(binding, new Map());
+    const routes = entries.get(binding);
+    if (!routes.has(this.selectCallRoute)) routes.set(this.selectCallRoute, new Map());
+    return routes.get(this.selectCallRoute);
+  }
+
+  readRootOrigin(module, binding) {
+    const value = this.rootOrigins(module, binding).get(this.evaluationMode);
+    if (value === undefined) return null;
+    const expressions = this.index(module).get(binding)?.expressions;
+    return expressions?.length === 1 && !this.closedCallInputs.references(module, expressions[0].tokens) ? value : null;
+  }
+
   recalledOrigin(module, binding, environment) {
-    return binding && environment instanceof SourceInvocationEnvironment && environment.module === module
-      ? environment.readOrigin(binding, this.evaluationMode) : null;
+    if (!binding) return null;
+    if (environment === emptyEnvironment) return this.readRootOrigin(module, binding);
+    if (!(environment instanceof SourceInvocationEnvironment) || environment.module !== module) return null;
+    const recalled = environment.readOrigin(binding, this.evaluationMode);
+    if (recalled !== null) return recalled;
+    const expressions = this.index(module).get(binding)?.expressions;
+    if (expressions?.length !== 1) return null;
+    const owner = environment.originEnvironment(expressions[0]);
+    return owner instanceof SourceInvocationEnvironment ? owner.readOrigin(binding, this.evaluationMode)
+      : owner === emptyEnvironment ? this.readRootOrigin(module, binding) : null;
   }
 
   identifier(module, token, environment = emptyEnvironment) {
@@ -3998,14 +4026,23 @@ class OsSourceOrigins {
       const values = expressions.map((expression) => {
         const scope = environment instanceof SourceInvocationEnvironment
           ? environment.originEnvironment(expression) : environment;
-        const remember = supplied === null && scope instanceof SourceInvocationEnvironment && expressions.length === 1
-          && scope.owns(expression) && expression.target.complete && expression.target.members.length === 0
+        const readonly = supplied === null && expressions.length === 1
+          && expression.target.complete && expression.target.members.length === 0
           && expression.target.defaults.length === 0 && module.bindingWrites([binding]).length === 0;
-        const recalled = remember ? scope.readOrigin(binding, this.evaluationMode) : null;
+        const remember = readonly && scope instanceof SourceInvocationEnvironment && scope.owns(expression);
+        const root = readonly && scope === emptyEnvironment
+          && !this.closedCallInputs.references(expression.module, expression.tokens) ? this.rootOrigins(expression.module, binding) : null;
+        const recalled = remember ? scope.readOrigin(binding, this.evaluationMode) : root?.get(this.evaluationMode) ?? null;
         if (recalled !== null) return recalled;
+        const callInputRevision = this.closedCallInputs.queryRevision;
         const value = this.value(expression.module, expression.tokens, scope);
         const projected = this.project(expression.module, expression.target, value, scope);
         if (remember) scope.rememberOrigin(binding, this.evaluationMode, projected);
+        // Reuse the lexical function identity, never an initializer's result or
+        // its effects. Returned objects and projected defaults still reevaluate.
+        if (root !== null && projected instanceof CallableValue && projected.environment === emptyEnvironment
+          && callInputRevision === this.closedCallInputs.queryRevision
+          && !this.closedCallInputs.references(expression.module, expression.tokens)) root.set(this.evaluationMode, projected);
         return projected;
       });
       if (supplied !== null) values.unshift(supplied);

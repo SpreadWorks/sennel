@@ -2079,6 +2079,8 @@ export class SourceConditionalExpression {
       if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) {
         index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue;
       }
+      // A conditional after an arrow belongs to that function's expression body.
+      if (tokens[index].kind === "punctuation" && tokens[index].value === "=>") return null;
       const alternate = this.matchingAlternate(tokens, index);
       if (alternate >= 0) return new this(tokens, index, alternate);
     }
