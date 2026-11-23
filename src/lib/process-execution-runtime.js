@@ -6077,7 +6077,10 @@ export class ProcessExecutionRuntime {
     this.drainEventsSync(writer, selection);
     return ProcessExecutionFinalizationBarrier.fromStored(this.#requestSync("finalization-confirm", { selection: selection.toJSON(), fenceId: fence.fenceId }));
   }
-  inspect() { return ProcessExecutionRuntime.inspect({ mainRoot: this.mainRoot, executionRoot: this.executionRoot, storagePolicy: this.store.storagePolicy }); }
+  inspect() {
+    return ProcessExecutionRuntime.#inspect({ mainRoot: this.mainRoot, executionRoot: this.executionRoot,
+      storagePolicy: this.store.storagePolicy }, this.store);
+  }
   stopReceipts(binding = null) {
     const inventory = this.inspect();
     if (inventory === null) fail("record-missing", "Runtime inventory disappeared before receipt readback");
@@ -6139,6 +6142,9 @@ export class ProcessExecutionRuntime {
     await this.control?.waitForExit();
   }
   static inspect({ mainRoot, executionRoot = mainRoot, storagePolicy = null } = {}) {
+    return ProcessExecutionRuntime.#inspect({ mainRoot, executionRoot, storagePolicy });
+  }
+  static #inspect({ mainRoot, executionRoot, storagePolicy }, retainedStore = null) {
     try {
       const main = path.resolve(mainRoot), checkout = path.resolve(executionRoot);
       new RealDirectoryAuthority(main).assertStable(); new RealDirectoryAuthority(checkout).assertStable();
@@ -6149,7 +6155,9 @@ export class ProcessExecutionRuntime {
         try { fs.lstatSync(directory); } catch (cause) { if (cause.code === "ENOENT") return null; throw cause; }
         new RealDirectoryAuthority(directory).assertStable();
       }
-      const store = new ProcessRuntimeStore({ mainRoot: main, executionRoot: checkout, create: false, storagePolicy });
+      // The client's store retains only validated decoders. Its inventory read
+      // still captures all physical bytes and authorities on every observation.
+      const store = retainedStore ?? new ProcessRuntimeStore({ mainRoot: main, executionRoot: checkout, create: false, storagePolicy });
       return store.readConsistentInventory();
     } catch (cause) {
       if (cause instanceof ProcessExecutionControlFailure) throw cause;
