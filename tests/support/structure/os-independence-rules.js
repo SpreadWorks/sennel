@@ -2354,7 +2354,7 @@ class SourceAlternativeValues extends SourceValues {
     if (inputSelection !== null && !(inputSelection instanceof SourceCallInputSelection)) throw new TypeError("conditional input selection required");
     this.inputSelection = inputSelection;
   }
-  get ownSensitive() { return this.values.some(value => pseudoPathUse(value) !== null); }
+  get ownSensitive() { return pseudoPathUse(this) !== null; }
 }
 class SourceNativeAlternatives extends SourceAlternativeValues {
   constructor(values, inputSelection = null) {
@@ -2715,50 +2715,72 @@ function composePath(callee, args) {
 /** No cross-query cache: heap/effect revisions remain visible to each consumer. */
 class SourcePseudoPathQuery {
   #values = new Map();
-  #active = new Set();
+  #active = new Map();
   read(value) {
     if (this.#values.has(value)) return this.#values.get(value);
     if (this.#active.has(value)) return "incomplete";
-    this.#active.add(value);
+    const pending = [value];
+    this.#active.set(value, this.evaluate(value));
+    let result;
     try {
-      const result = this.evaluate(value);
-      this.#values.set(value, result);
+      while (pending.length > 0) {
+        const current = pending.at(-1);
+        const next = this.#active.get(current).next(result);
+        if (next.done) {
+          result = next.value;
+          this.#values.set(current, result);
+          this.#active.delete(current);
+          pending.pop();
+        } else if (this.#values.has(next.value)) result = this.#values.get(next.value);
+        else if (this.#active.has(next.value)) result = "incomplete";
+        else {
+          pending.push(next.value);
+          this.#active.set(next.value, this.evaluate(next.value));
+          result = undefined;
+        }
+      }
       return result;
-    } finally { this.#active.delete(value); }
+    } finally {
+      for (const current of pending) this.#active.delete(current);
+    }
   }
-  evaluate(value) {
+  *some(values) {
+    for (const value of values) if (yield value) return true;
+    return false;
+  }
+  *evaluate(value) {
     // Logical expressions retain every possible path operand. This does not
     // infer precedence, select an unproven branch or grant callable authority.
     if (value instanceof OperationValue && ["&&", "||", "??"].includes(value.operator)) {
-      return value.values.some(part => this.read(part)) ? "incomplete" : null;
+      return (yield* this.some(value.values)) ? "incomplete" : null;
     }
     if (value instanceof SourceRegexCaptureValue) return "incomplete";
     if (value instanceof SourceJoinedTextValue) return value.text === null ? "incomplete" : pseudoPath.test(value.text) ? "violation" : null;
-    if (value instanceof SourceArrayValue) return [...value.values, ...value.state.sensitivityInputs].some(input => this.read(input)) ? "incomplete" : null;
-    if (value instanceof SourceProvenanceResult) return value.inputs.some(input => this.read(input)) ? "incomplete" : null;
-    if (value instanceof UncertainValue) return valueOrigins(value.origin).some(origin => this.read(origin)) ? "incomplete" : null;
-    if (value instanceof SourceAlternativeValues) return value.values.some(origin => this.read(origin)) ? "incomplete" : null;
-    if (value instanceof TaggedTemplateValue) return value.origin.values.some((part) => this.read(part)) ? "incomplete" : null;
+    if (value instanceof SourceArrayValue) return (yield* this.some([...value.values, ...value.state.sensitivityInputs])) ? "incomplete" : null;
+    if (value instanceof SourceProvenanceResult) return (yield* this.some(value.inputs)) ? "incomplete" : null;
+    if (value instanceof UncertainValue) return (yield* this.some(valueOrigins(value.origin))) ? "incomplete" : null;
+    if (value instanceof SourceAlternativeValues) return (yield* this.some(value.values)) ? "incomplete" : null;
+    if (value instanceof TaggedTemplateValue) return (yield* this.some(value.origin.values)) ? "incomplete" : null;
     if (value instanceof FileUrlPathValue) {
       if (value.uncertain) return "incomplete";
       return [value.text(posix), value.text(win32)].some((text) => pseudoPath.test(text)) ? "violation" : null;
     }
-    if (value instanceof FileUrlValue || value instanceof NativePathValue) return this.read(value.details);
-    if (value instanceof UrlPathnameValue) return this.read(value.origin);
-    if (value instanceof UnresolvedUrlPathValue) return value.details.values.some((part) => this.read(part)) ? "incomplete" : null;
-    if (value instanceof TransformedStringValue || value instanceof RetainedStringMethodValue || value instanceof ConditionalFilesystemPathValue) return this.read(value.origin) ? "incomplete" : null;
-    if (value instanceof UnresolvedCompositionValue) return this.read(value.origin) ? "incomplete" : null;
+    if (value instanceof FileUrlValue || value instanceof NativePathValue) return yield value.details;
+    if (value instanceof UrlPathnameValue) return yield value.origin;
+    if (value instanceof UnresolvedUrlPathValue) return (yield* this.some(value.details.values)) ? "incomplete" : null;
+    if (value instanceof TransformedStringValue || value instanceof RetainedStringMethodValue || value instanceof ConditionalFilesystemPathValue) return (yield value.origin) ? "incomplete" : null;
+    if (value instanceof UnresolvedCompositionValue) return (yield value.origin) ? "incomplete" : null;
     if (value instanceof LiteralValue) return typeof value.value === "string" && pseudoPath.test(value.value) ? "violation" : null;
     if (value instanceof TemplateValue) return pseudoPath.test(value.details) ? "violation"
-      : value.origin.values.some((part) => this.read(part)) ? "incomplete" : null;
+      : (yield* this.some(value.origin.values)) ? "incomplete" : null;
     if (value instanceof ComposedPathValue) {
       if (value.interpretations.some((entry) => entry.text !== null && pseudoPath.test(entry.text))) return "violation";
-      if (value.interpretations.some((entry) => entry.text === null && entry.values.some((part) => this.read(part)))) return "incomplete";
+      for (const entry of value.interpretations) if (entry.text === null && (yield* this.some(entry.values))) return "incomplete";
     }
     if (value instanceof PosixPathValue || value instanceof WindowsPathValue) return value.details.text !== null
       ? pseudoPath.test(value.details.text) ? "violation" : null
-      : value.details.values.some((part) => this.read(part)) ? "incomplete" : null;
-    if (value instanceof ConcatenationValue && value.origin.values.some((part) => this.read(part))) return "incomplete";
+      : (yield* this.some(value.details.values)) ? "incomplete" : null;
+    if (value instanceof ConcatenationValue && (yield* this.some(value.origin.values))) return "incomplete";
     return null;
   }
 }
@@ -3092,6 +3114,7 @@ class SourceIterationInputs {
 
 /** One invocation owns its local origins; captured/other calls never share them. */
 class SourceInvocationEnvironment extends SourceReceiverEnvironment {
+  #sourceEnvironment;
   #origins = new Map();
   #revision = 0;
   #sourceBindings;
@@ -3101,6 +3124,7 @@ class SourceInvocationEnvironment extends SourceReceiverEnvironment {
     super(environment, receiver, declaration.lexicalThis, home);
     this.module = module;
     this.declaration = declaration;
+    this.#sourceEnvironment = environment;
     this.#sourceBindings = new Set(environment.keys());
     this.#sourceRevision = environment.revision;
     const body = declaration.bodyTokens() ?? [];
@@ -3122,6 +3146,7 @@ class SourceInvocationEnvironment extends SourceReceiverEnvironment {
     return super.set(binding, value);
   }
   refresh(source, receiver, home) {
+    this.#sourceEnvironment = source;
     this.#origins.clear();
     if (this.#sourceRevision !== source.revision) this.#revision++;
     this.#sourceRevision = source.revision;
@@ -3148,6 +3173,14 @@ class SourceInvocationEnvironment extends SourceReceiverEnvironment {
     return module === this.module && token.offset >= this.start && token.offset <= this.end;
   }
   owns(expression) { return this.contains(expression.module, expression.target.token); }
+  originEnvironment(expression) {
+    let environment = this;
+    while (environment instanceof SourceInvocationEnvironment) {
+      if (environment.owns(expression)) return environment;
+      environment = environment.#sourceEnvironment;
+    }
+    return environment;
+  }
   readOrigin(binding, mode) { return this.#origins.get(binding)?.get(mode) ?? null; }
   rememberOrigin(binding, mode, value) {
     if (!(value instanceof OsValue)) throw new TypeError("source origin value required");
@@ -3963,8 +3996,10 @@ class OsSourceOrigins {
     this.activeBindings.add(binding);
     try {
       const values = expressions.map((expression) => {
-        const value = this.value(expression.module, expression.tokens, environment);
-        return this.project(expression.module, expression.target, value, environment);
+        const scope = environment instanceof SourceInvocationEnvironment
+          ? environment.originEnvironment(expression) : environment;
+        const value = this.value(expression.module, expression.tokens, scope);
+        return this.project(expression.module, expression.target, value, scope);
       });
       if (supplied !== null) values.unshift(supplied);
       const value = values.length === 1 ? values[0]
