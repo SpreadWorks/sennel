@@ -31,7 +31,7 @@ import { writeManagedRecord, ManagedProcessMessage, ManagedRecordWrite, withMana
 import { CommandInvocation, CommandLaunchDescriptor } from "./command-invocation.js";
 import { currentRuntimeWireDelivery, currentRuntimePackage } from "./runtime-package.js";
 import { runManagedControlSync } from "./process-execution-sync.js";
-import { combineProcessExecutionFailures, synchronousManagedResult } from "./process-execution-completion.js";
+import { combineProcessExecutionFailures, synchronousManagedResult, processExecutionControlFailureFromCause } from "./process-execution-completion.js";
 import { ProcessExecutionReservationRevocation, ProcessExecutionCallClosure } from "./process-execution-reservation-revocation.js";
 export { ProcessExecutionReservationRevocation } from "./process-execution-reservation-revocation.js";
 import { ProcessExecutionBindingSelection, ProcessExecutionFinalizationCutoff, ProcessExecutionFinalizationBarrier } from "./process-execution-finalization.js";
@@ -3904,9 +3904,9 @@ class ProcessRuntimeStore {
       if (!(acceptedRequest instanceof RuntimeAcceptedRequestObservation)) throw new TypeError("Prepared acceptance requires its exact owned ledger readback");
       snapshots.set(acceptedRequest.relativePath, acceptedRequest.snapshot);
     }
-    baseline = new RuntimePublicationBaseline(baseline.observation, snapshots);
-    baseline.assertCurrent(this);
-    return baseline;
+    // Preparation changes memory only. Physical publication checks these
+    // original generations at its selection and commit boundaries.
+    return new RuntimePublicationBaseline(baseline.observation, snapshots);
   }
   publicationFile(relativePath, { create = true } = {}) {
     const filePath = path.join(this.authority.directory, ...relativePath.split("/"));
@@ -3927,7 +3927,10 @@ class ProcessRuntimeStore {
   publishPrepared(writes, registry, { archiveObservation = new RuntimeRecordObservation(), effects = [], baseline } = {}) {
     return withManagedRecordWriters(effects, () => {
       this.assertCommitted();
-      baseline.assertCurrent(this);
+      // Normal owned stages are private scratch. The complete selection guard
+      // checks their original sources before metadata can become canonical.
+      // Offline migration also proves absence before creating target parents.
+      if (baseline instanceof RuntimeRecordMigrationBaseline) baseline.assertCurrent(this);
       const intended = new RuntimePublicationExpectedRegistry(registry);
       const registryBefore = RuntimeFileGeneration.capture(baseline.snapshots.get("registry.json"));
       const owner = this.ownerLock.inspect();
@@ -3996,10 +3999,10 @@ class ProcessRuntimeStore {
         const retained = prepared.canRetainReadback(validated);
         // The prepared image already passed the complete logical validation.
         // Exact source and owned-target generations prove the same image after
-        // publication. Check all of them before any transition cleanup, then
-        // retain only the final fresh image checked while clearing the marker.
+        // publication. Private transitions can be retired using their exact
+        // selected generations. The root marker's unlink guard checks the full
+        // committed image before it can discard the publication authority.
         const committed = retained ? validated : prepared.validateData(this, selection, intended, archiveObservation);
-        if (retained) prepared.assertPhysical(this, { committed: true });
         if (committed !== validated && !intended.matches(committed)) fail("record-corrupt", "Published runtime differs from its exact prepared logical graph");
         for (const target of prepared.targets.filter((target) => target.removal)) this.removePreparedStage(target, target.sourceStage, prepared, selection);
         this.#readonlyObservation = null;
@@ -4155,7 +4158,12 @@ class ProcessRuntimeStore {
   }
   clearPreparedMarker(prepared, selection) {
     let captured;
-    const retirement = selection.clear({ clearGuard: () => { captured = prepared.assertPhysical(this, { committed: true }); } });
+    let retirement;
+    try {
+      retirement = selection.clear({ clearGuard: () => { captured = prepared.assertPhysical(this, { committed: true }); } });
+    } catch (cause) {
+      throw processExecutionControlFailureFromCause(cause) ?? cause;
+    }
     if (prepared instanceof RuntimePreparedRecordMigration) this.#lastRecordMigrationPlan = null;
     retirement.retire({ retirementGuard: () => prepared.assertAuthority(this) });
     return captured;
