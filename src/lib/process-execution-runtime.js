@@ -5897,8 +5897,13 @@ export class ProcessExecutionRuntime {
     this.#assertOpen();
     const snapshot = new ProcessExecutionBinding(binding);
     if (this.borrowed && !snapshot.matches(this.binding)) fail("delegation-refused", "Borrowed scope cannot replace its immutable binding");
-    const result = await this.#request("bind", { binding: snapshot.toJSON() });
-    this.runId = result.runId; this.specId = result.specId; this.grant = new ProcessExecutionGrant(result.grant);
+    const authenticated = this.borrowed ? null : await this.#request("authenticate");
+    const current = authenticated === null ? null : ProcessExecutionClientView.fromStored(authenticated.record);
+    const associatesIdentity = current === null || (snapshot.value?.runId ?? current.runId) !== current.runId
+      || (snapshot.value?.specId ?? current.specId) !== current.specId;
+    const result = associatesIdentity ? await this.#request("bind", { binding: snapshot.toJSON() }) : current;
+    this.runId = result.runId; this.specId = result.specId;
+    this.grant = new ProcessExecutionGrant(associatesIdentity ? result.grant : authenticated.grant);
     this.root.runId = result.runId; this.root.specId = result.specId; this.root.grant = new ProcessExecutionGrant({ ...this.root.grant.toJSON(), runId: result.runId, specId: result.specId });
     const record = { executionId: this.executionId, ownerEpoch: this.ownerEpoch,
       coordinatorIdentity: { ownerToken: this.ownerToken, ownerSession: this.ownerSession }, runId: this.runId, specId: this.specId, binding: snapshot };
