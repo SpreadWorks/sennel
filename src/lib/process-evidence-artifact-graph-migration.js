@@ -14,8 +14,10 @@ import { FlowProcessStopEvidence } from "../flow/lib/process-runtime-evidence.js
 import { readExecutionContractFromView } from "../flow/lib/canonical-prompt-execution.js";
 import { assertStoredReviewProcessStop } from "../flow/lib/canonical-review-artifacts.js";
 import { CanonicalCommandAttemptArtifactHistory } from "../flow/lib/canonical-command-result.js";
-import { SourceHandoffEvent } from "../flow/lib/worker-artifact-handoff.js";
+import { SourceHandoffEvent, SOURCE_HANDOFF_CHECKPOINT_VERSION } from "../flow/lib/worker-artifact-handoff.js";
 import { readSourceHandoffAuthorityFromView } from "../flow/lib/source-handoff-persistence.js";
+import { CanonicalFlowManagerStore } from "../flow/lib/canonical-flow-manager-store.js";
+import { SourceCheckpointArtifactProof } from "./source-checkpoint-artifact-encoding.js";
 import { isDeepStrictEqual } from "node:util";
 import { ProcessExecutionRuntime, captureProcessExecutionCheckoutIdentity } from "./process-execution-runtime.js";
 
@@ -39,7 +41,8 @@ export class ProcessEvidenceArtifactInput {
 
 /** A read capability for the already captured original catalog, never a Flow executor. */
 class ProcessEvidenceMigrationView {
-  constructor(location, catalog, state, activities, processEvidence) {
+  #sourceCheckpoints;
+  constructor(location, catalog, state, activities, processEvidence, sourceCheckpoints) {
     if (!(location instanceof FlowVersionLocation) || !(catalog instanceof FlowArtifactCatalog)
       || !(state instanceof CurrentFlowState) || !Array.isArray(activities)
       || activities.some(activity => !(activity instanceof FlowActivity))
@@ -51,12 +54,17 @@ class ProcessEvidenceMigrationView {
     this.state = state;
     this.activities = activities;
     this.processEvidence = processEvidence;
+    this.#sourceCheckpoints = new Map(sourceCheckpoints.map(proof => [proof.sourceHash, proof]));
     Object.freeze(this);
   }
   readArtifactSnapshot(descriptor) {
     return this.catalog.readArtifact(this.location, descriptor.relativePath, { processEvidence: this.processEvidence });
   }
   readCatalogedArtifact(descriptor) { return this.readArtifactSnapshot(descriptor).bytes; }
+  readRetainedSourceCheckpoint(descriptor, bytes, options) {
+    const proof = this.#sourceCheckpoints.get(descriptor.hash) ?? null;
+    return proof === null ? null : SourceCheckpointArtifactProof.fromBytes(proof.bytes, bytes, options).checkpoint();
+  }
 }
 
 class OriginalProcessExecutionContract {
@@ -119,6 +127,7 @@ class OriginalProcessCompletionInventory {
 /** Captures previous boundary data without trusting its content or publishing it. */
 export class ProcessEvidenceArtifactGraphSource {
   #proofs;
+  #sourceCheckpoints;
   constructor({ location, catalog }) {
     if (!(location instanceof FlowVersionLocation) || !(catalog instanceof FlowArtifactCatalog)) {
       throw new TypeError("Process evidence graph capture requires its canonical catalog location");
@@ -126,7 +135,8 @@ export class ProcessEvidenceArtifactGraphSource {
     this.location = location;
     this.catalog = catalog;
     this.entries = Object.freeze(catalog.artifacts.filter(descriptor =>
-      PROCESS_EVIDENCE_MIGRATION_KEYS.includes(descriptor.logicalKey) || descriptor.logicalKey === "execution.contract")
+      PROCESS_EVIDENCE_MIGRATION_KEYS.includes(descriptor.logicalKey) || descriptor.logicalKey === "execution.contract"
+      || descriptor.logicalKey === "source.handoff.checkpoint")
       .map(descriptor => new ProcessEvidenceArtifactInput(descriptor,
         descriptor.readPhysicalSnapshot(location, { maxBytes: MAX_IN_MEMORY_FILE_BYTES }))));
     const receipts = [];
@@ -141,9 +151,22 @@ export class ProcessEvidenceArtifactGraphSource {
         ? originals.receipt(receipt) : current.receipt(receipt));
     }
     this.processEvidence = receipts.length === 0 ? null : new ProcessStopArtifactEncoding(receipts);
-    this.requiresProducerGraph = receipts.length !== 0 && !catalog.hasProcessStopProofs;
-    this.#proofs = this.requiresProducerGraph
-      ? this.processEvidence.receipts.map(receipt => new ProcessStopArtifactProof(receipt)) : [];
+    const requiresStopProofs = receipts.length !== 0 && !catalog.hasProcessStopProofs;
+    this.#proofs = requiresStopProofs ? this.processEvidence.receipts.map(receipt => new ProcessStopArtifactProof(receipt)) : [];
+    this.#sourceCheckpoints = [];
+    for (const input of this.entries.filter(entry => entry.descriptor.logicalKey === "source.handoff.checkpoint")) {
+      if (input.jsonDocument().version === SOURCE_HANDOFF_CHECKPOINT_VERSION) continue;
+      const options = { root: location.repositoryRoot, canonicalLocation: location };
+      const proof = new SourceCheckpointArtifactProof(input.bytes, options);
+      this.#sourceCheckpoints.push(proof);
+      const stored = catalog.artifacts.find(entry => entry.relativePath === proof.relativePath) ?? null;
+      if (stored === null) this.#proofs.push(proof);
+      else {
+        SourceCheckpointArtifactProof.assertDescriptor(stored);
+        SourceCheckpointArtifactProof.fromBytes(stored.readBytes(location), input.bytes, options);
+      }
+    }
+    this.requiresProducerGraph = this.#proofs.length !== 0;
     Object.freeze(this);
   }
   get migrationInputs() {
@@ -151,7 +174,7 @@ export class ProcessEvidenceArtifactGraphSource {
   }
 
   validate({ state, activities }) {
-    const view = new ProcessEvidenceMigrationView(this.location, this.catalog, state, activities, this.processEvidence);
+    const view = new ProcessEvidenceMigrationView(this.location, this.catalog, state, activities, this.processEvidence, this.#sourceCheckpoints);
     const contracts = new Map();
     for (const input of this.entries.filter(entry => entry.descriptor.logicalKey === "execution.contract")) {
       const document = input.jsonDocument(), contract = FlowExecutionContract.fromJSON(document.contract);
@@ -183,6 +206,7 @@ export class ProcessEvidenceArtifactGraphSource {
       if (review.processStop !== null) reviewStop(review.processStop, "spec-review");
     };
     const sourceEvents = new Map();
+    const sourceIdentities = new Map(this.#sourceCheckpoints.map(proof => [proof.identity.storageId, proof.identity]));
     for (const input of this.migrationInputs) {
       const key = input.descriptor.logicalKey, bytes = input.bytes;
       if (key === "spec.review") {
@@ -209,19 +233,25 @@ export class ProcessEvidenceArtifactGraphSource {
         const event = SourceHandoffEvent.fromStored(input.jsonDocument(), { processEvidence: this.processEvidence });
         if (event.processStopEvidence !== null && event.processStopEvidence.toArtifactJSON().schemaVersion === 3) {
           sourceEvents.set(event.identity.storageId, event);
+          sourceIdentities.set(event.identity.storageId, event.identity);
+        } else if (event.processStopEvidence !== null && sourceIdentities.has(event.identity.storageId)) {
+          sourceEvents.set(event.identity.storageId, event);
         }
       }
     }
-    if (sourceEvents.size !== 0) {
+    if (sourceIdentities.size !== 0) {
       const repositoryIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot: this.location.repositoryRoot });
-      for (const event of sourceEvents.values()) {
-        const authority = readSourceHandoffAuthorityFromView({ view, identity: event.identity,
-          root: event.processStopEvidence.receipt.checkoutIdentity.executionRoot,
+      const executionRoot = CanonicalFlowManagerStore.resolveWorktreePaths({ root: this.location.repositoryRoot,
+        mainRoot: this.location.repositoryRoot, state }).worktreePath ?? this.location.repositoryRoot;
+      for (const identity of sourceIdentities.values()) {
+        const event = sourceEvents.get(identity.storageId);
+        const authority = readSourceHandoffAuthorityFromView({ view, identity,
+          root: event?.processStopEvidence.receipt.checkoutIdentity.executionRoot ?? executionRoot,
           canonicalLocation: this.location, repositoryIdentity });
         if (authority === null || !authority.settled) throw new ProcessEvidenceMigrationRefusal(
           "Previous Source receipt requires its complete settled producer graph");
       }
     }
-    return new ProcessEvidenceArtifactProducerGraph(graphToken, this.migrationInputs, this.processEvidence, this.#proofs);
+    return new ProcessEvidenceArtifactProducerGraph(graphToken, this.entries, this.processEvidence, this.#proofs);
   }
 }

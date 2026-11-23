@@ -3505,7 +3505,10 @@ export class CanonicalRevisionRootTransaction {
       const location = new FlowVersionLocation({ repositoryRoot: stageContainer,
         authorityScope: FlowVersionAuthorityScope.canonical(), specRoot: this.specRoot.relativePath,
         specId: this.specId, version: Number(version) });
-      const archiveRoot = this.revision === 6 ? "artifacts/migration/process-evidence-v6" : "artifacts/migration/portable-state-v5";
+      const migrationRoot = this.revision === 6 ? "artifacts/migration/process-evidence-v6" : "artifacts/migration/portable-state-v5";
+      // Later leaf maintenance preserves the first migration's permanent archive.
+      const archiveRoot = this.revision === 6 && plan.catalog.artifacts.some(entry => entry.relativePath === `${migrationRoot}/receipt.json`)
+        ? `${migrationRoot}/continuations/${sha256(plan.catalogBytes)}` : migrationRoot;
       const additions = [];
       for (const [name, bytes] of [["flow.json", plan.flowBytes], ["artifact-catalog.json", plan.catalogBytes]]) {
         const relativePath = `${archiveRoot}/${name}`;

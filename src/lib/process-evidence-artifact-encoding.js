@@ -25,6 +25,16 @@ export const PROCESS_EVIDENCE_MIGRATION_KEYS = Object.freeze(["execution.source.
 
 const PROOF_PREFIX = "artifacts/migration/process-evidence-v6/retained-completions/";
 
+/** Shared permanent, system-owned descriptor contract for retained proofs. */
+export function assertRetainedArtifactProofDescriptor(descriptor, expectedPath) {
+  if (descriptor.relativePath !== expectedPath || descriptor.logicalKey !== null
+    || descriptor.kind !== "migration-materialization" || descriptor.slot.authority.toString() !== "canonical-flow-artifacts"
+    || descriptor.slot.publicationStep !== "system" || descriptor.retention !== "permanent"
+    || descriptor.migrationMaterialization !== true) {
+    throw new TypeError("Retained proof differs from its permanent migration descriptor");
+  }
+}
+
 /** One existing current4 leaf proves its exact retained producer serialization.
  * Per-receipt compact storage keeps the original individual artifact byte cap.
  */
@@ -50,12 +60,7 @@ export class ProcessStopArtifactProof {
   static assertDescriptor(descriptor) {
     if (!this.isProofPath(descriptor.relativePath)) return false;
     const digest = descriptor.relativePath.slice(PROOF_PREFIX.length).replace(/\.json$/, "");
-    if (descriptor.relativePath !== this.pathFor(digest) || descriptor.logicalKey !== null
-      || descriptor.kind !== "migration-materialization" || descriptor.slot.authority.toString() !== "canonical-flow-artifacts"
-      || descriptor.slot.publicationStep !== "system" || descriptor.retention !== "permanent"
-      || descriptor.migrationMaterialization !== true) {
-      throw new TypeError("Stop proof differs from its permanent migration descriptor");
-    }
+    assertRetainedArtifactProofDescriptor(descriptor, this.pathFor(digest));
     return true;
   }
   static fromBytes(bytes, relativePath) {

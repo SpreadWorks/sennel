@@ -2,6 +2,7 @@ import { isUtf8 } from "node:buffer";
 import { FileIdentity } from "../../lib/file-identity.js";
 import { SourceWorkingFileCapture, observeSourceUntrackedMode, SelectedSourceGitRepository } from "./source-working-file-capture.js";
 import { SOURCE_STATE_VERSION, SourceMutationEntry, SourceMutationManifestValue, SourceRollbackOperationReceipt } from "./source-mutation-manifest.js";
+import { SourceCheckpointArtifactEncoding } from "../../lib/source-checkpoint-artifact-encoding.js";
 export { SOURCE_STATE_VERSION, SourceMutationEntry, SourceRollbackOperationReceipt } from "./source-mutation-manifest.js";
 import { GitSourceEntry, SourceWorkingFile, SourceGitState, SourceGitDirectoryGenerations, SourceGitControlFiles, WorkerArtifactRepositoryEntry } from "./source-working-file.js";
 import { SourceGitRestoreStage, SourceRestoreCapability } from "./source-git-restore-stage.js";
@@ -228,6 +229,7 @@ const REQUIREMENT_TEST_WORKER_STEPS = new Set(["test-generate", "test-repair"]);
 // Version 6 binds conditional execution currentness to its immutable request.
 export const WORKER_ARTIFACT_HANDOFF_VERSION = 6;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
+export const SOURCE_HANDOFF_CHECKPOINT_VERSION = 3;
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
@@ -4007,7 +4009,10 @@ export class SourceWorkerHandoffIdentity {
 
 /** Immutable checkpoint published before a source worker can be started. */
 export class CanonicalSourceHandoffCheckpoint {
-  constructor({ identity, baseline, canonicalObservation, rollbackBlobDigest, allowedCanonicalPaths = [], producer = null, digest: storedDigest = null } = {}) {
+  #artifactEncoding;
+  constructor({ identity, baseline, canonicalObservation, rollbackBlobDigest, allowedCanonicalPaths = [], producer = null, digest: storedDigest = null, artifactEncoding = null } = {}) {
+    if (artifactEncoding !== null && !(artifactEncoding instanceof SourceCheckpointArtifactEncoding)) throw new TypeError("source checkpoint artifact encoding must be typed");
+    this.#artifactEncoding = artifactEncoding;
     this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source handoff checkpoint requires a source baseline");
     if (!(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance)) throw new Error("source handoff checkpoint requires a canonical observation");
@@ -4038,22 +4043,23 @@ export class CanonicalSourceHandoffCheckpoint {
   }
 
   unsignedJSON() {
-    return {
-      version: SOURCE_STATE_VERSION, identity: this.identity.toJSON(), baseline: this.baseline.toJSON(),
-      canonicalObservation: this.canonicalObservation.storedJSON(), rollbackBlobDigest: this.rollbackBlobDigest,
+    const value = {
+      version: SOURCE_HANDOFF_CHECKPOINT_VERSION, identity: this.identity.toJSON(), baseline: this.baseline.toJSON(),
+      canonicalObservation: this.canonicalObservation.checkpointJSON(), rollbackBlobDigest: this.rollbackBlobDigest,
       allowedCanonicalPaths: [...this.allowedCanonicalPaths], producer: this.producer,
     };
+    return this.#artifactEncoding === null ? value : this.#artifactEncoding.encode(value);
   }
   toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
 
   static fromStored(value, { root, canonicalLocation } = {}) {
     exactObjectKeys(value, ["version", "identity", "baseline", "canonicalObservation", "rollbackBlobDigest", "allowedCanonicalPaths", "producer", "digest"], "source handoff checkpoint");
-    if (value.version !== SOURCE_STATE_VERSION) throw new Error("source handoff checkpoint version is invalid");
+    if (value.version !== SOURCE_HANDOFF_CHECKPOINT_VERSION) throw new Error("source handoff checkpoint version is invalid");
     requiredDigest(value.digest, "source handoff checkpoint digest");
     const checkpoint = new CanonicalSourceHandoffCheckpoint({
       identity: value.identity,
       baseline: SourceMutationBaseline.fromStored(value.baseline, { root }),
-      canonicalObservation: SourceWorkerCanonicalObservationAdvance.fromStored(value.canonicalObservation, { canonicalLocation }),
+      canonicalObservation: SourceWorkerCanonicalObservationAdvance.fromCheckpoint(value.canonicalObservation, { canonicalLocation }),
       rollbackBlobDigest: value.rollbackBlobDigest,
       allowedCanonicalPaths: value.allowedCanonicalPaths,
       producer: value.producer,

@@ -16,6 +16,7 @@ import {
 import { CurrentAttemptIdentity, CurrentFlowStateInvariantError } from "./current-flow-state.js";
 import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { SourceWorkingFile } from "./source-working-file.js";
+import { SourceCheckpointArtifactProof } from "../../lib/source-checkpoint-artifact-encoding.js";
 
 const CHECKPOINT_KEY = "source.handoff.checkpoint";
 const EVENT_KEY = "source.handoff.event";
@@ -411,10 +412,7 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
   const checkpointPath = FLOW_ARTIFACT_CONTRACTS.resolve(CHECKPOINT_KEY, { handoffId: expected.storageId }).relativePath;
   const checkpointDescriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === CHECKPOINT_KEY && entry.relativePath === checkpointPath) ?? null;
   if (checkpointDescriptor === null) return null;
-  const checkpoint = CanonicalSourceHandoffCheckpoint.fromStored(
-    parseJSON(view.readCatalogedArtifact(checkpointDescriptor), "source handoff checkpoint"),
-    { root, canonicalLocation },
-  );
+  const checkpoint = readSourceCheckpoint(view, checkpointDescriptor, { root, canonicalLocation });
   assertSameIdentity(expected, checkpoint.identity, "source handoff checkpoint");
   const eventDescriptors = view.catalog.artifacts
     .filter((entry) => entry.logicalKey === EVENT_KEY && entry.relativePath.startsWith(eventPrefix(expected)))
@@ -451,6 +449,19 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
     executionContractDescriptors: protocolDescriptors(view, expected)
       .filter((descriptor) => descriptor.logicalKey === "execution.contract").map((descriptor) => descriptor.toJSON()),
   });
+}
+
+function readSourceCheckpoint(view, descriptor, options) {
+  const bytes = view.readCatalogedArtifact(descriptor);
+  const prepared = view.readRetainedSourceCheckpoint?.(descriptor, bytes, options) ?? null;
+  if (prepared !== null) return prepared;
+  const proofPath = SourceCheckpointArtifactProof.pathFor(descriptor.hash);
+  const proofDescriptor = view.catalog.artifacts.find(entry => entry.relativePath === proofPath) ?? null;
+  if (proofDescriptor !== null) {
+    SourceCheckpointArtifactProof.assertDescriptor(proofDescriptor);
+    return SourceCheckpointArtifactProof.fromBytes(view.readCatalogedArtifact(proofDescriptor), bytes, options).checkpoint();
+  }
+  return CanonicalSourceHandoffCheckpoint.fromStored(parseJSON(bytes, "source handoff checkpoint"), options);
 }
 
 export const SOURCE_HANDOFF_LOGICAL_KEYS = Object.freeze({ checkpoint: CHECKPOINT_KEY, event: EVENT_KEY, settlement: SETTLEMENT_KEY, rollbackBlob: ROLLBACK_BLOB_KEY });
