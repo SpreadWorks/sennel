@@ -3548,6 +3548,15 @@ class ProcessRuntimeStore {
         ...this.requestStorage.referencedBlockPaths().map((name) => [name, snapshots.get(name)]),
       ]));
   }
+  retainValidatedDecoders(previous) {
+    if (!this.checkout.matches(previous.checkout)
+      || this.authority.directory !== previous.authority.directory
+      || !sameFileIdentity(this.authority.identity, previous.authority.identity)) return;
+    // A fresh Store owns its authorities. Share only immutable decoder data;
+    // archive and request reads still capture every physical dependency anew.
+    this.#archiveObservations = new Map(previous.#archiveObservations);
+    this.requestStorage = previous.requestStorage.retainFor(this, this.requestStorage);
+  }
   readArchives(archiveObservation = new RuntimeRecordObservation()) {
     return this.#readArchives(archiveObservation).map((archive) => archive.execution);
   }
@@ -5802,6 +5811,7 @@ class RemoteRuntimeAuthentication {
       storagePolicy: grant.storage === null ? null : ReadOnlyProcessRuntimeStorage.fromGrant(grant.storage) });
     store.assertStable();
     if (!store.checkout.matches(new ProcessExecutionCheckoutIdentity(result.checkout))) fail("authority-mismatch", "Coordinator response belongs to another physical checkout");
+    if (previous !== null && store !== previous.#store) store.retainValidatedDecoders(previous.#store);
     const borrowed = grant.callId !== grant.executionId;
     const view = ProcessExecutionClientView.fromStored(result.record);
     const runtime = new Runtime(store, view, { grant: result.grant, borrowed,
