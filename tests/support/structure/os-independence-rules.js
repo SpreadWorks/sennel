@@ -3998,18 +3998,19 @@ class OsSourceOrigins {
       const values = expressions.map((expression) => {
         const scope = environment instanceof SourceInvocationEnvironment
           ? environment.originEnvironment(expression) : environment;
+        const remember = supplied === null && scope instanceof SourceInvocationEnvironment && expressions.length === 1
+          && scope.owns(expression) && expression.target.complete && expression.target.members.length === 0
+          && expression.target.defaults.length === 0 && module.bindingWrites([binding]).length === 0;
+        const recalled = remember ? scope.readOrigin(binding, this.evaluationMode) : null;
+        if (recalled !== null) return recalled;
         const value = this.value(expression.module, expression.tokens, scope);
-        return this.project(expression.module, expression.target, value, scope);
+        const projected = this.project(expression.module, expression.target, value, scope);
+        if (remember) scope.rememberOrigin(binding, this.evaluationMode, projected);
+        return projected;
       });
       if (supplied !== null) values.unshift(supplied);
       const value = values.length === 1 ? values[0]
         : uncertainOrigins(values, "multiple binding writes obscure the capability origin");
-      const expression = expressions[0];
-      if (supplied === null && environment instanceof SourceInvocationEnvironment && expressions.length === 1
-        && environment.owns(expression) && expression.target.complete && expression.target.members.length === 0
-        && expression.target.defaults.length === 0 && module.bindingWrites([binding]).length === 0) {
-        environment.rememberOrigin(binding, this.evaluationMode, value);
-      }
       return value;
     } finally { this.activeBindings.delete(binding); }
   }
