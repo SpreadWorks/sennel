@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { runGit } from "../../lib/git-helpers.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
+import { LogicalRelativePath, isNativePathWithin } from "../../lib/portable-path.js";
 import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "./spec-gate-repair-values.js";
 import { FlowArtifactCatalogSnapshotLimits } from "../../lib/flow-version.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
@@ -96,8 +97,9 @@ export function readSpecGateRepairSources({ flowManager, state, executionRoot, r
     }
   }
   const capture = (id, relative, options = {}) => {
-    const absolute = path.resolve(executionRoot, relative);
-    if (path.relative(executionRoot, absolute).startsWith("..") || path.isAbsolute(relative)) {
+    const logical = LogicalRelativePath.from(relative, "repair source path");
+    const absolute = path.resolve(executionRoot, ...logical.segments);
+    if (!isNativePathWithin(path.resolve(executionRoot), absolute)) {
       throw new Error("Repair source path escapes the execution root");
     }
     if (!fs.existsSync(absolute)) {

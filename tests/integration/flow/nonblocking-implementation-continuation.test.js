@@ -14,12 +14,18 @@ import { ImplPhaseScenario } from "../../support/impl-phase-scenario.js";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { settleImplStepResult } from "../../../src/flow/definition.js";
-import { writeJson } from "../../support/builders/tmp-dir.js";
+import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
+import { NodeScriptInvocation } from "../../../src/lib/command-invocation.js";
+import { runManagedCmdAsync } from "../../../src/lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalReviewInputDescriptor } from "../../../src/flow/lib/review-work-unit-input.js";
+
+function phaseConfig() {
+  return { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" } };
+}
 
 it("continues an actual Task Gate tooling Error with a receipt-bound decision and no new evaluation", async (t) => {
   const scenario = new TaskReviewScenario(t);
@@ -81,7 +87,7 @@ it("continues an actual Task Gate tooling Error with a receipt-bound decision an
   let responseLost = false;
   const committedManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root, inWorktree: false,
     versionStoreFaultInjector({ phase, filePath }) {
-      if (!responseLost && phase === "before-json-directory-fsync" && filePath === catalogFile) {
+      if (!responseLost && phase === "before-json-readback" && filePath === catalogFile) {
         responseLost = true;
         throw new Error("accepted decision committed response loss");
       }
@@ -115,14 +121,12 @@ it("continues an actual Task Gate tooling Error with a receipt-bound decision an
 });
 
 it("admits only the reacquired nominal quality selection and preserves an unparented plain Review failure", async (t) => {
-  const scenario = ImplPhaseScenario.create(t, { gateResponse(_prompt, options, current) {
+  const scenario = ImplPhaseScenario.create(t, { config: phaseConfig(), gateResponse(_prompt, options, current) {
     if (current.current() !== "impl-gate" || !(options.jsonSchema?.required ?? []).includes("evaluations")) return null;
     return JSON.stringify({ evaluations: options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum
       .map((guardrail_id) => ({ guardrail_id, result: "fail",
         reason: `[REQ:${guardrail_id}] Evaluation ${current.state().attempt.sequence} confirms the required behavior remains unresolved.` })) });
   } });
-  writeJson(scenario.root, ".sennel/config.json", { lang: "en", type: "base",
-    docs: { languages: ["en"], defaultLanguage: "en" } });
   const guardrailPath = path.join(scenario.root, ".sennel/guardrail.json");
   const guardrail = JSON.parse(fs.readFileSync(guardrailPath, "utf8"));
   guardrail.guardrails.push({ id: "R1", title: "Required behavior", body: "The mapped behavior must be implemented.",
@@ -150,9 +154,9 @@ it("admits only the reacquired nominal quality selection and preserves an unpare
   const snapshot = () => JSON.stringify({ state: scenario.state(), activities: scenario.manager.activityLedger(scenario.specId),
     catalog: scenario.manager.artifactCatalog(scenario.specId) });
   const beforePlain = snapshot();
-  const plain = spawnSync(process.execPath,
-    [fileURLToPath(new URL("../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url))],
-    { cwd: scenario.root, env: environment, encoding: "utf8" });
+  const plain = RuntimeChildExecution.runSync(
+    fileURLToPath(new URL("../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url)), [],
+    { cwd: scenario.root, env: environment, encoding: "utf8" }, spawnSync);
   assert.equal(plain.status, 1);
   assert.match(plain.stderr, /UNPARENTED_ORIGINAL_PROVIDER_FAILURE/);
   assert.doesNotMatch(plain.stderr, /SENNEL_REVIEW_WORK_UNIT_MANIFEST.*required/);
@@ -207,18 +211,18 @@ it("admits only the reacquired nominal quality selection and preserves an unpare
 
 it("publishes a genuine bounded Flow Review tooling stop and accepts its unchanged child frontier", async (t) => {
   let childFailure = null;
-  const scenario = ImplPhaseScenario.create(t, { reviewProcessResult(stage, _ordinal, options) {
-    const child = spawnSync(process.execPath,
-      stage === "impl-review"
-        ? [fileURLToPath(new URL("../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url))]
-        : [fileURLToPath(new URL("../../support/impl-phase-review-worker.js", import.meta.url))],
-      stage === "impl-review" ? options : { ...options, env: { ...options.env,
-        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) } });
+  const scenario = ImplPhaseScenario.create(t, { config: phaseConfig(), async reviewProcessResult(stage, _ordinal, options) {
+    const { cwd, env, stdio, ...executionOptions } = options;
+    const child = await runManagedCmdAsync(new NodeScriptInvocation({
+      script: stage === "impl-review"
+        ? fileURLToPath(new URL("../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url))
+        : fileURLToPath(new URL("../../support/impl-phase-review-worker.js", import.meta.url)),
+      cwd, stdio, env: stage === "impl-review" ? env : { ...env,
+        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) },
+    }), executionOptions);
     if (stage === "impl-review") childFailure = child.stderr?.toString();
-    return { ...child, ok: child.status === 0 };
+    return child;
   } });
-  writeJson(scenario.root, ".sennel/config.json", { lang: "en", type: "base",
-    docs: { languages: ["en"], defaultLanguage: "en" } });
   await scenario.advanceTo("impl-review");
   const outcome = await scenario.executeCurrent();
   scenario.reload();

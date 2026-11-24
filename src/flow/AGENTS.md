@@ -112,7 +112,9 @@ Flow の停止案内は [`../AGENTS.md`](../AGENTS.md) の「Flow 停止案内�
 - stale context、旧 Attempt、Attempt sequence 不一致、source/canonical lineage 不一致
 - semantic retry、tooling failure、retry exhaustion、部分完了、復旧、再ロード、冪等な再取得
 - definition layer が別の route を選んだ状態で直接コマンドを呼び、worker、Activity、状態に副作用がないこと
-- canonical state と artifacts の局所的な fixture から definition layer の判断、transition plan、Action 投影、適用結果を決定論的に検証すること。検証のために Flow、dispatcher、worker、agent を起動しない
+- canonical state と artifacts の局所的な fixture から definition layer の判断、transition plan、Action 投影、適用結果を検証する局所判断テストでは、対象 API を直接呼び出して決定論的に検証する。これらの局所判断テストのために Flow、dispatcher、worker、agent を起動しない
+
+Draft/Spec の工程専用 integration シナリオは、[`tests/AGENTS.md`](../../tests/AGENTS.md) に従い、正規 dispatcher、登録コマンド、Definition、Service、Store の経路で成果物を生成・保存し、再読込み後の実際の下流利用まで検証する。外部 provider/agent の応答・時計等の非決定境界を fake にし、内部 consumer や遷移判断は置換しない。工程シナリオは独立した一時 root で実行し、実際に進行中の Flow の canonical 状態・証跡・Git 状態を変更しない。
 
 既存テストが表す正当なシナリオを弱めて変更を通してはならない。
 

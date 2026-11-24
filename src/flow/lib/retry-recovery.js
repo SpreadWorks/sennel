@@ -29,6 +29,7 @@ import { TaskReviewReconciliationRecord, TASK_REVIEW_RECONCILIATION_KEY } from "
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import {
   readTaskReviewUnsealedCheckpoint,
+  sameTaskReviewRepositorySnapshot,
   TaskReviewRecoveryAuthorization,
   taskReviewAuthorizationArtifact,
 } from "./task-review-recovery-checkpoint.js";
@@ -151,6 +152,11 @@ export class RetryRecoveryBaseline {
   }
   get digest() { return crypto.createHash("sha256").update(JSON.stringify(this.toJSON())).digest("hex"); }
   equals(other) { return other instanceof RetryRecoveryBaseline && JSON.stringify(this.toJSON()) === JSON.stringify(other.toJSON()); }
+  matchesCurrentAttempt(state) {
+    return state.attempt !== null && state.attempt !== undefined
+      && this.attemptId === state.attempt.id && this.attempt === state.attempt.sequence
+      && this.runId === state.runId && this.specId === state.specId && this.issue === (state.issue ?? null);
+  }
   toJSON() { return { route: this.route.toJSON(), attemptId: this.attemptId, attempt: this.attempt, runId: this.runId, specId: this.specId, issue: this.issue, projectDigest: this.projectDigest, runtimeDigest: this.runtimeDigest, targetDigest: this.targetDigest }; }
 }
 
@@ -219,7 +225,8 @@ export function captureRetryRecoveryBaseline({ flowState, flowManager, execution
   } else {
     let fingerprint;
     try {
-      fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot, specPath: relativeSpecPath, state: flowState });
+      fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot, specPath: relativeSpecPath,
+        state: flowState, flowManager });
     } catch (error) {
       if (error?.code === "REPAIR_BASELINE_UNRESOLVABLE") return null;
       throw error;
@@ -526,11 +533,16 @@ function assertBaselinePublication(view, baseline) {
 }
 
 class LockScopedRetryRecoveryFlowManager {
-  constructor(view) {
+  #reader;
+
+  constructor(view, reader) {
+    this.#reader = reader;
     this.view = view;
     Object.freeze(this);
   }
 
+  readCanonicalTransitionView(input) { return this.#reader.readCanonicalTransitionView(input); }
+  executionRoot(state) { return this.#reader.executionRoot(state); }
   canonicalState() { return this.view.state; }
   loadReadOnly() { return this.view.state; }
   specLocation() { return this.view.location; }
@@ -642,10 +654,10 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
   });
 }
 
-function captureLockScopedRecoveryBaseline(view, executionRoot) {
+function captureLockScopedRecoveryBaseline(view, executionRoot, reader) {
   return captureRetryRecoveryBaseline({
     flowState: view.state,
-    flowManager: new LockScopedRetryRecoveryFlowManager(view),
+    flowManager: new LockScopedRetryRecoveryFlowManager(view, reader),
     executionRoot,
     artifactRoot: view.location.repositoryRoot,
     nodeId: view.state.attempt.nodeId,
@@ -669,14 +681,19 @@ export class ExhaustedReviewRetryRecoveryAdmission {
     }
     this.taskReviewRecoveryAuthorization = taskReviewRecoveryAuthorization;
     if (!this.receipt.basis.equals(this.basis)) throw new Error("retry recovery admission basis mismatch");
-    Object.freeze(this);
+    if (new.target === ExhaustedReviewRetryRecoveryAdmission) Object.freeze(this);
   }
 
-  bindPublication(receipt, taskReviewRecoveryAuthorization = null) {
+  canonicalReader() {
+    throw new Error("Review recovery admission requires its Store-bound canonical reader");
+  }
+
+  bindPublication(receipt, taskReviewRecoveryAuthorization, readerForView) {
     return new BoundExhaustedReviewRetryRecoveryAdmission(
       this,
       receipt,
       taskReviewRecoveryAuthorization,
+      readerForView,
     );
   }
 
@@ -695,7 +712,8 @@ export class ExhaustedReviewRetryRecoveryAdmission {
       throw new Error("exhausted Review recovery evidence changed before recovery");
     }
     assertBaselinePublication(view, previous);
-    const current = captureLockScopedRecoveryBaseline(view, this.executionRoot);
+    const reader = this.canonicalReader(view);
+    const current = captureLockScopedRecoveryBaseline(view, this.executionRoot, reader);
     if (current === null || !sameEvidenceLineage(current, this.observation)) {
       const changed = current === null
         ? "unavailable"
@@ -704,7 +722,7 @@ export class ExhaustedReviewRetryRecoveryAdmission {
           .join(",");
       throw new Error(`Review recovery checkout evidence changed before publication: ${changed}`);
     }
-    const flowManager = new LockScopedRetryRecoveryFlowManager(view);
+    const flowManager = new LockScopedRetryRecoveryFlowManager(view, reader);
     const plan = resolveRetryRecovery(recoveryDecisionFacts({
       flowManager,
       state,
@@ -725,9 +743,9 @@ export class ExhaustedReviewRetryRecoveryAdmission {
         ignoredDirectories: snapshot.ignoredDirectories,
         runtimeLocks: snapshot.runtimeLocks,
       });
-      if (fresh.digest !== snapshot.digest) {
+      if (!sameTaskReviewRepositorySnapshot(snapshot, fresh)) {
         throw new Error(
-          `Task Review recovery checkout observation changed before publication: ${snapshot.allChangedPaths(fresh).join(",")}`,
+          `Task Review recovery checkout observation changed before publication: ${snapshot.observationChanges(fresh).join(",")}`,
         );
       }
     }
@@ -740,12 +758,20 @@ export class ExhaustedReviewRetryRecoveryAdmission {
   }
 }
 
-class BoundExhaustedReviewRetryRecoveryAdmission {
-  constructor(admission, publicationReceipt, publicationTaskAuthorization) {
+class BoundExhaustedReviewRetryRecoveryAdmission extends ExhaustedReviewRetryRecoveryAdmission {
+  #readerForView;
+
+  constructor(admission, publicationReceipt, publicationTaskAuthorization, readerForView) {
     if (!(admission instanceof ExhaustedReviewRetryRecoveryAdmission)) {
       throw new Error("Review recovery publication binding requires its typed admission");
     }
-    this.admission = admission;
+    super({
+      receipt: admission.receipt,
+      observation: admission.observation,
+      basis: admission.basis,
+      executionRoot: admission.executionRoot,
+      taskReviewRecoveryAuthorization: admission.taskReviewRecoveryAuthorization,
+    });
     this.publicationReceipt = publicationReceipt instanceof RetryRecoveryReceipt
       ? publicationReceipt
       : new RetryRecoveryReceipt(publicationReceipt);
@@ -753,22 +779,28 @@ class BoundExhaustedReviewRetryRecoveryAdmission {
       && !(publicationTaskAuthorization instanceof TaskReviewRecoveryAuthorization)) {
       throw new Error("Review recovery publication binding requires typed Task authorization");
     }
+    if (typeof readerForView !== "function") {
+      throw new Error("Review recovery publication binding requires its Store reader factory");
+    }
+    this.#readerForView = readerForView;
     this.publicationTaskAuthorization = publicationTaskAuthorization;
     Object.freeze(this);
   }
 
+  canonicalReader(view) { return this.#readerForView(view); }
+
   assert(view) {
-    if (!this.admission.receipt.equals(this.publicationReceipt)) {
+    if (!this.receipt.equals(this.publicationReceipt)) {
       throw new Error("Review recovery admission receipt does not match the published receipt");
     }
-    const selected = this.admission.taskReviewRecoveryAuthorization;
+    const selected = this.taskReviewRecoveryAuthorization;
     const published = this.publicationTaskAuthorization;
     if ((selected === null) !== (published === null)
       || (selected !== null && (selected.digest !== published.digest
         || JSON.stringify(selected.toJSON()) !== JSON.stringify(published.toJSON())))) {
       throw new Error("Review recovery admission Task authorization does not match the published authorization");
     }
-    this.admission.assert(view);
+    super.assert(view);
   }
 }
 
@@ -850,11 +882,7 @@ export function readRetryBaseline(flowManager, state, route) {
   try { baseline = new RetryRecoveryBaseline(JSON.parse(source.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry baseline is invalid: ${error.message}`); }
   if (
     !baseline.route.equals(route)
-    || baseline.attemptId !== state.attempt.id
-    || baseline.attempt !== state.attempt.sequence
-    || baseline.runId !== state.runId
-    || baseline.specId !== state.specId
-    || baseline.issue !== (state.issue ?? null)
+    || !baseline.matchesCurrentAttempt(state)
   ) throw new Error("retry baseline identity does not match the active Attempt and Flow");
   return baseline;
 }
@@ -879,11 +907,7 @@ export function readRetryRecoveryReceipt(flowManager, state, route) {
   const current = receipt.current;
   if (
     !current.route.equals(route)
-    || current.attemptId !== state.attempt.id
-    || current.attempt !== state.attempt.sequence
-    || current.runId !== state.runId
-    || current.specId !== state.specId
-    || current.issue !== (state.issue ?? null)
+    || !current.matchesCurrentAttempt(state)
   ) throw new Error("retry recovery receipt identity does not match the active Attempt and Flow");
   const catalog = flowManager.artifactCatalog(state.specId);
   const descriptor = catalog.artifacts.find((entry) => entry.relativePath === source.relativePath) ?? null;

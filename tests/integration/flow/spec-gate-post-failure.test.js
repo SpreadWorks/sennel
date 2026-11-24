@@ -14,14 +14,15 @@ import {
   DraftStepSettlementReceipt,
   settleSpecStepResult,
 } from "../../../src/flow/definition.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { SpecGateBlockedResult } from "../../../src/flow/engine/step-result.js";
 import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
-import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { dispatchContainer, fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
+import { dispatchContainer, fixtureRepository, passingGateProviderResponse } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { produceGateResult } from "../../support/infrastructure/query-draft-review-scenario.js";
+import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec } from "../../support/infrastructure/worker-artifact.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const roots = [];
@@ -32,23 +33,18 @@ async function failedPostHook() {
   roots.push(root);
   const specId = "761-spec-gate-post-failure";
   const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-  const flow = new CanonicalFlowFixture({
+  const flow = new FlowAtStepFixture({
     flowManager: manager, specId, runId: "run-spec-gate-post-failure",
+    request: "Preserve an unsettled Spec Gate post failure through reload and dispatch.",
     execution: { mode: "direct", baseBranch: "main", featureBranch: null },
-  }).create().registerActive();
-  flow.activate("draft");
-  manager.publishArtifacts({
-    specId, nodeId: "draft",
-    artifactWrites: [{
-      logicalKey: "draft", mediaType: "application/json",
-      bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`),
-    }],
+    specRecord: validWorkerHandoffSpec(), taskDocuments: validWorkerHandoffTaskSpec().tasks,
+    targetStep: "spec-gate",
   });
-  flow.settle("draft");
-  flow.activate("spec-gate");
-  const result = new CanonicalGatePromotion({
-    state: manager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
-  }).promote({ result: "pass", artifacts: { phase: "spec" } });
+  await flow.createWithProducers();
+  const context = () => ({ root, mainRoot: root, executionRoot: root, specId, phase: "spec",
+    flowManager: manager, flowState: manager.loadReadOnly(specId), config: {} });
+  const result = await produceGateResult(context(), passingGateProviderResponse);
+  assert.equal(result.result, "pass", JSON.stringify(result));
   class GateCommand extends Command {
     static outputMode = "envelope";
     execute() { return result; }
@@ -68,10 +64,7 @@ async function failedPostHook() {
       },
       entry, argv: [], envelopeType: "run", envelopeKey: "gate",
       stdout: (chunk) => output.push(chunk), stderr: () => {}, setExitCode: () => {},
-      buildHookCtx: () => ({
-        root, mainRoot: root, executionRoot: root, specId, phase: "spec",
-        flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
-      }),
+      buildHookCtx: context,
     });
   } finally {
     entry.command = originalCommand;

@@ -6,6 +6,7 @@ import { MigrationBlocker } from "./migration.js";
 import { FlowSpecId } from "./flow-spec-id.js";
 import { LEGACY_MANAGED_DIRECTORY_NAMES } from "./legacy-managed-directory-migration.js";
 import { PRODUCT } from "./product.js";
+import { LogicalRelativePath } from "./portable-path.js";
 
 function compareEntryNames(left, right) {
   return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
@@ -28,11 +29,9 @@ function configuredSpecDir(config, label) {
   const value = config.flow?.specDir;
   if (value == null) return "specs";
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label}.flow.specDir must be a non-empty relative path`);
-  const normalized = value.trim().replaceAll("\\", "/");
-  if (path.posix.isAbsolute(normalized) || normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`${label}.flow.specDir must be a normalized relative path`);
-  }
-  return normalized;
+  // Configuration input has an explicit separator converter; stored logical
+  // values themselves still reject backslash separators.
+  return new LogicalRelativePath(value.trim().replaceAll("\\", "/"), `${label}.flow.specDir`).toString();
 }
 
 function configAt(directory) {
@@ -47,14 +46,11 @@ function configAt(directory) {
 export class MigrationSpecRoot {
   constructor({ root, relativePath, authority } = {}) {
     this.root = path.resolve(root);
-    if (typeof relativePath !== "string" || relativePath === "") throw new Error("migration spec root path is required");
-    if (path.posix.isAbsolute(relativePath) || relativePath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-      throw new Error("migration spec root path is invalid");
-    }
+    const logicalPath = new LogicalRelativePath(relativePath, "migration spec root path");
     if (!new Set(["canonical", "legacy", "default"]).has(authority)) throw new Error("migration spec root authority is invalid");
-    this.relativePath = relativePath;
+    this.relativePath = logicalPath.toString();
     this.authority = authority;
-    this.path = path.join(this.root, ...relativePath.split("/"));
+    this.path = path.join(this.root, ...logicalPath.segments);
     Object.freeze(this);
   }
 }
@@ -122,6 +118,8 @@ export function resolveMigrationSpecRoot(root) {
 
 export { LEGACY_MANAGED_DIRECTORY_NAMES };
 
+const MIGRATION_JOURNAL_REVISIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
+
 /** One literal spec, or the existing project-wide migration selection. */
 export class MigrationSpecSelection {
   constructor(specId = null) {
@@ -156,14 +154,14 @@ export class MigrationSpecSelection {
 
   journalFileName(specRoot, revision = 1) {
     if (this.specId === null) throw new Error("migration journal identity requires one spec");
-    if (![1, 2, 3, 4].includes(revision)) throw new Error("migration journal revision is invalid");
+    if (!MIGRATION_JOURNAL_REVISIONS.includes(revision)) throw new Error("migration journal revision is invalid");
     const suffix = revision === 1 ? "" : `\0${revision === 2 ? "revision-root" : `revision-root-${revision}`}`;
     return `${createHash("sha256").update(`${specRoot.relativePath}\0${this.specId}${suffix}`).digest("hex")}.json`;
   }
 
   recoveryEntries(specRoot, journalDirectory) {
     const entries = fs.readdirSync(journalDirectory, { withFileTypes: true });
-    const names = this.specId === null ? null : new Set([1, 2, 3, 4].map((revision) => this.journalFileName(specRoot, revision)));
+    const names = this.specId === null ? null : new Set(MIGRATION_JOURNAL_REVISIONS.map((revision) => this.journalFileName(specRoot, revision)));
     return entries.filter((entry) => names === null || names.has(entry.name))
       .sort(compareEntryNames);
   }

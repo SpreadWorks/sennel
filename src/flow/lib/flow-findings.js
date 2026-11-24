@@ -287,12 +287,34 @@ export class CanonicalFlowFindingSourceArtifact {
       || identity.sourceArtifact !== this.relativePath) {
       throw new Error("finding source resolution requires its exact source artifact identity");
     }
-    for (const payload of this.payloads.toReversed()) {
+    for (const payload of this.payloads.slice().reverse()) {
       const finding = findSourceFinding(payload, identity);
       if (finding !== null) return finding;
     }
     return null;
   }
+}
+
+/** Capture one cataloged findings document and its compare-and-swap baseline. */
+export function readFlowFindingsSnapshot({ flowManager, flowState, nodeId }) {
+  const resolved = flowManager.readArtifact({
+    specId: flowState.specId,
+    logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
+    consumerNodeId: nodeId,
+    optional: true,
+  });
+  const artifact = new FlowFindingsArtifact(resolved === null ? { entries: [] } : jsonFromArtifact(
+    resolved.bytes,
+    "canonical flow findings",
+  ));
+  return new CanonicalFlowFindingsSnapshot({
+    artifact,
+    baseline: new CanonicalFlowArtifactBaseline({
+      logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
+      digest: resolved?.descriptor.hash ?? null,
+      byteLength: resolved?.descriptor.size ?? 0,
+    }),
+  });
 }
 
 /**
@@ -318,24 +340,7 @@ export class CanonicalFlowFindingsStore {
   }
 
   readSnapshot() {
-    const resolved = this.flowManager.readArtifact({
-      specId: this.flowState.specId,
-      logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
-      consumerNodeId: this.nodeId,
-      optional: true,
-    });
-    const artifact = new FlowFindingsArtifact(resolved === null ? { entries: [] } : jsonFromArtifact(
-      resolved.bytes,
-      "canonical flow findings",
-    ));
-    return new CanonicalFlowFindingsSnapshot({
-      artifact,
-      baseline: new CanonicalFlowArtifactBaseline({
-        logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
-        digest: resolved?.descriptor.hash ?? null,
-        byteLength: resolved?.descriptor.size ?? 0,
-      }),
-    });
+    return readFlowFindingsSnapshot({ flowManager: this.flowManager, flowState: this.flowState, nodeId: this.nodeId });
   }
 
   read({ filterCurrentRun = false } = {}) {

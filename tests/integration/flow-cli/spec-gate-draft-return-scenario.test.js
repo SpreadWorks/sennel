@@ -2,11 +2,9 @@ import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bun
 import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { syncBuiltinESMExports } from "node:module";
-import { mock, test } from "node:test";
+import { test } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -25,7 +23,10 @@ import { createSpecGateRepairScenario } from "../../support/infrastructure/spec-
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
-import { dispatchContainer, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, installGateProviderFake, requestInput, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
+import { CanonicalScenarioSeed, CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
+import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const priorQuestions = [
@@ -44,7 +45,7 @@ const newQuestion = { state: "CandidateQuestion", id: "q3",
   category: "user-visible-behavior", revision: 0,
   provenance: { producer: "spec-gate-draft-return-scenario" }, evidenceDigest: "a".repeat(64) };
 
-test("Spec Gate decision gap returns through Draft answer to regenerated Spec Gate approval", async () => {
+test("Spec Gate decision gap returns through Draft answer to regenerated Spec Gate approval", async (t) => {
   const taskTestStrategy = "Verify the chosen public API response through the focused scenario.";
   const value = await createSpecGateRepairScenario({ taskTestStrategy, beforeGate({ specId, flowManager, flow }) {
     flow.activate("draft");
@@ -58,6 +59,9 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
   } });
   let gateAgentLookup;
   let reviewProcess;
+  const admittedTasks = JSON.parse(value.flowManager.readArtifact({
+    specId: value.specId, logicalKey: "spec.record", consumerNodeId: "system",
+  }).bytes.toString("utf8")).tasks;
   try {
     initGitRepo(value.root);
     fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -89,22 +93,33 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
     assert.equal(resumed.canonicalState(value.specId).current.at(-1), "draft");
 
     const probeCoordinator = new WorkerArtifactHandoffCoordinator();
+    const draftSeed = CanonicalScenarioSeed.freeze(t, { root: value.root, specId: value.specId,
+      manager: resumed, prefix: "sennel-draft-return-seed-" });
+    const originalDraft = new CanonicalPersistenceSnapshot(resumed, value.specId);
     for (const [index, questions, expected] of [
       [0, [priorQuestions[1], newQuestion], /changed a prior resolved question/],
       [1, [...priorQuestions, { ...newQuestion, question: priorQuestions[0].question }], /duplicate question/],
     ]) {
-      const invalid = probeCoordinator.createRequest({ ctx: { ...value.ctx, flowManager: resumed },
-        state: resumed.load(value.specId), invocation: { id: `invalid-draft-${index}`,
+      const probeRoot = new SeedWorkRoot(draftSeed.root, { prefix: "sennel-draft-return-refusal-" });
+      t.after(() => probeRoot.cleanup());
+      const probeManager = new FlowManager({ root: probeRoot.root, mainRoot: probeRoot.root,
+        inWorktree: false, specId: value.specId });
+      draftSeed.assertClone(probeManager);
+      const probeCtx = { ...value.ctx, root: probeRoot.root, mainRoot: probeRoot.root,
+        executionRoot: probeRoot.root, flowManager: probeManager };
+      const invalid = probeCoordinator.createRequest({ ctx: probeCtx,
+        state: probeManager.load(value.specId), invocation: { id: `invalid-draft-${index}`,
           target: { digest: "c".repeat(64) },
           action: { digest: "d".repeat(64), nextAction: { step: "draft" } } } });
       fs.writeFileSync(invalid.payloadPath("draft.json"), workerArtifactJson(
         canonicalDraftDocument({ goal: "Keep the old decisions.", questions })));
       sealWorkerArtifactHandoff({ requestPath: invalid.requestPath,
         invocationId: invalid.dispatchInvocationId });
-      assert.throws(() => probeCoordinator.prepareDraftWorker({ ctx: { ...value.ctx,
-        flowManager: resumed }, request: invalid }), expected);
-      fs.rmSync(invalid.directory, { recursive: true });
+      const beforeInvalid = new CanonicalPersistenceSnapshot(probeManager, value.specId);
+      assert.throws(() => probeCoordinator.prepareDraftWorker({ ctx: probeCtx, request: invalid }), expected);
+      beforeInvalid.assertUnchanged(probeManager, value.specId, "invalid Draft proposal");
     }
+    originalDraft.assertUnchanged(resumed, value.specId, "isolated Draft proposal branches");
 
     gateAgentLookup = installGateProviderFake((_prompt, options) => {
       const observation = options.jsonSchema?.properties?.observations?.items;
@@ -114,11 +129,7 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
         requirementId, sourceRef, support: [], contradictions: [], unresolved: [],
       }))) });
     });
-    const originalSpawnSync = childProcess.spawnSync;
-    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawnSync(command, args, options);
-      }
+    reviewProcess = installReviewProcessFake((_command, _args, options) => {
       const step = resumed.canonicalState(value.specId).current.at(-1);
       const work = ReviewWorkUnit.fromEnvironment(options.env);
       if (step === "spec-review") {
@@ -140,12 +151,11 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
         }));
       }
       work.seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     let draftCalls = 0;
     let specCalls = 0;
-    const agent = { async call(_prompt, options) {
+    const agent = withScenarioProviderAdmission({ async call(_prompt, options) {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
       if (request.stepId === "draft") {
@@ -168,7 +178,7 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
         assert.equal(questions[2].state, "AnsweredQuestion");
         const spec = validWorkerHandoffTaskSpec();
         spec.requirements[0].desc = "Validate the target selected in the answered Draft.";
-        spec.tasks = spec.tasks.map((task) => ({ ...task, test_strategy: taskTestStrategy }));
+        spec.tasks = structuredClone(admittedTasks);
         fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson(spec));
       } else if (request.stepId === "spec-triage" || request.stepId === "spec-repair") {
         const review = new CanonicalSpecReview(requestInput(request, "review.json").document);
@@ -181,7 +191,7 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
       sealWorkerArtifactHandoff({ requestPath,
         invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
       return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-    } };
+    } });
     const dispatch = async (maxDispatches = 64) => {
       const dispatcher = new RunDispatchCommand({ agent, maxDispatches });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: resumed, agent });
@@ -220,10 +230,10 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
     const spec = JSON.parse(reloaded.readArtifact({ specId: value.specId,
       logicalKey: "spec.record", consumerNodeId: "approval" }).bytes.toString("utf8"));
     assert.equal(spec.requirements[0].desc, "Validate the target selected in the answered Draft.");
+    assert.deepEqual(spec.tasks, admittedTasks);
     assert.equal(spec.user_approval.confirmed_at, "2026-09-23T00:00:00.000Z");
   } finally {
     reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     gateAgentLookup?.mock.restore();
     removeTmpDir(value.root);
   }

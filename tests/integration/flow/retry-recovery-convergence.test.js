@@ -1,22 +1,25 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
+import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { emptySpecStub } from "../../../src/lib/spec-json.js";
 import { CanonicalFlowCreateRequest } from "../../../src/flow/lib/canonical-flow-manager-store.js";
 import { CurrentFlowSpecRecord } from "../../../src/flow/lib/current-flow-state.js";
 import { ReviewRecoveryIdentity } from "../../../src/flow/lib/review-convergence.js";
+import { StepResult } from "../../../src/flow/engine/step-result.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { workerStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
-import { flattenSteps } from "../../../src/flow/lib/step-tree.js";
-import { canonicalFixtureProducerResult } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { CanonicalFlowFixture, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const roots = [];
 
 function root() {
-  const value = createTmpDir("canonical-retry-recovery-");
+  const value = fixtureRepository("canonical-retry-recovery-");
   roots.push(value);
+  setupFlowConfig(value, "en");
   return value;
 }
 
@@ -27,7 +30,7 @@ function createFlow(specId) {
     specId,
     runId: `run-${specId}`,
     request: "Exercise canonical Attempt retry and recovery semantics.",
-    execution: { mode: "direct" },
+    execution: { mode: "direct", baseBranch: "main" },
     policy: { autoApprove: false, nonblocking: null },
     flowId: `flow-${specId}`,
     flowVersionId: `flow-${specId}-v1`,
@@ -37,25 +40,19 @@ function createFlow(specId) {
   return Object.freeze({ repository, manager, created });
 }
 
-function advanceTo(fixture, nodeId) {
-  const ordered = flattenSteps(fixture.manager.load(fixture.created.specId).steps);
-  const target = ordered.findIndex((step) => step.id === nodeId);
-  assert.ok(target >= 0, `canonical definition includes ${nodeId}`);
-  for (const step of ordered.slice(0, target)) {
-    const canonicalCommandResult = canonicalFixtureProducerResult(
-      fixture.manager.loadReadOnly(fixture.created.specId),
-      step.id,
-      { flowManager: fixture.manager, specId: fixture.created.specId },
-    );
-    fixture.manager.updateStepStatus(
-      { stepId: step.id, requestedStatus: "done" },
-      {
-        specId: fixture.created.specId,
-        ...(canonicalCommandResult === null ? {} : { canonicalCommandResult }),
-      },
-    );
-  }
-  fixture.manager.updateStepStatus({ stepId: nodeId, requestedStatus: "in_progress" }, { specId: fixture.created.specId });
+async function requirementReviewFixture(t) {
+  const scenario = RequirementTestPhaseScenario.create(t, { entryStep: "draft" });
+  await scenario.advanceTo("approval");
+  await scenario.approve();
+  await scenario.advanceTo("test-review");
+  return Object.freeze({ repository: scenario.root, manager: scenario.manager,
+    created: CanonicalFlowFixture.fromExisting({ flowManager: scenario.manager, specId: scenario.specId }) });
+}
+
+async function advanceTo(fixture, nodeId) {
+  await CanonicalFlowFixture.fromExisting({
+    flowManager: fixture.manager, specId: fixture.created.specId,
+  }).activateWithProducers(nodeId);
 }
 
 function retryableFailure(kind) {
@@ -68,8 +65,8 @@ function retryableFailure(kind) {
   };
 }
 
-function failForRetry(fixture, nodeId, kind) {
-  advanceTo(fixture, nodeId);
+async function failForRetry(fixture, nodeId, kind) {
+  await advanceTo(fixture, nodeId);
   fixture.manager.failCurrentAttempt({ specId: fixture.created.specId, failure: retryableFailure(kind) });
   return fixture.manager.canonicalState(fixture.created.specId);
 }
@@ -84,20 +81,28 @@ describe("retry recovery authority convergence", () => {
   });
 
   for (const nodeId of ["draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review"]) {
-    it(`starts ${nodeId} through the definition-owned canonical lifecycle`, () => {
-      const fixture = createFlow(`001-route-${nodeId}`);
-      advanceTo(fixture, nodeId);
+    it(`starts ${nodeId} through the definition-owned canonical lifecycle`, async (t) => {
+      const fixture = nodeId === "test-review" ? await requirementReviewFixture(t) : createFlow(`001-route-${nodeId}`);
+      await advanceTo(fixture, nodeId);
       const state = fixture.manager.canonicalState(fixture.created.specId);
       assert.equal(state.current.at(-1), nodeId);
       assert.equal(state.attempt.nodeId, nodeId);
       assert.equal(Object.hasOwn(fixture.manager.load(fixture.created.specId), "stepAttempts"), false);
-      assert.equal(ledgerOperations(fixture).at(-1), "start_attempt");
+      if (nodeId === "test-review") {
+        const producer = fixture.manager.activityLedger(fixture.created.specId).findLast((activity) => (
+          activity.nodeId === "test-generate"
+          && activity.result?.draftSettlementReceipt?.targetStepId === "test-review"
+        ));
+        assert.ok(producer, "the real candidate producer must own the typed Test Review connection");
+        const generated = StepResult.fromStored("test-generate", producer.result.stepResult);
+        assert.equal(generated.stepId, "test-generate");
+      } else assert.equal(ledgerOperations(fixture).at(-1), "start_attempt");
     });
   }
 
-  it("retries a rejected review through one typed semantic Attempt transition", () => {
+  it("retries a rejected review through one typed semantic Attempt transition", async () => {
     const fixture = createFlow("001-semantic-retry");
-    const failed = failForRetry(fixture, "spec-review", "semantic");
+    const failed = await failForRetry(fixture, "spec-review", "semantic");
     const before = fixture.manager.activityLedger(fixture.created.specId).length;
     fixture.manager.retryCurrentAttempt({ specId: fixture.created.specId });
     const retried = fixture.manager.canonicalState(fixture.created.specId);
@@ -109,9 +114,9 @@ describe("retry recovery authority convergence", () => {
     assert.equal(ledgerOperations(fixture).at(-1), "retry_attempt");
   });
 
-  it("retries a transient review provider failure through one typed tooling Attempt transition", () => {
+  it("retries a transient review provider failure through one typed tooling Attempt transition", async () => {
     const fixture = createFlow("001-tooling-retry");
-    failForRetry(fixture, "spec-review", "tooling");
+    await failForRetry(fixture, "spec-review", "tooling");
     fixture.manager.retryCurrentAttempt({ specId: fixture.created.specId });
     const retried = fixture.manager.canonicalState(fixture.created.specId);
     assert.equal(retried.attempt.sequence, 2);
@@ -120,9 +125,9 @@ describe("retry recovery authority convergence", () => {
     assert.equal(retried.attempt.failure, null);
   });
 
-  it("rejects a second retry until the active replacement Attempt has failed", () => {
+  it("rejects a second retry until the active replacement Attempt has failed", async () => {
     const fixture = createFlow("001-idempotent-retry");
-    failForRetry(fixture, "spec-review", "semantic");
+    await failForRetry(fixture, "spec-review", "semantic");
     fixture.manager.retryCurrentAttempt({ specId: fixture.created.specId });
     const before = fixture.manager.activityLedger(fixture.created.specId);
     assert.throws(
@@ -132,9 +137,9 @@ describe("retry recovery authority convergence", () => {
     assert.deepEqual(fixture.manager.activityLedger(fixture.created.specId), before);
   });
 
-  it("does not make a non-retryable review failure recoverable", () => {
+  it("does not make a non-retryable review failure recoverable", async () => {
     const fixture = createFlow("001-terminal-review");
-    advanceTo(fixture, "spec-review");
+    await advanceTo(fixture, "spec-review");
     fixture.manager.failCurrentAttempt({
       specId: fixture.created.specId,
       failure: {
@@ -152,9 +157,9 @@ describe("retry recovery authority convergence", () => {
     assert.equal(fixture.manager.canonicalState(fixture.created.specId).attempt.failure.retryable, false);
   });
 
-  it("preserves the active Attempt node and operation claims across a retry", () => {
+  it("preserves the active Attempt node and operation claims across a retry", async () => {
     const fixture = createFlow("001-retry-claims");
-    const failed = failForRetry(fixture, "spec-review", "semantic");
+    const failed = await failForRetry(fixture, "spec-review", "semantic");
     fixture.manager.retryCurrentAttempt({ specId: fixture.created.specId });
     const retried = fixture.manager.canonicalState(fixture.created.specId);
     assert.equal(retried.attempt.nodeId, failed.attempt.nodeId);
@@ -164,8 +169,8 @@ describe("retry recovery authority convergence", () => {
   it("refuses a worker selection from a different admitted run before effects", async () => {
     const original = createFlow("001-original-worker-selection");
     const current = createFlow("001-current-worker-selection");
-    advanceTo(original, "draft");
-    advanceTo(current, "draft");
+    await advanceTo(original, "draft");
+    await advanceTo(current, "draft");
     const originalCtx = {
       root: original.repository, mainRoot: original.repository,
       executionRoot: original.repository, specId: original.created.specId,
@@ -199,9 +204,9 @@ describe("retry recovery authority convergence", () => {
     assert.deepEqual(current.manager.artifactCatalog(current.created.specId).toJSON(), before.catalog);
   });
 
-  it("does not persist legacy mutable retry or review-convergence fields", () => {
+  it("does not persist legacy mutable retry or review-convergence fields", async () => {
     const fixture = createFlow("001-no-legacy-retry");
-    failForRetry(fixture, "spec-review", "semantic");
+    await failForRetry(fixture, "spec-review", "semantic");
     fixture.manager.retryCurrentAttempt({ specId: fixture.created.specId });
     const projected = fixture.manager.load(fixture.created.specId);
     assert.equal(Object.hasOwn(projected, "retryRecovery"), false);

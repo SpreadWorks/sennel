@@ -1,0 +1,61 @@
+{
+  "version": 7,
+  "root": "/tmp/sennel-owner-v7-w0ii75",
+  "sourceName": ".senti",
+  "stagingRelative": ".tmp/runtime/migrate-layout/sennel-migrate-layout-xCpALG",
+  "sourceIdentity": {
+    "dev": 2049,
+    "ino": 96515
+  },
+  "sourceSnapshot": {
+    "rootIdentity": {
+      "dev": 2049,
+      "ino": 96515
+    },
+    "rootMode": 509,
+    "entries": [
+      {
+        "path": "config.json",
+        "targetPath": "config.json",
+        "kind": "file",
+        "dev": 2049,
+        "ino": 96516,
+        "mode": 436,
+        "hash": "9079005f3d75dce866c164a2f275ab3932c7c89ce3fad055a6e9b55d0db23e7c",
+        "transformedHash": "9079005f3d75dce866c164a2f275ab3932c7c89ce3fad055a6e9b55d0db23e7c"
+      }
+    ]
+  },
+  "sourceSnapshotFingerprint": "c429b3e7854f23c45fe9efb06f930d991ed40cb67c1faf87911cda132943a527",
+  "stagedManagedIdentity": {
+    "dev": 2049,
+    "ino": 96522
+  },
+  "stagedSnapshotFingerprint": "4b0d9fde703c9c2034f0e7b65013887a41044f6aac4c802ae83c91c6c774730e",
+  "metadata": [
+    {
+      "name": ".gitignore",
+      "existed": false,
+      "original": "",
+      "planned": "Ci5zZW5uZWwvKgohLnNlbm5lbC9jb25maWcuanNvbgohLnNlbm5lbC90ZW1wbGF0ZXMvCiEuc2VubmVsL291dHB1dC8KIS5zZW5uZWwvcHJlc2V0cy8KLnNlbm5lbC9vdXRwdXQvYWNjZXB0YW5jZS1yZXBvcnQtKi5qc29uCg=="
+    },
+    {
+      "name": ".gitattributes",
+      "existed": false,
+      "original": "",
+      "planned": "LnNlbm5lbC9vdXRwdXQvYW5hbHlzaXMuanNvbiBtZXJnZT1vdXJzCg=="
+    }
+  ],
+  "owner": {
+    "pid": 2435289,
+    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+    "startFingerprint": "84330253",
+    "ownerToken": "95e8ec9f-ac2c-482b-83a2-2e4e5fc0fab2"
+  },
+  "tempRootCreated": true,
+  "tempRootIdentity": {
+    "dev": 2049,
+    "ino": 96518
+  },
+  "phase": "cleanup-source-verified"
+}

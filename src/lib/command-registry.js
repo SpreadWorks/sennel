@@ -4,7 +4,8 @@
  * may have import-time side effects.
  */
 
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { CommandEntrypoint, publicCommandEntrypoint } from "./command-entrypoint.js";
+export { CommandEntrypoint } from "./command-entrypoint.js";
 import { FLOW_COMMANDS } from "../flow/registry.js";
 
 const COMMAND_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -86,30 +87,6 @@ export class CoreCommandMetadataRegistry {
   }
 }
 
-export class CommandEntrypoint {
-  constructor({ modulePath, invocation }) {
-    if (typeof modulePath !== "string" || modulePath.trim() === "") {
-      throw new Error("command entrypoint modulePath is required");
-    }
-    if (!new Set(["main", "script"]).has(invocation)) {
-      throw new Error(`invalid command entrypoint invocation: ${invocation}`);
-    }
-    this.moduleUrl = new URL(modulePath, import.meta.url);
-    this.modulePath = fileURLToPath(this.moduleUrl);
-    this.invocation = invocation;
-    Object.freeze(this);
-  }
-
-  async execute(args) {
-    process.argv = [process.argv[0], this.modulePath, ...args];
-    const mod = await import(pathToFileURL(this.modulePath).href);
-    if (this.invocation === "script") return;
-    if (typeof mod.main !== "function") {
-      throw new Error(`command module does not export main(): ${this.modulePath}`);
-    }
-    await mod.main();
-  }
-}
 
 function helpText({ usage, summary, options = [] }) {
   const lines = [usage, "", summary];
@@ -132,6 +109,9 @@ export class CommandDefinition {
     dispatch = {},
     allowInvalidConfig = false,
     routed = false,
+    readOnly = false,
+    readOnlyFlags = [],
+    migration = false,
   }) {
     if (typeof name !== "string" || !COMMAND_NAME_RE.test(name)) {
       throw new Error(`invalid command name: ${name}`);
@@ -141,6 +121,10 @@ export class CommandDefinition {
     }
     if (command && outputMode !== "raw" && outputMode !== "envelope") {
       throw new Error(`command outputMode is required: ${name}`);
+    }
+    if (!Array.isArray(readOnlyFlags) || new Set(readOnlyFlags).size !== readOnlyFlags.length
+      || readOnlyFlags.some((flag) => typeof flag !== "string" || !Array.isArray(args?.flags) || !args.flags.includes(flag))) {
+      throw new TypeError(`read-only flags must be unique declared flags: ${name}`);
     }
     this.name = name;
     this.command = command;
@@ -164,6 +148,9 @@ export class CommandDefinition {
         : null;
     this.allowInvalidConfig = Boolean(allowInvalidConfig);
     this.routed = Boolean(routed);
+    this.readOnly = readOnly === true;
+    this.readOnlyFlags = Object.freeze([...readOnlyFlags]);
+    this.migration = migration === true;
     Object.assign(this, dispatch);
 
     this.subcommands = new Map();
@@ -285,9 +272,17 @@ const docsDefinitionData = [
 ];
 
 const docsArgs = {
-  init: { flags: ["--force", "--dry-run", "--yes"], options: ["--type"] },
+  build: { flags: ["--verbose", "--dry-run", "--force", "--regenerate", "--yes"] },
+  enrich: { flags: ["--yes", "--stdout", "--dry-run"] },
+  data: { flags: ["--dry-run", "--stdout"], options: ["--docs-dir"] },
+  readme: { flags: ["--yes", "--dry-run"], options: ["--lang", "--output"] },
+  translate: { flags: ["--yes", "--dry-run", "--force"], options: ["--lang"] },
+  agents: { flags: ["--yes", "--dry-run"], options: [] },
+  changelog: { flags: ["--dry-run"], options: [] },
+  init: { flags: ["--force", "--dry-run", "--yes"], options: ["--type", "--lang", "--docs-dir"] },
   scan: { flags: ["--stdout", "--dry-run"], optionalOptions: ["--reset"] },
-  text: { flags: ["--dry-run", "--per-directive", "--yes"], options: ["--agent", "--id", "--timeout"] },
+  forge: { aliases: { "-v": "--verbose" }, flags: ["--yes", "--verbose", "--dry-run"], options: ["--prompt", "--prompt-file", "--spec", "--max-runs", "--review-cmd", "--mode"] },
+  text: { flags: ["--dry-run", "--per-directive", "--yes", "--force"], options: ["--id", "--lang", "--docs-dir", "--files"] },
 };
 
 const docsOptions = {
@@ -330,13 +325,15 @@ const flowGroupHelp = {
   run: ["Execute flow actions (prepare-spec, gate, finalize, ...)", "Usage: sennel flow run <action> [options]"],
 };
 
-function flowDefinition(name, entry) {
+function flowDefinition(name, entry, group = null) {
   if (typeof entry?.command === "function") {
-    const { command, help, args, ...dispatch } = entry;
+    const { command, help, args, readOnlyFlags, ...dispatch } = entry;
     return new CommandDefinition({
       name,
       command,
       outputMode: "envelope",
+      readOnly: entry.readOnly ?? (group === "get" || ["query", "resume"].includes(name)),
+      readOnlyFlags,
       args: args || {},
       help: {
         section: "Flow",
@@ -359,7 +356,7 @@ function flowDefinition(name, entry) {
       options: ["-h, --help", "--agent-work-dir <path>"],
       localeKey: `ui:help.commands.flow ${name}`,
     },
-    subcommands: Object.entries(entry || {}).map(([childName, child]) => flowDefinition(childName, child)),
+    subcommands: Object.entries(entry || {}).map(([childName, child]) => flowDefinition(childName, child, name)),
   });
 }
 
@@ -394,6 +391,13 @@ const pluginSubcommands = [
 
 const definitions = [
   new CommandDefinition({
+    name: publicCommandEntrypoint.commandName,
+    entrypoint: publicCommandEntrypoint,
+    help: { section: "Project", summary: "Run literal arguments in the inherited execution context",
+      usage: "Usage: sennel command -- <executable> [argument ...]", options: ["-- (required argument separator)", "-h, --help"],
+      localeKey: "ui:help.commands.command" },
+  }),
+  new CommandDefinition({
     name: "help",
     entrypoint: { modulePath: "../help.js", invocation: "main" },
     allowInvalidConfig: true,
@@ -401,24 +405,47 @@ const definitions = [
   }),
   new CommandDefinition({
     name: "setup",
+    args: {
+      flags: ["--dry-run"],
+      options: [
+        "--name", "--path", "--work-root",
+        "--type", "--purpose", "--tone",
+        "--agent",
+        "--lang",
+      ],
+      defaults: {
+        name: "",
+        path: "",
+        workRoot: "",
+        type: "",
+        purpose: "",
+        tone: "",
+        agent: "",
+        lang: "",
+        dryRun: false,
+      },
+    },
     entrypoint: { modulePath: "../setup.js", invocation: "main" },
     help: { section: "Project", summary: "Register project + generate config (interactive)", usage: "Usage: sennel setup", options: ["-h, --help"], localeKey: "ui:help.commands.setup" },
   }),
   new CommandDefinition({
     name: "upgrade",
+    args: { flags: ["--dry-run"], options: [] },
     entrypoint: { modulePath: "../upgrade.js", invocation: "main" },
     allowInvalidConfig: true,
     help: { section: "Project", summary: "Update template-derived files to latest version", usage: "Usage: sennel upgrade [--dry-run]", options: ["--dry-run", "-h, --help"], localeKey: "ui:help.cmdHelp.upgrade" },
   }),
   new CommandDefinition({
     name: "migrate",
+    migration: true,
+    args: { flags: ["--dry-run", "--recover"], options: ["--to", "--spec", "--execution-root"] },
     entrypoint: { modulePath: "../migrate.js", invocation: "main" },
     allowInvalidConfig: true,
     help: {
       section: "Project",
-      summary: "Migrate project layout or Flow specifications to a revision",
-      usage: "Usage: sennel migrate <layout|specs> --to <revision> [--spec <specId>] [--dry-run]",
-      options: ["--to <revision>", "--spec <specId> (specs only; omit for all specs)", "--dry-run", "-h, --help"],
+      summary: "Migrate project layout, Flow specifications or runtime records to a revision",
+      usage: "Usage: sennel migrate <layout|specs|runtime> --to <revision> [--spec <specId>] [--execution-root <path>] [--dry-run] [--recover]",
+      options: ["--to <revision>", "--spec <specId> (specs only; omit for all specs)", "--execution-root <path> (runtime only; current checkout by default)", "--recover (runtime only)", "--dry-run", "-h, --help"],
       localeKey: "ui:help.commands.migrate",
     },
   }),
@@ -431,7 +458,7 @@ const definitions = [
   new CommandDefinition({
     name: "docs",
     entrypoint: { modulePath: "../docs.js", invocation: "script" },
-    help: { section: "Docs", summary: "Documentation commands", usage: "Usage: sennel docs <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.docs build" },
+    help: { section: "Docs", summary: "Documentation commands", usage: "Usage: sennel docs <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.docs" },
     subcommands: docsSubcommands,
   }),
   new CommandDefinition({
@@ -447,7 +474,7 @@ const definitions = [
   new CommandDefinition({
     name: "metrics",
     entrypoint: { modulePath: "../metrics.js", invocation: "script" },
-    help: { section: "Metrics", summary: "Metrics commands", usage: "Usage: sennel metrics <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics token" },
+    help: { section: "Metrics", summary: "Metrics commands", usage: "Usage: sennel metrics <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics" },
     subcommands: [
       rawDefinition("token", "../metrics/commands/token.js", { section: "Metrics", summary: "Aggregate and display token/cache/cost metrics", usage: "Usage: sennel metrics token [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics token" }),
       rawDefinition("review", "../metrics/commands/review.js", { section: "Metrics", summary: "Aggregate review metrics", usage: "Usage: sennel metrics review [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics review" }),
@@ -474,19 +501,24 @@ const definitions = [
   new CommandDefinition({
     name: "presets",
     entrypoint: { modulePath: "../presets-cmd.js", invocation: "main" },
-    help: { section: "Info", summary: "Preset commands", usage: "Usage: sennel presets <command>", options: ["-h, --help"], localeKey: "ui:help.commands.presets list" },
+    help: { section: "Info", summary: "Preset commands", usage: "Usage: sennel presets <command>", options: ["-h, --help"], localeKey: "ui:help.commands.presets" },
     subcommands: [childRoute("list", { section: "Info", summary: "Show preset inheritance tree", usage: "Usage: sennel presets list", options: ["-h, --help"], localeKey: "ui:help.commands.presets list" })],
   }),
   new CommandDefinition({
     name: "flow",
     entrypoint: { modulePath: "../flow-main.js", invocation: "script" },
     allowInvalidConfig: true,
-    help: { section: "Flow", summary: "Spec-Driven Development flow commands", usage: "Usage: sennel flow <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.flow run" },
+    help: { section: "Flow", summary: "Spec-Driven Development flow commands", usage: "Usage: sennel flow <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.flow" },
     subcommands: flowSubcommands,
   }),
 ];
 
 export const coreCommandRegistry = new CommandRegistry(definitions);
+// These exact core routes are inspection contracts. Plugin commands and
+// undeclared flags never acquire inspection storage merely from their spelling.
+for (const route of ["help", "docs review", "check config", "check freshness", "check scan", "metrics token", "metrics review", "hook list", "presets list", "plugin source list", "plugin list"]) {
+  coreCommandRegistry.find(route).readOnly = true;
+}
 export const coreCommandMetadataRegistry = coreCommandRegistry.metadataRegistry();
 
 function namespaceCommands(name) {

@@ -11,9 +11,6 @@ import { ProcessExecutionControlFailure } from "../../lib/process-execution-runt
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { PRODUCT } from "../../lib/product.js";
-import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
-import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FlowCommand } from "./base-command.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
 import { prepareFinalRegressionExecution } from "../engine/composition/acceptance-finalization.js";
@@ -482,24 +479,6 @@ function currentChangedFilesWithFingerprints(root, changedFiles) {
   return withChangedFileFingerprints(root, changedFiles);
 }
 
-function finalRegressionGeneratedPath(filePath, state) {
-  const location = flowStateSpecLocation(state);
-  if (location === null) {
-    throw new Error("final-regression freshness requires a manager-bound Version location");
-  }
-  return filePath.startsWith(`${location.relativeDirectory}/`)
-    || filePath === PRODUCT.managedPath(".active-flow")
-    || FlowTargetIdentityAuthority.managesRepositoryPath(filePath)
-    || filePath.startsWith(".tmp/logs/");
-}
-
-function finalRegressionFreshnessFiles(changedFiles, state) {
-  return (changedFiles || []).filter((entry) => {
-    const filePath = changedFilePath(entry);
-    return filePath && !finalRegressionGeneratedPath(filePath.split(path.sep).join("/"), state);
-  });
-}
-
 function projectPolicySkipDecision({ err, changedFiles }) {
   if (err?.code !== NO_SUPPORTED_REGRESSION_COMMAND) return null;
   const reason = err.message || "no supported project-level regression command found";
@@ -770,6 +749,16 @@ function recordAndProceedFailure(code, message, data = {}) {
   return Envelope.fail("run", "final-regression", code, message, data);
 }
 
+function assertRecordAndProceedAction(decision) {
+  try {
+    return selectedNonGateUserAction(decision, FINAL_REGRESSION_RECORD_AND_PROCEED_ACTION_ID);
+  } catch {
+    throw new Error(
+      `final-regression record-and-proceed admission rejected: Definition selected ${decision.disposition.operation}`,
+    );
+  }
+}
+
 /**
  * Run the normal project regression against V1 state. Inputs and output are
  * resolved through the Version Store, and raw bytes live only in the typed
@@ -788,6 +777,13 @@ async function executeCanonicalFinalRegression(ctx) {
     if (canonical.attempt.failure === null) {
       throw new Error("canonical final-regression record-and-proceed requires a prior failed Attempt");
     }
+    // Refuse an unselected Action from its authenticated saved settlement
+    // before changed-file freshness checks can launch managed Git observations.
+    // Missing/unfinished settlement evidence keeps the resolver's original
+    // refusal; a selected Action still needs the full fresh-source check below.
+    const saved = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "final-regression" });
+    const savedDecision = saved?.settlement.application?.decision;
+    if (savedDecision !== undefined) assertRecordAndProceedAction(savedDecision);
     const admission = resolveCanonicalFinalRegressionTransition({
       flowManager: ctx.flowManager,
       specId: state.specId,
@@ -801,13 +797,7 @@ async function executeCanonicalFinalRegression(ctx) {
     // The command name is never an admission capability.  Only the exact
     // user Action sealed by the fresh canonical Definition decision may
     // create the accepted replacement Attempt.
-    try {
-      selectedNonGateUserAction(admission, FINAL_REGRESSION_RECORD_AND_PROCEED_ACTION_ID);
-    } catch {
-      throw new Error(
-        `final-regression record-and-proceed admission rejected: Definition selected ${admission.disposition.operation}`,
-      );
-    }
+    assertRecordAndProceedAction(admission);
     const prior = store.readCurrentAttempt({
       logicalKey: "final.regression",
       consumerNodeId: "final-regression",
@@ -885,10 +875,9 @@ async function executeCanonicalFinalRegression(ctx) {
   };
   const beforeRepository = FinalRegressionRepositoryBinding.capture(root, repositoryBindingOptions);
   const rawLines = [];
-  const changedFiles = finalRegressionFreshnessFiles(
-    expandChangedFileEntries(root, listRegressionChangedFiles({ root, state })),
-    state,
-  );
+  const changedFiles = expandChangedFileEntries(root, listRegressionChangedFiles({
+    root, state, pathspecExcludes: repositoryBindingOptions.pathspecExcludes,
+  }));
   const upgradeEvidence = validateCanonicalUpgradeEvidence({
     flowManager: ctx.flowManager,
     state,

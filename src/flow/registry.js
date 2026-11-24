@@ -1370,6 +1370,7 @@ export const FLOW_COMMANDS = {
     },
     context: {
       helpKey: "flow.get.context",
+      readOnly: false,
       command: () => import("./lib/get-context.js"),
       args: { positional: ["path"], flags: withTargetGuardFlags(["--raw"]), options: withTargetGuardOptions(["--search"]) },
       help: [
@@ -2487,6 +2488,7 @@ export const FLOW_COMMANDS = {
     "recover-spec-gate-repair": {
       helpKey: "flow.run.recover-spec-gate-repair",
       requiresFlow: true,
+      readOnlyFlags: ["--preview"],
       runtimeLog: { stepMetadata: false },
       explicitTargetResolution: true,
       command: () => import("./lib/run-recover-spec-gate-repair.js"),

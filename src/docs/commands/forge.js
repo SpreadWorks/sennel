@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { fileURLToPath } from "node:url";
+import { CommandInvocation, CommandInvocationError, NodeScriptInvocation } from "../../lib/command-invocation.js";
 /**
  * sennel/forge/forge.js
  *
@@ -18,6 +20,7 @@ import { runCmdAsync } from "../../lib/process.js";
 import { populateFromAnalysis } from "./data.js";
 import { textFillFromAnalysis } from "./text.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
+import { docsCommands } from "../../lib/command-registry.js";
 import { parseArgs } from "../../lib/cli.js";
 import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
@@ -32,6 +35,7 @@ import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { ForgeInputReferencePromptElement } from "../lib/prompt-elements.js";
 import {
   summaryToText,
@@ -47,7 +51,7 @@ import { executeForgeAgentPrompt } from "../lib/documentation-forge-batching.js"
 
 const DEFAULT_WAIT_LOG_SEC = 1;
 const DEFAULT_MAX_RUNS = 3;
-const DEFAULT_REVIEW_CMD = "sennel docs review";
+const DEFAULT_REVIEW_CMD = JSON.stringify(new NodeScriptInvocation({ script: fileURLToPath(new URL("../../sennel.js", import.meta.url)), args: ["docs", "review"] }));
 const DEFAULT_MODE = "local";
 
 function getTargetFiles(root, type, configChapters) {
@@ -84,9 +88,7 @@ function estimateRelevantFiles(specText, allFiles) {
 
 function parseCliOptions(argv) {
   const opts = parseArgs(argv, {
-    flags: ["--yes", "--verbose", "--dry-run"],
-    options: ["--prompt", "--prompt-file", "--spec", "--max-runs", "--review-cmd", "--mode"],
-    aliases: { "-v": "--verbose" },
+    ...docsCommands.forge.args,
     defaults: {
       prompt: "",
       promptFile: "",
@@ -132,10 +134,11 @@ function printHelp() {
  * bash に依存しない。
  */
 function runCommand(cmdString, cwd, signal) {
-  const parts = cmdString.match(/"[^"]*"|'[^']*'|\S+/g) || [];
-  const command = parts[0];
-  const args = parts.slice(1).map((s) => s.replace(/^["']|["']$/g, ""));
-  return runCmdAsync(command, args, { cwd, signal });
+  let value;
+  try { value = JSON.parse(cmdString); }
+  catch { throw new CommandInvocationError("--review-cmd requires invocation JSON", { source: "docs.forge --review-cmd" }); }
+  const invocation = CommandInvocation.fromStored({ ...value, cwd: value.cwd ?? cwd }, { source: "docs.forge --review-cmd" });
+  return runCmdAsync(invocation, [], { signal });
 }
 
 /**
@@ -173,7 +176,7 @@ export function materializeForgeInputReference(root, config, input, { persist = 
   if (persist) temporaryPaths.ensureDirectory(inputDir);
   TemporaryPaths.assertRegularFile(inputPath);
   if (fs.existsSync(inputPath)) {
-    const current = fs.readFileSync(inputPath, "utf8");
+    const current = captureRegularFile(inputPath, { label: "forge input snapshot", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
     if (current !== serialized) throw new Error(`forge input digest collision: ${inputPath}`);
   } else if (persist) {
     new AtomicFile(inputPath).write(Buffer.from(serialized));

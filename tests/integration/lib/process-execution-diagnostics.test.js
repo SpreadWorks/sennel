@@ -3,14 +3,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { once } from "node:events";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionCall, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessExecutionFailureDiagnostic } from "../../../src/lib/process-execution-values.js";
 import { executeManagedProcess, readManagedSettlement } from "../../../src/lib/managed-process.js";
-import { writeManagedRecord } from "../../../src/lib/managed-process-protocol.js";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
+import { RepositoryLockAuthority } from "../../../src/lib/repository-control-lock.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 function fixture(t) {
@@ -25,9 +25,9 @@ test("managed receipt failure preserves typed diagnostic through registry, fresh
   await assert.rejects(executeManagedProcess(process.execPath, ["-e", "process.stdout.write('settled')"], {
     runtime, timeoutMs: 5000, graceMs: 100,
     onProcessExecutionStop(receipt) {
-      const { pid, bootIdentity, startFingerprint } = receipt.launcherIdentity;
       const diagnostic = new ProcessExecutionFailureDiagnostic({ executionId: receipt.executionId, callId: receipt.callId,
-        operation: "receipt-delivery", role: "launcher", birth: { pid, bootIdentity, startFingerprint }, originalPgid: receipt.pgid,
+        operation: "receipt-delivery", role: "executor", phase: "stopped",
+        executor: { executorId: receipt.executor.executorId, executorSession: receipt.executor.executorSession },
         primaryCause: { code: "PROCESS_EXECUTION_RECEIPT_DELIVERY_FAILED", message: "Receipt consumer refused delivery" } });
       original = new ProcessExecutionControlFailure("receipt-delivery-failed", "Receipt consumer refused delivery",
         { executionId: receipt.executionId, callId: receipt.callId, diagnostic });
@@ -42,11 +42,11 @@ test("managed receipt failure preserves typed diagnostic through registry, fresh
   const root = runtime.inspect().executions.find((entry) => entry.executionId === runtime.executionId), call = root.calls[0];
   assert.deepEqual(call.controlFailure.diagnostic, original.diagnostic.toJSON());
   assert.deepEqual(call.controlFailure.primaryCause, original.primaryCause.toJSON());
-  assert.equal(call.receipt.stopEvidence.status, "confirmed");
+  assert.equal(new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status, "confirmed");
   await runtime.close();
   const runtimeURL = pathToFileURL(path.resolve("src/lib/process-execution-runtime.js")).href;
   const envelopeURL = pathToFileURL(path.resolve("src/lib/flow-envelope.js")).href;
-  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+  const child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import {ProcessExecutionRuntime,ProcessExecutionControlFailure} from ${JSON.stringify(runtimeURL)};
     import {Envelope} from ${JSON.stringify(envelopeURL)};
     const root=ProcessExecutionRuntime.inspect(${JSON.stringify(options)}).executions[0];
@@ -67,33 +67,50 @@ test("managed receipt failure preserves typed diagnostic through registry, fresh
   assert.equal(/ownerToken|capability|stack/.test(publicEnvelope), false);
 });
 
-test("legacy control-failed outcomes cannot gain settlement from exit zero or absent current PIDs", (t) => {
+test("actual baseline process-group outcome and receipt are rejected without conversion or writes", (t) => {
   const { mainRoot } = fixture(t);
-  const call = { executionId: crypto.randomUUID(), callId: crypto.randomUUID(), ownerToken: crypto.randomUUID(), capability: crypto.randomUUID(),
-    outcomePath: path.join(mainRoot, "outcome.json"), helloPath: path.join(mainRoot, "hello.json") };
-  for (const [controlFailure, code] of [[{ code: "PROCESS_EXECUTION_IDENTITY_UNKNOWN", message: "Old group escape refusal" }, "PROCESS_EXECUTION_FAILURE_EVIDENCE_MISSING"],
-    [null, "PROCESS_EXECUTION_FAILURE_EVIDENCE_MISSING"],
-    [{ schemaVersion: 0, code: "PROCESS_EXECUTION_IDENTITY_UNKNOWN", message: "Unsupported evidence" }, "PROCESS_EXECUTION_FAILURE_EVIDENCE_UNSUPPORTED"]]) {
-    const record = { ...call, state: "control-failed", launcherIdentity: { pid: 2147483647, bootIdentity: "old-boot", startFingerprint: "0", ownerToken: call.ownerToken },
-      pgid: 2147483647, members: [], outcome: { code: 0 }, controlFailure };
-    writeManagedRecord(call.outcomePath, record);
-    const before = fs.readFileSync(call.outcomePath);
-    assert.throws(() => readManagedSettlement(call), (error) => {
-      assert.ok(error instanceof ProcessExecutionControlFailure); assert.equal(error.code, code);
-      assert.equal(error.executionId, call.executionId); assert.equal(error.callId, call.callId); assert.equal(error.retryable, false); return true;
-    });
-    assert.deepEqual(fs.readFileSync(call.outcomePath), before);
+  const seed = path.resolve("tests/fixtures/process-receipt-v1");
+  const provenance = JSON.parse(fs.readFileSync(path.join(seed, "provenance.json"), "utf8"));
+  for (const file of provenance.files) {
+    const bytes = fs.readFileSync(path.join(seed, file.name));
+    assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"), file.sha256);
   }
+  const bytes = fs.readFileSync(path.join(seed, "outcome.json"));
+  const old = JSON.parse(bytes);
+  const outcomePath = path.join(mainRoot, "outcome.json");
+  fs.writeFileSync(outcomePath, bytes);
+  const call = { executionId: old.executionId, callId: old.callId, ownerToken: old.ownerToken,
+    capability: old.capability, outcomePath, recordLocks: new RepositoryLockAuthority(mainRoot) };
+  const before = fs.readdirSync(mainRoot).sort();
+  assert.throws(() => readManagedSettlement(call), (error) => {
+    assert.ok(error instanceof ProcessExecutionControlFailure);
+    assert.equal(error.code, "PROCESS_EXECUTION_LEGACY_RECEIPT_FORMAT");
+    assert.equal(error.executionId, call.executionId);
+    assert.equal(error.callId, call.callId);
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.deepEqual(fs.readdirSync(mainRoot).sort(), before);
+  assert.deepEqual(fs.readFileSync(outcomePath), bytes);
 });
 
 test("a sibling call cannot adopt another call's primary failure during runtime persistence", async (t) => {
   const options = fixture(t), runtime = await ProcessExecutionRuntime.acquire(options);
-  const source = await runtime.reserveCall(), sibling = await runtime.reserveCall();
+  for (let index = 0; index < 2; index++) {
+    await executeManagedProcess(process.execPath, ["-e", ""], { runtime, timeoutMs: 5000 });
+  }
+  const records = runtime.store.read().executions.at(-1).calls;
+  const source = new ProcessExecutionCall(runtime, records[0]);
+  const sibling = new ProcessExecutionCall(runtime, records[1]);
   const failure = new ProcessExecutionControlFailure("observation-unknown", "Original physical call failed", {
     executionId: runtime.executionId, callId: source.callId });
-  const before = runtime.inspect();
-  await assert.rejects(runtime.recordCallControlFailure(sibling, failure), { code: "PROCESS_EXECUTION_REGISTRY_FAILED" });
-  assert.deepEqual(runtime.inspect(), before);
-  for (const call of [source, sibling]) await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  const before = runtime.inspect().executions.at(-1);
+  await assert.rejects(runtime.recordCallControlFailure(sibling, failure), { code: "PROCESS_EXECUTION_BINDING_MISMATCH" });
+  const after = runtime.inspect().executions.at(-1);
+  assert.deepEqual(after.calls, before.calls);
+  assert.deepEqual(after.events, before.events);
+  assert.equal(after.requests.length, before.requests.length + 1);
+  assert.equal(after.requests.at(-1).response.ok, false);
+  assert.equal(after.requests.at(-1).response.error.code, "PROCESS_EXECUTION_BINDING_MISMATCH");
   await runtime.close();
 });

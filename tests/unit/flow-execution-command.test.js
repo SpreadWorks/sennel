@@ -13,6 +13,9 @@ test("command JSON roundtrip retains exact immutable argv and derives its displa
   const restored = FlowExecutionCommand.fromStored(JSON.parse(JSON.stringify(command)));
   assert.deepEqual(restored.runArguments(), ["retry", ...command.args]);
   assert.equal(restored.toString(), command.toString());
+  const invocation = restored.toInvocation();
+  assert.equal(invocation.executable, process.execPath);
+  assert.deepEqual(invocation.scriptArgs, ["flow", "set", "retry", ...command.args]);
   assert.match(command.toString(), /'"'"'/);
   assert.ok(command.toString().endsWith(" ''"));
 

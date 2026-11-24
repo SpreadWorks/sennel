@@ -14,6 +14,7 @@ import fs from "fs";
 import path from "path";
 import readline from "readline";
 import { parseArgs } from "./lib/cli.js";
+import { coreCommandRegistry } from "./lib/command-registry.js";
 import { EXIT_ERROR } from "./lib/constants.js";
 import { validate } from "./lib/config.js";
 import { DEFAULT_LANG, managedDir as managedDirFn } from "./lib/config.js";
@@ -56,26 +57,7 @@ function ask(prompt, prefill) {
 // ---------------------------------------------------------------------------
 
 function parseSetupArgs(argv) {
-  return parseArgs(argv, {
-    flags: ["--dry-run"],
-    options: [
-      "--name", "--path", "--work-root",
-      "--type", "--purpose", "--tone",
-      "--agent",
-      "--lang",
-    ],
-    defaults: {
-      name: "",
-      path: "",
-      workRoot: "",
-      type: "",
-      purpose: "",
-      tone: "",
-      agent: "",
-      lang: "",
-      dryRun: false,
-    },
-  });
+  return parseArgs(argv, coreCommandRegistry.find(["setup"]).args);
 }
 
 // ---------------------------------------------------------------------------

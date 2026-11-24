@@ -151,3 +151,34 @@ test("preparing storage stays independent and invalid selected Flow identity sto
   assert.deepEqual(fs.readdirSync(external), ["untouched"]);
   assert.equal(fs.readFileSync(path.join(external, "untouched"), "utf8"), "original");
 });
+
+test("Flow scratch uses an explicit fallback without overriding selected authority or cache", (t) => {
+  const fallbackRoot = repository(t);
+  const manager = new FlowManager({ root: fallbackRoot, mainRoot: fallbackRoot, inWorktree: false });
+  const specId = "fallback-scope";
+  const runId = "fallback-run";
+  new CanonicalFlowFixture({ flowManager: manager, specId, runId }).create().registerActive();
+  const flowState = new FlowManager({ root: fallbackRoot, mainRoot: fallbackRoot, inWorktree: false })
+    .loadReadOnly(specId);
+  const ctx = { specId, flowState };
+  const expected = path.join(fallbackRoot, ".tmp", "flows", specId, runId);
+  assert.equal(flowTemporaryRoot(ctx, fallbackRoot), expected);
+  assert.equal(ctx.temporaryRoot, expected);
+
+  const [repositoryRoot, mainRoot, executionRoot] = ["repository", "main", "execution"].map((name) => {
+    const directory = path.join(fallbackRoot, name);
+    fs.mkdirSync(directory);
+    return directory;
+  });
+  for (const [authority, expectedRoot] of [
+    [{ repositoryRoot, mainRoot, root: executionRoot }, repositoryRoot],
+    [{ mainRoot, root: executionRoot }, mainRoot],
+    [{ root: executionRoot }, executionRoot],
+  ]) {
+    assert.equal(flowTemporaryRoot({ ...authority, specId, flowState }, fallbackRoot),
+      path.join(expectedRoot, ".tmp", "flows", specId, runId));
+  }
+  assert.equal(flowTemporaryRoot({ repositoryRoot, mainRoot, root: executionRoot,
+    temporaryRoot: expected, specId, flowState }, fallbackRoot), expected);
+  assert.equal(flowTemporaryRoot(ctx, repositoryRoot), expected);
+});

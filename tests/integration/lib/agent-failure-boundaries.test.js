@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 import {
   AgentAuthenticationFailure,
@@ -42,7 +44,8 @@ import {
   StepOutcome,
 } from "../../../src/flow/lib/step-outcome.js";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 function providerError(message, fields = {}) {
   return Object.assign(new Error(message), fields);
@@ -58,7 +61,7 @@ function completedProviderError(message, fields = {}) {
     signal: fields.signal ?? null,
     stdout,
     stderr,
-    processTreeQuiescence: fields.processTreeQuiescence ?? "confirmed",
+    registeredExecutionQuiescence: fields.registeredExecutionQuiescence ?? "confirmed",
   });
   return providerError(message, {
     code: evidence.exitCode,
@@ -347,7 +350,7 @@ describe("typed agent failure boundaries", () => {
       stderr: "forged terminal completion",
       attemptCount: 1,
       maxAttempts: 1,
-      processTreeQuiescence: "confirmed",
+      registeredExecutionQuiescence: "confirmed",
     });
     for (const [code, kind] of [
       ["AGENT_AUTHENTICATION_FAILED", "authentication"],
@@ -487,7 +490,7 @@ describe("terminal replay guards", () => {
             profile: "review",
             exitCode: 1,
             stderr: "Selected model is at capacity",
-            processTreeQuiescence: "confirmed",
+            registeredExecutionQuiescence: "confirmed",
           }),
         }),
       }).toMarkerLine().slice(0, -1)}`,
@@ -579,16 +582,26 @@ describe("terminal replay guards", () => {
     assert.equal(WorkUnitResumeDecision.fromCheckpoint(workUnitIdentity("changed-input"), checkpoint).action, "execute");
   });
 
-  it("blocks direct begin of a failed outbox entry without changing it", () => {
-    const root = createTmpDir("agent-failure-outbox-v1-");
+  it("blocks direct begin of a failed outbox entry without changing it", async () => {
+    const root = fixtureRepository("agent-failure-outbox-v1-");
     try {
       const manager = makeFlowManager(root);
-      const fixture = new FlowAtStepFixture({
+      const fixture = await new FlowAtStepFixture({
         flowManager: manager,
         specId: "487-outbox",
         runId: "run-487",
+        execution: { mode: "direct", baseBranch: "main" },
+        specRecord: { goal: "Keep failed finalization work blocked until explicit recovery.",
+          requirements: [{ id: "R-replay", desc: "Preserve failed Outbox evidence.", task_ids: ["T-replay"], testable: false }] },
+        taskDocuments: [{ id: "T-replay", title: "Preserve the replay guard", goal: "Retain failed Outbox evidence.",
+          origin: "plan", added_round: 0, status: "pending" }],
         targetStep: "finalize-sync",
-      }).create();
+      }).createWithProducers({
+        implementationFiles: new Map([["R-replay", ["README.md"]]]),
+        sourceMutations: new Map([["T-replay-impl", () => {
+          fs.appendFileSync(path.join(root, "README.md"), "Failed operations require exact recovery.\n");
+        }]]),
+      });
       const store = new FlowOutboxStore(manager, { specId: fixture.state().specId });
       const identity = finalizationOutboxIdentity({ runId: "run-487" }, "finalize-sync");
       store.begin(identity);

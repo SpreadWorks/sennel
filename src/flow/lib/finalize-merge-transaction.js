@@ -26,7 +26,7 @@ function gitFailureText(result) {
 }
 
 function gitValue(root, args, label) {
-  const result = runGit(["-C", root, ...args]);
+  const result = runGit(["-C", root, ...args], { cwd: root });
   if (!result.ok) {
     throw new FinalizeMergeTransactionError({
       code: "MERGE_GIT_PROBE_FAILED",
@@ -47,7 +47,7 @@ function worktreeStatus(root) {
   const result = runGit([
     "-C", root,
     "status", "--porcelain=v1", "-z", "--untracked-files=all",
-  ]);
+  ], { cwd: root });
   if (!result.ok) {
     throw new FinalizeMergeTransactionError({
       code: "MERGE_GIT_PROBE_FAILED",
@@ -61,7 +61,7 @@ function worktreeStatus(root) {
 }
 
 function configuredWorktrees(mainRoot) {
-  const result = runGit(["-C", mainRoot, "worktree", "list", "--porcelain"]);
+  const result = runGit(["-C", mainRoot, "worktree", "list", "--porcelain"], { cwd: mainRoot });
   if (!result.ok) {
     throw new FinalizeMergeTransactionError({
       code: "MERGE_GIT_PROBE_FAILED",
@@ -101,7 +101,7 @@ function registeredNestedWorktreePaths(targetRoot, records) {
 }
 
 function operationPath(root, name) {
-  const result = runGit(["-C", root, "rev-parse", "--git-path", name]);
+  const result = runGit(["-C", root, "rev-parse", "--git-path", name], { cwd: root });
   if (!result.ok) {
     throw new FinalizeMergeTransactionError({
       code: "MERGE_GIT_PROBE_FAILED",
@@ -126,7 +126,7 @@ function cleanlyMaterialize(worktreePath, beforeSha, afterSha) {
   const result = runGit([
     "-C", worktreePath,
     "read-tree", "-u", "-m", beforeSha, afterSha,
-  ]);
+  ], { cwd: worktreePath });
   if (!result.ok) {
     throw new FinalizeMergeTransactionError({
       code: "MERGE_TARGET_MATERIALIZATION_FAILED",
@@ -338,7 +338,7 @@ export class FinalizeMergeTransaction {
     const probe = runGit([
       "-C", this.mainRoot,
       "merge-tree", mergeBase, baseSha, featureSha,
-    ]);
+    ], { cwd: this.mainRoot });
     if (!probe.ok) {
       throw new FinalizeMergeTransactionError({
         code: "MERGE_GIT_PROBE_FAILED",
@@ -381,7 +381,7 @@ export class FinalizeMergeTransaction {
         const addedResult = runGit([
           "-C", this.mainRoot,
           "worktree", "add", "--detach", temporaryRoot, readiness.baseSha,
-        ]);
+        ], { cwd: this.mainRoot });
         if (!addedResult.ok) {
           throw new FinalizeMergeTransactionError({
             code: "MERGE_WORKTREE_CREATE_FAILED",
@@ -389,10 +389,10 @@ export class FinalizeMergeTransaction {
           });
         }
         added = true;
-        const merge = runGit(["-C", temporaryRoot, "merge", "--squash", readiness.featureSha]);
+        const merge = runGit(["-C", temporaryRoot, "merge", "--squash", readiness.featureSha], { cwd: temporaryRoot });
         if (!merge.ok) {
           const paths = this.#unmergedPaths(temporaryRoot);
-          runGit(["-C", temporaryRoot, "reset", "--merge"]);
+          runGit(["-C", temporaryRoot, "reset", "--merge"], { cwd: temporaryRoot });
           if (paths.length > 0) {
             throw new FinalizeMergeTransactionError({
               code: "MERGE_CONTENT_CONFLICT",
@@ -405,7 +405,7 @@ export class FinalizeMergeTransaction {
             message: `Isolated squash merge failed: ${gitFailureText(merge)}`,
           });
         }
-        const commit = runGit(["-C", temporaryRoot, "commit", "-m", this.commitMessage]);
+        const commit = runGit(["-C", temporaryRoot, "commit", "-m", this.commitMessage], { cwd: temporaryRoot });
         if (!commit.ok) {
           throw new FinalizeMergeTransactionError({
             code: "MERGE_COMMIT_FAILED",
@@ -416,7 +416,7 @@ export class FinalizeMergeTransaction {
         const update = runGit([
           "-C", this.mainRoot,
           "update-ref", this.baseRef, mergeCommit, readiness.baseSha,
-        ]);
+        ], { cwd: this.mainRoot });
         if (!update.ok) {
           throw new FinalizeMergeTransactionError({
             code: "MERGE_BASE_ADVANCED",
@@ -430,12 +430,12 @@ export class FinalizeMergeTransaction {
         return { strategy: "squash", mergedFromSha: readiness.featureSha, mergeCommit };
       } finally {
         if (added) {
-          const removed = runGit(["-C", this.mainRoot, "worktree", "remove", "--force", temporaryRoot]);
+          const removed = runGit(["-C", this.mainRoot, "worktree", "remove", "--force", temporaryRoot], { cwd: this.mainRoot });
           if (!removed.ok) {
             process.stderr.write(`[sennel] warning: unable to remove isolated merge worktree ${temporaryRoot}: ${gitFailureText(removed)}\n`);
           }
         } else {
-          fs.rmSync(temporaryRoot, { recursive: true, force: true });
+          this.temporaryPaths.cleanup(temporaryRoot);
         }
       }
     } finally {
@@ -491,7 +491,7 @@ export class FinalizeMergeTransaction {
   }
 
   #promoteFeatureWorktreeToBase() {
-    const currentBranch = runGit(["-C", this.featureRoot, "branch", "--show-current"]);
+    const currentBranch = runGit(["-C", this.featureRoot, "branch", "--show-current"], { cwd: this.featureRoot });
     if (!currentBranch.ok) {
       throw new FinalizeMergeTransactionError({
         code: "MERGE_CALLER_TRANSITION_FAILED",
@@ -517,7 +517,7 @@ export class FinalizeMergeTransaction {
     // handoff to the published base. The preflight above permits no caller
     // changes except Flow-owned metadata. Preserve its current canonical
     // receipts and index changes while switching to the published base.
-    const checkout = runGit(["-C", this.featureRoot, "checkout", this.baseBranch]);
+    const checkout = runGit(["-C", this.featureRoot, "checkout", this.baseBranch], { cwd: this.featureRoot });
     if (!checkout.ok) {
       throw new FinalizeMergeTransactionError({
         code: "MERGE_CALLER_TRANSITION_FAILED",
@@ -528,7 +528,7 @@ export class FinalizeMergeTransaction {
   }
 
   #unmergedPaths(root) {
-    const result = runGit(["-C", root, "diff", "--name-only", "--diff-filter=U"]);
+    const result = runGit(["-C", root, "diff", "--name-only", "--diff-filter=U"], { cwd: root });
     if (!result.ok) return [];
     return result.stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
   }

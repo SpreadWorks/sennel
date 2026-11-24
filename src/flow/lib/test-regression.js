@@ -1,9 +1,9 @@
+import { CommandInvocation, NativeExecutableInvocation } from "../../lib/command-invocation.js";
 import { standaloneTestEnvironment } from "../../lib/process.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
-import { execFile } from "child_process";
 import { executeManagedProcess, withManagedProcessScope } from "../../lib/managed-process.js";
 import { ProcessExecutionControlFailure } from "../../lib/process-execution-runtime.js";
 import { listChangedFilesDetailed } from "../../lib/git-helpers.js";
@@ -11,6 +11,8 @@ import { extractMakeTestTarget, readMakefile } from "../../lib/makefile.js";
 import { collectTestCommandSources, selectTestCommandSource } from "../../lib/test-command-sources.js";
 import { projectFilePathsFromAnalysis } from "../../docs/lib/analysis-entry.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { stableStringify } from "./review-observation-values.js";
 import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { PRODUCT } from "../../lib/product.js";
 
@@ -31,6 +33,7 @@ export const CHILD_PROCESS_RESULT_KINDS = Object.freeze([
   "timeout",
   "max-buffer",
 ]);
+const REGRESSION_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
 const MAX_BUFFER_ERROR_CODES = new Set(["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "ENOBUFS"]);
 const ASSERTION_EVIDENCE_PATTERN = /\bERR_ASSERTION\b|\bAssertionError\b|\bassert(?:ion)?(?:\s+(?:failed|failure|detail))\b/i;
 const CHILD_PROCESS_RECORD_PREFIX = "[sennel] child process execution record ";
@@ -49,7 +52,11 @@ export function formatElapsedMs(ms) {
 }
 
 export class ParsedCommand {
-  constructor({ env = {}, argv, source, metadata = {} }) {
+  constructor({ env = {}, argv, invocation = null, source, metadata = {} }) {
+    invocation = invocation === null ? new NativeExecutableInvocation({ executable: argv?.[0], args: argv?.slice(1), env }) : CommandInvocation.fromStored(invocation);
+    argv = [invocation.executable, ...invocation.args];
+    this.invocation = invocation;
+    env = invocation.env ?? {};
     if (!Array.isArray(argv) || argv.length === 0) {
       throw new Error("regression command must have at least one argv token");
     }
@@ -57,19 +64,19 @@ export class ParsedCommand {
     this.argv = Object.freeze([...argv]);
     this.source = source;
     this.metadata = Object.freeze({ ...metadata });
+    Object.freeze(this);
   }
 
   withTargets(targetPaths) {
     return new ParsedCommand({
-      env: this.env,
-      argv: [...this.argv, ...targetPaths],
+      invocation: CommandInvocation.fromStored({ ...this.invocation.toJSON(), args: [...this.invocation.toJSON().args, ...targetPaths] }),
       source: this.source,
       metadata: this.metadata,
     });
   }
 
   toString() {
-    return this.argv.join(" ");
+    return this.invocation.toString();
   }
 }
 
@@ -294,6 +301,12 @@ function assertChildProcessOutcomeInvariant({
   }
 }
 
+function literalCommandArgv(command, label) {
+  if (!Array.isArray(command)) throw new Error(`${label} command must be an argv array`);
+  const invocation = new NativeExecutableInvocation({ executable: command[0], args: command.slice(1) });
+  return Object.freeze([invocation.executable, ...invocation.args]);
+}
+
 export class ChildProcessExecutionResult {
   constructor({
     kind,
@@ -310,9 +323,7 @@ export class ChildProcessExecutionResult {
     captureLimitBytes = DEFAULT_CHILD_PROCESS_CAPTURE_BYTES,
   }) {
     if (!CHILD_PROCESS_RESULT_KINDS.includes(kind)) throw new Error(`invalid child process result kind: ${kind}`);
-    if (!Array.isArray(command) || command.length === 0 || command.some((token) => typeof token !== "string" || token.length === 0)) {
-      throw new Error("child process result command must contain non-empty argv strings");
-    }
+    const literalCommand = literalCommandArgv(command, "child process result");
     if (typeof started !== "boolean") throw new Error("child process result started must be boolean");
     if (typeof completed !== "boolean") throw new Error("child process result completed must be boolean");
     if (exitCode !== null && !Number.isInteger(exitCode)) throw new Error("child process result exitCode must be an integer or null");
@@ -339,7 +350,7 @@ export class ChildProcessExecutionResult {
     }, "child process result");
 
     this.kind = kind;
-    this.command = Object.freeze([...command]);
+    this.command = literalCommand;
     this.started = started;
     this.completed = completed;
     this.exitCode = exitCode;
@@ -396,9 +407,7 @@ export class ChildProcessExecutionRecord {
     rawOutputPath = null,
   }) {
     if (!CHILD_PROCESS_RESULT_KINDS.includes(kind)) throw new Error(`invalid child process record kind: ${kind}`);
-    if (!Array.isArray(command) || command.length === 0 || command.some((token) => typeof token !== "string" || token.length === 0)) {
-      throw new Error("child process record command must contain non-empty argv strings");
-    }
+    const literalCommand = literalCommandArgv(command, "child process record");
     if (typeof started !== "boolean") throw new Error("child process record started must be boolean");
     if (typeof completed !== "boolean") throw new Error("child process record completed must be boolean");
     if (exitCode !== null && !Number.isInteger(exitCode)) throw new Error("child process record exitCode must be an integer or null");
@@ -423,7 +432,7 @@ export class ChildProcessExecutionRecord {
       stderr: stderr.content,
     }, "child process record");
     this.kind = kind;
-    this.command = Object.freeze([...command]);
+    this.command = literalCommand;
     this.started = started;
     this.completed = completed;
     this.exitCode = exitCode;
@@ -656,7 +665,7 @@ export function commandIdentityFor(command) {
     source: commandSource,
     metadata: command.metadata,
     resolvedScriptDigest: null,
-    resolvedConfigDigest: null,
+    resolvedConfigDigest: crypto.createHash("sha256").update(stableStringify(command.invocation.toJSON())).digest("hex"),
   });
 }
 
@@ -690,69 +699,9 @@ export class TestExecuteRegressionPlan {
   }
 }
 
-const SHELL_SYNTAX_RE = /(\|\||&&|[|&;<>`$()]|\*|\?|\[|\]|\{|\})/;
-const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
+/** Config is structured argv; legacy strings require an explicit user conversion. */
 export function parseArgvCommand(command, source = "config") {
-  if (typeof command !== "string" || command.trim() === "") {
-    throw new Error("test.command must be a non-empty string");
-  }
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let escaped = false;
-  let quoted = false;
-  const pushToken = () => {
-    if (!current) return;
-    tokens.push({ value: current, quoted });
-    current = "";
-    quoted = false;
-  };
-  for (const ch of command.trim()) {
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-      continue;
-    }
-    if (ch === "'" || ch === "\"") {
-      quote = ch;
-      quoted = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      pushToken();
-      continue;
-    }
-    current += ch;
-  }
-  if (escaped) current += "\\";
-  if (quote) throw new Error("test.command has an unterminated quote");
-  pushToken();
-  if (tokens.length === 0) throw new Error("test.command produced no argv tokens");
-
-  const env = {};
-  while (tokens.length > 0 && !tokens[0].quoted && ENV_ASSIGN_RE.test(tokens[0].value)) {
-    const [key, ...rest] = tokens.shift().value.split("=");
-    env[key] = rest.join("=");
-  }
-  if (tokens.length === 0) throw new Error("test.command must include a command after env assignments");
-  const argv = tokens.map((token) => token.value);
-  const quotedNodeEvalArg = (index) => tokens[index].quoted
-    && argv[0] === "node"
-    && ["-e", "--eval", "-p", "--print"].includes(argv[index - 1]);
-  if (tokens.some((token, index) => SHELL_SYNTAX_RE.test(token.value) && !quotedNodeEvalArg(index))) {
-    throw new Error("test.command contains unsupported shell control or expansion syntax");
-  }
-  return new ParsedCommand({ env, argv, source });
+  return new ParsedCommand({ invocation: CommandInvocation.fromStored(command, { source }), source });
 }
 
 function readJsonIfExists(filePath) {
@@ -773,27 +722,10 @@ function regressionCommandFromSource(source, checkedSources = REGRESSION_COMMAND
   if (!source) {
     throw new NoSupportedRegressionCommandError({ checkedSources });
   }
-  if (source.kind === "config") return parseArgvCommand(source.command, source.source);
-  if (source.kind === "package") {
-    return new ParsedCommand({
-      argv: ["npm", "test", "--"],
-      source: source.source,
-      metadata: { script: source.script },
-    });
-  }
-  if (source.kind === "composer") {
-    return new ParsedCommand({
-      argv: ["composer", "run-script", "test", "--"],
-      source: source.source,
-      metadata: { script: source.script },
-    });
-  }
-  if (source.kind === "makefile") {
-    return new ParsedCommand({
-      argv: ["make", "test"],
-      source: source.source,
-      metadata: { target: source.target },
-    });
+  if (["config", "package", "composer", "makefile"].includes(source.kind)) {
+    return new ParsedCommand({ invocation: source.invocation, source: source.source,
+      metadata: source.kind === "makefile" ? { target: source.target }
+        : source.kind === "config" ? {} : { script: source.script } });
   }
   throw new Error(`unsupported test command source: ${source.kind}`);
 }
@@ -868,11 +800,16 @@ function categoryFor(classes) {
   return unique.length === 1 ? unique[0] : "mixed-non-trigger";
 }
 
-export function listRegressionChangedFiles({ root, state }) {
+export function listRegressionChangedFiles({ root, state, pathspecExcludes = [] }) {
   return listChangedFilesDetailed({
     cwd: root,
+    repositoryRoot: root,
     baseBranch: state.baseBranch || "main",
     untrackedFiles: "all",
+    pathspecExcludes: [
+      ...REGRESSION_RUNTIME_ARTIFACTS.gitPathspecExcludes({ relativeToCwd: true }),
+      ...pathspecExcludes,
+    ],
   });
 }
 
@@ -1047,47 +984,30 @@ class ProcessExecutionHeartbeat {
 }
 
 export async function runProcessDetailed(command, opts = {}) {
-  // A test command must run independently when the flow itself is invoked by node:test.
-  const environment = standaloneTestEnvironment();
-  const env = { ...environment, ...command.env };
+  const env = { ...standaloneTestEnvironment(), ...command.env };
+  const stored = command.invocation.toJSON();
+  const invocation = CommandInvocation.fromStored({ ...stored, cwd: stored.cwd ?? opts.cwd ?? null, env });
   const heartbeat = new ProcessExecutionHeartbeat(opts);
   try {
-    return await withManagedProcessScope({ executionRoot: opts.cwd ?? process.cwd() }, async (runtime) => {
-      if (runtime) {
-        try {
-          const result = await executeManagedProcess(command.argv[0], command.argv.slice(1), {
-            runtime, kind: "command", commandId: command.source ?? "test-regression",
-            cwd: opts.cwd, env, timeoutMs: opts.timeoutMs ?? DEFAULT_TEST_TIMEOUT_SECONDS * 1000,
-            maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
-            processExecutionBinding: opts.processExecutionBinding,
-            onProcessExecutionStop: opts.onProcessExecutionStop,
-            onSupervisorEvent(event) { if (event.type === "provider-spawn") heartbeat.start(); },
-          });
-          return childProcessResult({ command, stdout: result.stdout, stderr: result.stderr,
-            started: result.providerStarted, exitCode: result.code, signal: result.signal,
-            captureLimitBytes: opts.captureLimitBytes });
-        } catch (err) {
-          if (err instanceof ProcessExecutionControlFailure) throw err;
-          return childProcessResult({ command, err, stdout: err.stdout, stderr: err.stderr,
-            started: err.providerStarted ?? Boolean(err.killed), exitCode: null,
-            signal: err.signal ?? err.finalAction ?? null, captureLimitBytes: opts.captureLimitBytes });
-        }
+    return await withManagedProcessScope({ standaloneRoot: opts.cwd ?? process.cwd() }, async (runtime) => {
+      try {
+        const result = await executeManagedProcess(invocation, [], {
+          runtime, kind: "command", commandId: command.source ?? "test-regression",
+          timeoutMs: opts.timeoutMs ?? DEFAULT_TEST_TIMEOUT_SECONDS * 1000,
+          maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
+          processExecutionBinding: opts.processExecutionBinding,
+          onProcessExecutionStop: opts.onProcessExecutionStop,
+          onSupervisorEvent(event) { if (event.type === "provider-spawn") heartbeat.start(); },
+        });
+        return childProcessResult({ command, stdout: result.stdout, stderr: result.stderr,
+          started: result.providerStarted, exitCode: result.code, signal: result.signal,
+          captureLimitBytes: opts.captureLimitBytes });
+      } catch (err) {
+        if (err instanceof ProcessExecutionControlFailure) throw err;
+        return childProcessResult({ command, err, stdout: err.stdout, stderr: err.stderr,
+          started: err.providerStarted ?? Boolean(err.killed), exitCode: null,
+          signal: err.signal ?? err.finalAction ?? null, captureLimitBytes: opts.captureLimitBytes });
       }
-      return new Promise((resolve) => {
-        let started = false;
-        const finish = (err = null, stdout = "", stderr = "") => resolve(childProcessResult({
-          command, err, stdout, stderr, started,
-          exitCode: err ? (typeof err.code === "number" ? err.code : null) : 0,
-          signal: err?.signal ?? null, captureLimitBytes: opts.captureLimitBytes,
-        }));
-        try {
-          const child = execFile(command.argv[0], command.argv.slice(1), {
-            cwd: opts.cwd, encoding: opts.encoding || "utf8", timeout: opts.timeoutMs,
-            env, maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
-          }, finish);
-          child.once("spawn", () => { started = true; heartbeat.start(); });
-        } catch (err) { finish(err); }
-      });
     });
   } finally { heartbeat.stop(); }
 }

@@ -1,7 +1,7 @@
 import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EventEmitter } from "node:events";
+import { testTemporaryRoot } from "../../test-environment.js";
 import fs from "node:fs";
 import path from "node:path";
 import { Agent } from "../../../src/lib/agent.js";
@@ -65,33 +65,50 @@ function options(writer, starts, plan = PromptBatchPlan.fromRequest({ request: "
 
 function agentFixture(t, outcomes, { cached = false } = {}) {
   const root = createTestDirectory("durable-prompt-");
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const starts = [];
-  const config = { agent: { default: "test/exec", providers: { "test/exec": { command: "worker", args: ["{{PROMPT}}"] } }, timeout: 30 } };
-  const agent = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
+  let retained = false;
+  t.after(() => { if (!retained) fs.rmSync(root, { recursive: true, force: true }); });
+  const startsPath = path.join(root, "provider-starts.jsonl");
+  const script = path.join(root, "provider.mjs");
+  fs.writeFileSync(script, `
+    import fs from "node:fs";
+    import assert from "node:assert/strict";
+    const startsPath = ${JSON.stringify(startsPath)};
+    const starts = fs.existsSync(startsPath) ? fs.readFileSync(startsPath, "utf8").trim().split("\\n") : [];
+    const outcomes = ${JSON.stringify(outcomes)};
+    const outcome = outcomes[starts.length];
+    fs.appendFileSync(startsPath, JSON.stringify(outcome ?? { unexpectedStart: true }) + "\\n");
+    assert.ok(outcome, "provider startup must stay within its durable frontier");
+    process.stdout.write(outcome.stdout ?? "");
+    process.stderr.write(outcome.stderr ?? "");
+    process.exitCode = outcome.code ?? 0;
+  `);
+  const config = { agent: { default: "test/exec", providers: { "test/exec": { command: process.execPath, args: [script, "{{PROMPT}}"] } }, timeout: 30 } };
+  // Only fixture lifetime is instrumented; provider admission, process execution,
+  // receipts, transport classification and retry behavior all use the real Agent.
+  class FixtureAgent extends Agent {
+    async call(...args) {
+      try { return await super.call(...args); }
+      catch (error) {
+        retained = testTemporaryRoot().retainOnUnconfirmedExecution(error) || retained;
+        throw error;
+      }
+    }
+  }
+  const agent = new FixtureAgent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
     registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: root, enabled: false }),
     flowManager: cached ? { resolveCurrentContext() { return { specId: "cached", taskId: null, flowPhase: "spec" }; },
-      loadActiveFlows() { return [{ specId: "cached" }]; }, appendMetric() {}, accumulateAgentMetrics() {} } : undefined,
-    supervision: { spawn() {
-      const outcome = outcomes[starts.length];
-      assert.ok(outcome, "provider startup must stay within its durable frontier");
-      starts.push(outcome);
-      const child = new EventEmitter(); child.pid = null;
-      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-      queueMicrotask(() => {
-        child.stdout.emit("data", outcome.stdout ?? ""); child.stderr.emit("data", outcome.stderr ?? "");
-        child.emit("close", outcome.code ?? 0, null);
-      });
-      return child;
-    } } });
-  return { agent, starts };
+      loadActiveFlows() { return [{ specId: "cached" }]; }, appendMetric() {}, accumulateAgentMetrics() {} } : undefined });
+  return { agent, get starts() {
+    return fs.existsSync(startsPath) ? fs.readFileSync(startsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+  } };
 }
 
 describe("durable prompt execution frontier", () => {
   for (const boundary of ["plan", "execution-attempt", "standalone-attempt"]) {
     it(`preserves durable ${boundary} admission refusal without claims, consumption, or protocol repair`, async (t) => {
       const writer = new MemoryWriter();
-      const { agent, starts } = agentFixture(t, []);
+      const run = agentFixture(t, []);
+      const { agent } = run;
       const denied = new Error("execution admission refused");
       const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 2 }));
       const originalBudget = budget.snapshot();
@@ -107,7 +124,7 @@ describe("durable prompt execution frontier", () => {
         async admit() { if (boundary === "plan") refuse(); },
         async beforeProviderAttempt() { if (boundary === "execution-attempt") refuse(); },
       } });
-      await assert.rejects(selected.executeCompletions({ ...options(writer, starts),
+      await assert.rejects(selected.executeCompletions({ ...options(writer, []),
         protocolRetryLimit: new PromptProtocolRetryLimit(1),
         protocolPolicy: { async execute({ call, accounting }) {
           return (await executeAgentResponseProtocol({ groupIdentity: "admission-refusal", accounting,
@@ -128,7 +145,7 @@ describe("durable prompt execution frontier", () => {
       assert.equal(isPromptExecutionControlFailure(denied), true);
       assert.equal(admissionCalls, 1);
       assert.equal(adapterCalls, boundary === "plan" ? 0 : 1);
-      assert.deepEqual(starts, []);
+      assert.deepEqual(run.starts, []);
       assert.equal(protocolRepairs, 0);
       assert.equal(parsed, 0);
       assert.deepEqual(budget.snapshot(), originalBudget);

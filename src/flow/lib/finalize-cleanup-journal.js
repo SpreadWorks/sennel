@@ -3,6 +3,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecRoot, flowStateSpecLocation } from "../../lib/flow-workspace.js";
@@ -176,16 +178,14 @@ export function pathExistsStrict(filePath) {
 
 export function assertPointerReality(reportRoot, specId) {
   const pointerPath = path.join(reportRoot, PRODUCT.managedPath("last-finalized-spec"));
-  let stat;
+  let snapshot;
   try {
-    stat = fs.lstatSync(pointerPath);
+    snapshot = captureRegularFile(pointerPath, { label: "finalize persisted pointer reality", maxBytes: 1024 * 1024,
+      requireSingleLink: true });
   } catch (error) {
     throw new Error(`finalize persisted pointer reality is unavailable: ${error.message}`, { cause: error });
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-    throw new Error("finalize persisted pointer reality is not one real file");
-  }
-  if (fs.readFileSync(pointerPath, "utf8").trim() !== specId) {
+  if (snapshot.text().trim() !== specId) {
     throw new Error("finalize persisted pointer reality targets a different spec");
   }
 }
@@ -228,7 +228,7 @@ export class SharedFinalizeCleanupJournal {
     if (readOnly && !pathExistsStrict(path.dirname(journalPath))) {
       return new SharedFinalizeCleanupJournal({ file: null, value: null });
     }
-    if (!readOnly) fs.mkdirSync(path.dirname(journalPath), { recursive: true, mode: 0o755 });
+    if (!readOnly) RealDirectoryAuthority.resolve(path.dirname(journalPath), { create: true });
     const file = new AtomicJsonFile(journalPath);
     const stored = file.read(null);
     if (stored) {
@@ -386,6 +386,13 @@ export class FinalizeCleanupEffectPreparation {
   }
 
   static acquire(ctx, { failed = false } = {}) {
+    const preparation = this.acquireSource(ctx, { failed });
+    return preparation === null ? null
+      : preparation.assertGitReality(preparation.owner, preparation.owner.loadReadOnly());
+  }
+
+  /** Authenticate journal provenance without treating it as fresh Git reality. */
+  static acquireSource(ctx, { failed = false } = {}) {
     const owner = FinalizeFlowStateOwner.forMainContext(ctx);
     const state = owner.loadReadOnly();
     const journal = SharedFinalizeCleanupJournal.open(state, { readOnly: true });
@@ -399,7 +406,7 @@ export class FinalizeCleanupEffectPreparation {
     const identity = new NonGateTargetBinding({ runId: source.runId, specId: source.specId,
       stepId: "finalize-cleanup", attempt: source.attempt });
     const preparation = new FinalizeCleanupEffectPreparation({ owner, journal, receiptId: saved?.receipt.id ?? null, origin, identity });
-    preparation.assertCurrent(ctx);
+    preparation.assertSourceCurrent(ctx);
     return preparation;
   }
 
@@ -415,6 +422,14 @@ export class FinalizeCleanupEffectPreparation {
   }
 
   assertCurrent(ctx) {
+    this.assertSourceCurrent(ctx);
+    const owner = FinalizeFlowStateOwner.forMainContext(ctx);
+    const state = owner.loadReadOnly();
+    this.assertGitReality(owner, state);
+    return this;
+  }
+
+  assertSourceCurrent(ctx) {
     const owner = FinalizeFlowStateOwner.forMainContext(ctx);
     const state = owner.loadReadOnly();
     const currentJournal = SharedFinalizeCleanupJournal.open(state, { readOnly: true });
@@ -504,9 +519,24 @@ export class FinalizeCleanupEffectPreparation {
         throw new StepAdmissionRefusal("Cleanup journal base change has no exact completed auto-rescue journal");
       }
     }
-    const main = runGit(["-C", owner.mainRepoPath, "rev-parse", `refs/heads/${state.baseBranch}`]);
-    const head = runGit(["-C", owner.mainRepoPath, "symbolic-ref", "-q", "HEAD"]);
-    const headOid = runGit(["-C", owner.mainRepoPath, "rev-parse", "HEAD"]);
+    if (this.journal.atLeast("pointer-written")) assertPointerReality(owner.mainRepoPath, state.specId);
+    if (this.journal.value.authorization.route === "forced" && this.journal.atLeast("worktree-removed")) {
+      const audit = owner.flowManager.readArtifact({ specId: state.specId, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup" });
+      const entries = JSON.parse(audit.bytes).entries.filter((item) => item.issueLogId === this.journal.value.authorization.auditId);
+      if (entries.length !== 1 || !entries[0].reason.startsWith("FORCED_ORPHAN_DROP")
+        || !isDeepStrictEqual(entries[0].droppedCommits, this.journal.value.authorization.droppedCommits)
+        || entries[0].droppedCount !== this.journal.value.authorization.droppedCount
+        || entries[0].droppedTruncated !== this.journal.value.authorization.droppedTruncated) {
+        throw new StepAdmissionRefusal("Cleanup journal lost its required exact forced audit");
+      }
+    }
+    return this;
+  }
+
+  assertGitReality(owner, state) {
+    const main = runGit(["-C", owner.mainRepoPath, "rev-parse", `refs/heads/${state.baseBranch}`], { cwd: owner.mainRepoPath });
+    const head = runGit(["-C", owner.mainRepoPath, "symbolic-ref", "-q", "HEAD"], { cwd: owner.mainRepoPath });
+    const headOid = runGit(["-C", owner.mainRepoPath, "rev-parse", "HEAD"], { cwd: owner.mainRepoPath });
     const featureRef = `refs/heads/${state.featureBranch}`;
     let feature = null;
     if (state.execution.mode !== "direct") {
@@ -533,17 +563,6 @@ export class FinalizeCleanupEffectPreparation {
         checkBranch: false });
       if (!reality.ok) throw new StepAdmissionRefusal(`Cleanup journal teardown reality changed: ${reality.reasons.join("; ")}`);
     }
-    if (this.journal.atLeast("pointer-written")) assertPointerReality(owner.mainRepoPath, state.specId);
-    if (this.journal.value.authorization.route === "forced" && this.journal.atLeast("worktree-removed")) {
-      const audit = owner.flowManager.readArtifact({ specId: state.specId, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup" });
-      const entries = JSON.parse(audit.bytes).entries.filter((item) => item.issueLogId === this.journal.value.authorization.auditId);
-      if (entries.length !== 1 || !entries[0].reason.startsWith("FORCED_ORPHAN_DROP")
-        || !isDeepStrictEqual(entries[0].droppedCommits, this.journal.value.authorization.droppedCommits)
-        || entries[0].droppedCount !== this.journal.value.authorization.droppedCount
-        || entries[0].droppedTruncated !== this.journal.value.authorization.droppedTruncated) {
-        throw new StepAdmissionRefusal("Cleanup journal lost its required exact forced audit");
-      }
-    }
     return this;
   }
 }
@@ -559,20 +578,6 @@ const AUTO_RESCUE_CLEANUP_PHASES = new Set([
   "cleanup-failed",
   "completed",
 ]);
-
-function ensureRealDirectory(directory) {
-  const parent = path.dirname(directory);
-  if (parent !== directory && !fs.existsSync(parent)) ensureRealDirectory(parent);
-  try {
-    fs.mkdirSync(directory);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== path.resolve(directory)) {
-    throw new Error(`finalize teardown recovery authority must be a real directory: ${directory}`);
-  }
-}
 
 export class AutoRescueAbortFailure {
   constructor({
@@ -915,23 +920,14 @@ export class AutoRescueCleanupStore {
     this.identity = identity;
     const token = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     this.directory = path.join(identity.mainRepoPath, ".git", "sennel", "recovery", "auto-rescue");
-    if (!readOnly) ensureRealDirectory(this.directory);
+    if (!readOnly) RealDirectoryAuthority.resolve(this.directory, { create: true });
     this.path = path.join(this.directory, `${token}.json`);
     this.file = readOnly && !pathExistsStrict(this.directory) ? null : new AtomicJsonFile(this.path);
   }
 
   load() {
-    let stat;
-    try {
-      stat = fs.lstatSync(this.path);
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    }
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(this.path) !== this.path) {
-      throw new Error(`auto-rescue cleanup journal must be one real non-hardlinked file: ${this.path}`);
-    }
-    return AutoRescueCleanupJournal.fromStored(this.identity, this.file.read(null));
+    const stored = this.file?.read(null) ?? null;
+    return stored === null ? null : AutoRescueCleanupJournal.fromStored(this.identity, stored);
   }
 
   write(journal) {
@@ -939,28 +935,7 @@ export class AutoRescueCleanupStore {
   }
 
   remove() {
-    fs.unlinkSync(this.path);
-    const descriptor = fs.openSync(this.directory, "r");
-    let primaryError = null;
-    try {
-      fs.fsyncSync(descriptor);
-    } catch (error) {
-      primaryError = error;
-    } finally {
-      try {
-        fs.closeSync(descriptor);
-      } catch (cleanupError) {
-        if (primaryError) {
-          throw new AggregateError(
-            [primaryError, cleanupError],
-            "auto-rescue journal removal and descriptor cleanup both failed",
-            { cause: primaryError },
-          );
-        }
-        throw cleanupError;
-      }
-    }
-    if (primaryError) throw primaryError;
+    return this.file.remove();
   }
 }
 

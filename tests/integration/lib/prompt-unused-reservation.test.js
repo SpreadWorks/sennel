@@ -6,12 +6,12 @@ import { PromptBatchExecutor, PromptBatchPlan, PromptExecutionBudget, PromptExec
 import { PromptExecutionJournal, PromptExecutionJournalWriter, PromptExecutionJournalSnapshot, PromptExecutionScope,
   PromptExecutionReservationContinuation } from "../../../src/lib/prompt-execution-journal.js";
 import { ProcessExecutionRuntime, ProcessExecutionBinding } from "../../../src/lib/process-execution-runtime.js";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 class SnapshotWriter extends PromptExecutionJournalWriter {
   constructor(binding, snapshot = null) { super(); this.processExecutionBinding = binding; this.snapshot = snapshot; this.events = []; }
@@ -22,7 +22,7 @@ class SnapshotWriter extends PromptExecutionJournalWriter {
 
 async function interruptedReservation(t, boundary) {
   const root = createTmpDir("unused-prompt-reservation-");
-  t.after(() => removeTmpDir(root));
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
   const binding = new ProcessExecutionBinding({ runId: "reservation-run", specId: "reservation-spec", nodeId: "spec-triage",
     taskId: null, attemptId: "reservation-attempt", attemptSequence: 1, executionContractId: "reservation-contract", executionGeneration: 1 });
   const config = { agent: { default: "test/exec", providers: { "test/exec": { command: process.execPath,
@@ -47,7 +47,7 @@ async function interruptedReservation(t, boundary) {
           providerAttemptContext: context, promptProcessIdentity: admission.processExecutionIdentity.toJSON() };
         if (boundary === "before-permit") {
           const call = await runtime.reserveCall({ binding, invocation });
-          await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+          await runtime.revokeCall(call);
         } else if (boundary === "after-permit") {
           await executeManagedProcess(process.execPath, ["-e", "process.stdout.write('already started')"], {
             ...invocation, processExecutionBinding: binding, timeoutMs: 10000, maxBuffer: 1024,
@@ -64,11 +64,13 @@ async function interruptedReservation(t, boundary) {
   await ProcessExecutionRuntime.withRecoveryEvidence({ mainRoot: root, binding }, (evidence) => {
     const identity = saved.batches[0].claim.processIdentity;
     const proof = evidence.forInvocation({ providerAttemptId: identity.providerAttemptId, logicalInvocationId: identity.logicalInvocationId });
+    if (boundary === "before-permit") {
+      assert.equal(proof.calls.length, 1);
+      assert.equal(proof.calls[0].receipt, null);
+      assert.equal(proof.calls[0].revocation.scope, "unlaunched-reservation");
+    }
     const create = () => new PromptExecutionReservationContinuation({ authorizationId: "a".repeat(64), executionContractId: "reservation-contract",
-      previousClaim: saved.batches[0].claim, physicalEvidence: proof.toJSON(), calls: proof.calls.map((call) => ({
-        executionId: call.executionId, callId: call.callId, ownerEpoch: call.ownerEpoch, binding: call.binding.toJSON(),
-        invocation: call.invocation, startPermitted: call.startPermitted, receipt: call.receipt.toJSON(),
-      })) });
+      previousClaim: saved.batches[0].claim, physicalEvidence: proof.toJSON(), calls: proof.calls.map((call) => call.toStored()) });
     if (boundary === "after-permit") assert.throws(create, /unstarted provider invocation/);
     else continuation = create();
   });

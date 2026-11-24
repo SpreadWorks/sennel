@@ -6,6 +6,8 @@ import { afterEach, describe, it } from "node:test";
 
 import { removeTmpDir, createTmpDir } from "../../support/builders/tmp-dir.js";
 import { FreshFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
+import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocation-workspace.js";
 import {
   ArtifactViewRegistry,
   ArtifactViewRegistryEntry,
@@ -410,6 +412,40 @@ describe("artifact human views", () => {
     );
   });
 
+  it("keeps a real read-only workspace cache fault non-fatal without changing project or canonical evidence", (t) => {
+    const { directory, flowManager, fixture } = activeFixture();
+    const workspace = ReadOnlyInvocationWorkspace.create();
+    t.after(() => {
+      assert.equal(workspace.pendingExecutionCount, 0);
+      workspace.complete({ generation: workspace.generation, normalExit: true, resourcesReleased: true });
+      workspace.cleanup({ generation: workspace.generation });
+    });
+    const state = fixture.state();
+    const canonical = new CanonicalPersistenceSnapshot(flowManager, state.specId);
+    const project = new StoredFlowPersistenceSnapshot(directory);
+    const faultPaths = [];
+    const result = new ArtifactViewService({
+      config: { lang: "ja" },
+      flowManager,
+      workspace,
+      cacheFaultInjector: ({ filePath }) => {
+        faultPaths.push(filePath);
+        throw new Error("simulated workspace cache failure");
+      },
+    }).full({ logicalKey: "spec.record", activeState: state });
+
+    assert.ok(faultPaths.length > 0, "the actual workspace cache write must reach the fault boundary");
+    for (const file of faultPaths) assert.equal(workspace.validate(file), file);
+    assert.equal(result.cache.hit, false);
+    assert.match(result.markdown, /^# 仕様/m);
+    assert.match(result.markdown, /Keep the canonical view deterministic\./);
+    assert.equal(result.markdown.startsWith("<!--"), false);
+    assert.equal(result.cacheWarning?.code, "ARTIFACT_VIEW_CACHE_NOT_SAVED");
+    assert.equal(result.cacheWarning?.message, "アーティファクトビューは生成されましたが、キャッシュを保存できませんでした。");
+    canonical.assertUnchanged(flowManager, state.specId, "workspace cache write failure");
+    project.assertUnchanged();
+  });
+
   it("classifies source and deterministic renderer failures separately", () => {
     const { flowManager, fixture } = activeFixture();
     class FailingRenderer extends ArtifactFullViewRenderer {
@@ -486,6 +522,12 @@ describe("artifact human views", () => {
       version: baseline.document.target.version,
     });
     assert.equal(baselineFullFingerprint.inputs.registry.logicalKey, "acceptance.review");
+    const priorDocument = new ArtifactViewDocument({ ...baseline.document,
+      entry: new ArtifactViewRegistryEntry({ ...baseline.document.entry, rendererRevision: "1" }) });
+    const priorView = new ArtifactFullViewRenderer({ config: { lang: baseline.language } }).render(priorDocument);
+    assert.equal(priorView.markdown, baseline.markdown, "this comparison changes only the declared renderer revision");
+    assert.notEqual(new ArtifactFullViewFingerprint({ fullView: priorView }).toString(), baselineFullFingerprint.toString(),
+      "old Acceptance render fingerprints must not reuse stale full or summary caches");
     const originalFingerprint = baselineFullFingerprint.toString();
     assert.throws(
       () => baselineFullFingerprint.inputs.registry.dependencies.push({ logicalKey: "unapproved.record", required: true }),
@@ -501,10 +543,14 @@ describe("artifact human views", () => {
       [{ target: "tests/a.test.js", requiredChange: "Add regression coverage", improvement: "Name the boundary", whyNonBlocking: "It is advisory" }, ["tests/a.test.js", "Add regression coverage", "Name the boundary", "It is advisory"]],
       [{ title: "Draft finding", target: "scope", rationale: "The draft lacks a decision", evidence: "draft.json" }, ["Draft finding", "scope", "The draft lacks a decision", "draft.json"]],
       [{ guardrail_id: "GR-1", target: "src/gate.js", where: "line 12", why_violates: "Breaks the guardrail", ignoredManagement: { hash: "not for people" } }, ["GR-1", "src/gate.js", "line 12", "Breaks the guardrail"]],
+      [{ observed: "The required branch is absent.", where: { file: "spec.json", locator: "requirements.R1.desc" }, severity: "blocking", failureMode: "guardrail-violation", refs: ["GR-SPEC"], ignoredManagement: { observed: "internal-only" } }, ["The required branch is absent.", "spec.json", "requirements.R1.desc", "GR-SPEC"]],
     ];
     for (const [finding, expected] of cases) {
-      const markdown = new ArtifactViewFindingDetail(finding).toMarkdown(localizer);
+      const detail = new ArtifactViewFindingDetail(finding);
+      const markdown = detail.toMarkdown(localizer);
       for (const text of expected) assert.match(markdown, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      for (const text of expected) assert.ok(detail.sourceText().includes(text));
+      assert.equal(markdown.includes("internal-only"), false);
       assert.equal(markdown.includes("ignoredManagement"), false);
       assert.equal(markdown.includes("hash"), false);
     }

@@ -64,7 +64,7 @@ export function buildResolvedFlowContext(ctx) {
   const scope = spec.scope && typeof spec.scope === "object" ? spec.scope : null;
   const effectiveRoot = worktreePath && fs.existsSync(worktreePath) ? worktreePath : mainRepoPath;
 
-  const { dirty, dirtyFiles } = getWorktreeStatus(effectiveRoot);
+  const { dirty, dirtyFiles } = getWorktreeStatus(effectiveRoot, { repositoryRoot: effectiveRoot });
   const currentBranch = getCurrentBranch(effectiveRoot);
   const aheadCount = getAheadCount(effectiveRoot, state.baseBranch || "main");
   const lastCommit = getLastCommit(effectiveRoot);

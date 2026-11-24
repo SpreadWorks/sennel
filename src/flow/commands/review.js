@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { flowTemporaryRoot, resolveFlowContext } from "../lib/flow-context.js";
 import { ExecutionProtocolSnapshot } from "../lib/execution-protocol-snapshot.js";
@@ -19,6 +20,9 @@ import { readRuntimeResource } from "../../lib/runtime-package.js";
  */
 
 import fs from "fs";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import path from "path";
 import crypto from "crypto";
 import { parseArgs, PKG_DIR } from "../../lib/cli.js";
@@ -62,6 +66,7 @@ import {
   CanonicalSourceRequirementScope,
 } from "../lib/canonical-file-map.js";
 import { CanonicalTaskContext } from "../lib/task-canonical-context.js";
+import { ProcessStopArtifactEncoding } from "../../lib/process-execution-values.js";
 import { CanonicalReviewInputDescriptor } from "../lib/review-work-unit-input.js";
 import {
   CanonicalSpecReview,
@@ -120,7 +125,7 @@ import {
   renderCanonicalTaskSource,
 } from "../lib/run-gate.js";
 import {
-  SourceMutationBaseline,
+  SourceMutationBaseline, SourceWorkerCanonicalObservationAdvance, WorkerArtifactHandoffError,
 } from "../lib/worker-artifact-handoff.js";
 import { TaskReviewExecutionIdentity } from "../lib/task-review-execution-identity.js";
 import { SourceExecutionObservationCatalog, SourceExecutionObservationAppends } from "../lib/source-execution-observation-appends.js";
@@ -184,10 +189,6 @@ const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolO
     // canonical target-state digest before promoting any review evidence.
     executionWorkDir: container.get("root"),
     temporaryRoot: reviewTemporaryRoot(),
-    // The parent keeps the provider admission lease until descendants have
-    // ended; otherwise a direct and dispatched review can overlap after the
-    // provider's immediate process exits.
-  waitForProcessTree: true,
 });
 
 const callReviewAgent = async (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
@@ -323,11 +324,17 @@ async function synthesizeReviewFindings({
 }
 
 class TaskReviewSourceObservation {
-  constructor({ protocolAttempt, baseline, executionObservations = null } = {}) {
+  constructor({ protocolAttempt, baseline, executionObservations = null, canonicalObservation = null } = {}) {
     this.protocolAttempt = protocolAttempt;
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("Task Review source observation requires a source baseline");
+    if ((executionObservations === null) !== (canonicalObservation === null)
+      || executionObservations !== null && (!(executionObservations instanceof SourceExecutionObservationCatalog)
+        || !(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance))) {
+      throw new TypeError("Task Review canonical observations require paired catalog and provenance facts");
+    }
     this.baseline = baseline;
     this.executionObservations = executionObservations;
+    this.canonicalObservation = canonicalObservation;
     Object.freeze(this);
   }
 }
@@ -373,6 +380,7 @@ export class TaskReviewSourceEffectObserver {
             view.location.runtimeLock("runtime.lock.current-flow-state")],
         }),
         executionObservations: view === null ? null : new SourceExecutionObservationCatalog(view),
+        canonicalObservation: view === null ? null : SourceWorkerCanonicalObservationAdvance.captureTransitionView(view),
       });
     };
     return typeof this.flowManager?.readCanonicalTransitionView === "function"
@@ -380,12 +388,24 @@ export class TaskReviewSourceEffectObserver {
   }
 
   hasEffect(before, after) {
-    const changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
+    let changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
+    const canonical = before.canonicalObservation;
+    if (canonical !== null || after.canonicalObservation !== null) {
+      if (canonical === null || after.canonicalObservation === null) return true;
+      try {
+        canonical.assertCapturedAdvance(after.canonicalObservation, { executionObservations: after.executionObservations });
+      } catch (error) {
+        if (error instanceof WorkerArtifactHandoffError && error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID") return true;
+        throw error;
+      }
+      changed = changed.filter((relativePath) => !canonical.coversSourceMetadataChange(after.canonicalObservation, {
+        before: before.baseline.snapshot, after: after.baseline.snapshot, relativePath,
+      }));
+    }
     if (changed.length === 0) return false;
     if (before.executionObservations === null || after.executionObservations === null) return true;
     const appends = new SourceExecutionObservationAppends(after.executionObservations, before.baseline.snapshot);
-    return !appends.preservesCatalog(before.executionObservations)
-      || !appends.matches(new Map(after.baseline.snapshot.entries.map((entry) => [entry.path, entry])))
+    return !appends.matches(after.baseline.snapshot)
       || !appends.explainsUnjournaled(changed);
   }
 
@@ -406,7 +426,7 @@ function taskReviewProtocolIgnoredDirectories({ root, agent }) {
   const candidates = [
     reviewOutputDirectory(),
     path.join(root, PRODUCT.managedDirName, "agent-cache"),
-    path.join(root, PRODUCT.managedDirName, "review-execution-locks"),
+    new RepositoryLockAuthority(root).path,
     ...taskReviewAgentRuntimeDirectories({ root, agent }),
   ];
   const directories = candidates.map((candidate) => {
@@ -526,14 +546,9 @@ function canonicalDraftReviewSource(outputDirectory) {
 }
 
 function canonicalDraftSnapshot(source, flow, phase) {
-  const stat = fs.lstatSync(source.sourcePath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-    throw new Error("canonical draft review source must be a regular unlinked file");
-  }
-  const snapshot = new DraftArtifactSnapshot({
-    filePath: source.sourcePath,
-    bytes: fs.readFileSync(source.sourcePath),
-  });
+  const file = captureRegularFile(source.sourcePath, { label: "canonical draft review source", maxBytes: DEFAULT_MAX_FILE_BYTES,
+    requireSingleLink: true });
+  const snapshot = new DraftArtifactSnapshot({ filePath: source.sourcePath, bytes: file.bytes });
   source.revision.assertFlow(flow);
   source.revision.assertReviewSource(phase);
   if (!source.revision.matchesSnapshot(snapshot)) {
@@ -592,7 +607,12 @@ function canonicalSpecReviewInput() {
     logicalPath: "review.json",
     optional: true,
   });
-  return source === null ? null : source.readJsonObject();
+  if (source === null) return null;
+  const workUnit = canonicalReviewWorkerUnit();
+  const proofInput = workUnit?.manifestDocument.inputs.find(input => input.logicalKey === "process.stop.artifact.encoding");
+  const processEvidence = proofInput === undefined ? null : ProcessStopArtifactEncoding.fromJSON(JSON.parse(
+    assertReviewWorkUnitInputSnapshot(proofInput, workUnit.root).bytes.toString("utf8")));
+  return CanonicalSpecReview.fromBytes(source.readBytes(), { processEvidence });
 }
 
 function canonicalReviewFileMap(spec, { required = false } = {}) {
@@ -956,7 +976,7 @@ function buildReviewPathspec(filePath, exclusions = REVIEW_EXCLUDE_PATHS) {
  * @returns {string} trimmed stdout (may be empty)
  */
 function runDiffOrThrow(root, diffArgs, pathspec, label) {
-  const res = runGit(["-C", root, "diff", ...diffArgs, ...pathspec]);
+  const res = runGit(["-C", root, "diff", ...diffArgs, ...pathspec], { cwd: root });
   if (!res.ok) throw new Error(`${label} failed: ${res.stderr}`);
   return res.stdout.trim();
 }
@@ -1130,7 +1150,7 @@ function collectTouchedFiles(root, baseRef, options = {}) {
   const matcher = options.excludeMatcher || null;
   const excludeFile = options.excludeFile || null;
   forEachReviewDiffSource(baseRef, ({ args, label }) => {
-    const res = runGit(["-C", root, "diff", "--name-only", ...args]);
+    const res = runGit(["-C", root, "diff", "--name-only", ...args], { cwd: root });
     if (!res.ok) throw new Error(`git diff --name-only (${label}) failed: ${res.stderr}`);
     for (const line of res.stdout.split("\n")) {
       const p = line.trim();
@@ -1200,7 +1220,7 @@ function writeReviewMd(root, flow, results) {
   const specDir = reviewOutputDirectory();
   const reviewPath = path.join(specDir, "review.md");
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(reviewPath, formatReviewMd(results));
+    new AtomicFile(reviewPath).write(formatReviewMd(results));
   }
   return reviewPath;
 }
@@ -2129,7 +2149,8 @@ async function runImplReviewWithPersistence({
   }) : {};
   const artifact = new ImplReviewArtifact({ ...dispositioned, requirementIds, toolingObservation });
   const reviewJsonPath = path.join(specDir, "impl-review.json");
-  const fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot: root, specPath, state: flow });
+  const fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot: root, specPath,
+    state: flow, flowManager });
   const artifactJson = { ...artifact.toJSON(), repairFingerprint: fingerprint.hash };
   const reviewedHead = runGit(["rev-parse", "HEAD"], { cwd: executionRoot });
   artifactJson.reviewedTree = fingerprint.hash;
@@ -2405,7 +2426,7 @@ function resolveTaskReviewSpec(taskSpecPath) {
   if (!fs.existsSync(absPath)) {
     throw new Error(`task spec not found: ${relPath}`);
   }
-  const content = fs.readFileSync(absPath, "utf8");
+  const content = captureRegularFile(absPath, { label: "review source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
   const inputs = canonicalTaskReviewInputs();
   const sourceScope = canonicalTaskReviewSourceScope(inputs);
   const fileMap = canonicalTaskReviewFileMap(inputs);
@@ -2465,8 +2486,8 @@ function proposalSuccessPayload(proposals) {
 function persistLoopFinalArtifacts({ specDir, proposals, requirementIds }) {
   if (!specDir || !reviewArtifactWritePolicy.enabled) return;
   const jsonText = loopProposalsToImplReviewJson(proposals, requirementIds);
-  fs.writeFileSync(path.join(specDir, "impl-review.json"), `${jsonText}\n`);
-  fs.writeFileSync(path.join(specDir, "review.md"), formatImplReviewMd(new ImplReviewArtifact(JSON.parse(jsonText))));
+  new AtomicFile(path.join(specDir, "impl-review.json")).write(`${jsonText}\n`);
+  new AtomicFile(path.join(specDir, "review.md")).write(formatImplReviewMd(new ImplReviewArtifact(JSON.parse(jsonText))));
 }
 
 function toolingFailureResult(failure) {
@@ -2748,9 +2769,9 @@ async function runSingleShotImplReviewWithDependencies({ specDir, reviewText }) 
   if (!reviewArtifactWritePolicy.enabled) {
     return { changed: ["review.md", "impl-review.json"] };
   }
-  fs.mkdirSync(specDir, { recursive: true });
-  fs.writeFileSync(path.join(specDir, "impl-review.json"), `${reviewText}\n`);
-  fs.writeFileSync(path.join(specDir, "review.md"), "# Code Review Results\n\n");
+  RealDirectoryAuthority.resolve(specDir, { create: true });
+  new AtomicFile(path.join(specDir, "impl-review.json")).write(`${reviewText}\n`);
+  new AtomicFile(path.join(specDir, "review.md")).write("# Code Review Results\n\n");
   return { changed: ["review.md", "impl-review.json"] };
 }
 
@@ -2758,9 +2779,9 @@ async function runNonImplReviewWithDependencies({ phase, specDir, reviewText }) 
   if (!reviewArtifactWritePolicy.enabled) {
     return { changed: [`${phase}-review.json`] };
   }
-  fs.mkdirSync(specDir, { recursive: true });
+  RealDirectoryAuthority.resolve(specDir, { create: true });
   const basename = `${phase}-review.json`;
-  fs.writeFileSync(path.join(specDir, basename), `${reviewText}\n`);
+  new AtomicFile(path.join(specDir, basename)).write(`${reviewText}\n`);
   return { changed: [basename] };
 }
 
@@ -3078,13 +3099,13 @@ function collectTestFiles(root, specDir, { sourceDirectory = null, sourceTopolog
  * Recursively collect test files from a directory.
  */
 function collectTestsRecursive(dir, baseDir, fileMap, topology) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of new RealDirectoryAuthority(dir).entries({ withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       collectTestsRecursive(full, baseDir, fileMap, topology);
     } else if (/\.(test|spec)\.(js|ts|mjs)$/.test(entry.name)) {
       const relName = path.relative(baseDir, full);
-      const content = fs.readFileSync(full, "utf8");
+      const content = captureRegularFile(full, { label: "review test source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
       fileMap.set(relName, { name: relName, content, source: topology.sourcePath(relName) });
     }
   }
@@ -3912,8 +3933,8 @@ function applyTestFixes(text, root, specDir) {
       throw new Error(`test review fix attempted to write outside ${path.relative(root, allowedRoot)}: ${filePath}`);
     }
     const dir = path.dirname(absPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(absPath, codeMatch[1]);
+    if (!fs.existsSync(dir)) RealDirectoryAuthority.resolve(dir, { create: true });
+    new AtomicFile(absPath).write(codeMatch[1]);
     written.push(filePath);
   }
   return written;
@@ -3975,7 +3996,7 @@ function formatTestReviewMd(reviewArtifact) {
 
 function writeTestReviewArtifacts({ root, specDir, reviewArtifact, coverageArtifact }) {
   const reviewDir = path.resolve(root, specDir);
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(reviewDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(reviewDir, { create: true });
   const coveragePath = path.join(reviewDir, TEST_COVERAGE_JSON_FILE);
   const reviewJsonPath = path.join(reviewDir, TEST_REVIEW_JSON_FILE);
   const reviewMdPath = path.join(reviewDir, "test-review.md");
@@ -4014,7 +4035,7 @@ function writeTestReviewArtifacts({ root, specDir, reviewArtifact, coverageArtif
 
 function writeTestCoverageArtifact({ root, specDir, coverageArtifact }) {
   const reviewDir = path.resolve(root, specDir);
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(reviewDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(reviewDir, { create: true });
   const coveragePath = path.join(reviewDir, TEST_COVERAGE_JSON_FILE);
   writeJsonArtifact(coveragePath, coverageArtifact);
   return path.relative(root, coveragePath).split(path.sep).join("/");
@@ -4709,11 +4730,10 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
   // Validate the immutable child input before loading context or resolving an
   // Agent. A missing, rebound, or modified descriptor must never reach the
   // reviewer or create a delta/seal side effect.
-  const canonicalReviewDocument = canonicalSpecReviewInput();
-  if (canonicalReviewDocument === null) {
+  const canonicalReview = canonicalSpecReviewInput();
+  if (canonicalReview === null) {
     throw new Error("spec-review requires an immutable revision-scoped canonical review input");
   }
-  const canonicalReview = new CanonicalSpecReview(canonicalReviewDocument);
 
   let analysisData = null;
   try {
@@ -5125,7 +5145,7 @@ export class DraftReviewCandidateReducer extends PromptBatchReducer {
 
 function writeJsonArtifact(filePath, artifact) {
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(filePath, JSON.stringify(artifact, null, 2) + "\n");
+    new AtomicFile(filePath).write(JSON.stringify(artifact, null, 2) + "\n");
   }
 }
 
@@ -5134,7 +5154,7 @@ function reviewHistoryAttemptNumber(specDir, phase) {
   if (!fs.existsSync(historyDir)) return 1;
   let max = 0;
   const prefix = `${phase}-attempt-`;
-  for (const name of fs.readdirSync(historyDir)) {
+  for (const name of new RealDirectoryAuthority(historyDir).entries()) {
     if (!name.startsWith(prefix)) continue;
     const match = /^(.+)-attempt-(\d{3})\./.exec(name);
     if (!match) continue;
@@ -5213,7 +5233,7 @@ export function writeReviewAttemptHistory({ specDir, phase, latestBasename, arti
   const attempt = attemptNumber || reviewHistoryAttemptNumber(specDir, phase);
   const ext = latestBasename.endsWith(".md") ? "md" : "json";
   const historyDir = path.join(specDir, "review-history");
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(historyDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(historyDir, { create: true });
   const latestPath = path.join(specDir, latestBasename);
   const historyPath = path.join(historyDir, `${phase}-attempt-${String(attempt).padStart(3, "0")}.${ext}`);
   const normalizedHistoryPath = path.join(historyDir, `${phase}-attempt-${String(attempt).padStart(3, "0")}.json`);
@@ -5232,8 +5252,8 @@ export function writeReviewAttemptHistory({ specDir, phase, latestBasename, arti
   }
   const text = content == null ? "" : String(content);
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(latestPath, text);
-    fs.writeFileSync(historyPath, text);
+    new AtomicFile(latestPath).write(text);
+    new AtomicFile(historyPath).write(text);
   }
   writeJsonArtifact(normalizedHistoryPath, {
     version: 1,

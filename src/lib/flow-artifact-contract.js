@@ -1,6 +1,7 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { LogicalRelativePath } from "./portable-path.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../flow/lib/flow-artifact-authority.js";
 import { CanonicalSpecReview } from "../flow/lib/spec-review-artifacts.js";
@@ -35,13 +36,15 @@ function identifier(value, field) {
 }
 
 function safeRelativePath(value, field) {
-  const result = requiredText(value, field);
-  if (result.includes("\\") || path.posix.isAbsolute(result) || path.posix.normalize(result) !== result) {
-    throw new Error(`${field} must be a normalized POSIX relative path`);
-  }
-  if (result.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`${field} must not contain empty, current, or parent segments`);
-  }
+  return new LogicalRelativePath(value, field).toString();
+}
+
+function safePathTemplate(value, field) {
+  const result = value;
+  // Parameters belong to the artifact format, never to native file names.
+  // Validate literal structure here and the actual name after substitution.
+  if (typeof result !== "string") throw new Error(`${field} must be a string`);
+  new LogicalRelativePath(result.replace(/:\{[A-Za-z0-9][A-Za-z0-9._-]*\}/g, "parameter"), field);
   return result;
 }
 
@@ -445,9 +448,10 @@ export class FlowArtifactInventoryExclusion {
 
 export class FlowArtifactCanonicalPath {
   #matchExpression;
+  #overlapAutomaton;
 
   constructor(value) {
-    this.value = safeRelativePath(value, "artifact canonical path");
+    this.value = safePathTemplate(value, "artifact canonical path");
     this.parameters = Object.freeze([...this.value.matchAll(/:\{([A-Za-z0-9][A-Za-z0-9._-]*)\}/g)].map((match) => match[1]));
     if (new Set(this.parameters).size !== this.parameters.length) throw new Error("artifact canonical path must not repeat a parameter");
     this.#matchExpression = new RegExp(`^${this.#matchSource()}$`);
@@ -471,6 +475,29 @@ export class FlowArtifactCanonicalPath {
   matches(value) {
     const candidate = FlowArtifactRelativePath.from(value, "artifact path").toString();
     return this.#matchExpression.test(candidate);
+  }
+  overlaps(other) {
+    const leftAutomaton = this.#overlapAutomaton ??= new FlowArtifactPathAutomaton(this);
+    const rightAutomaton = other.#overlapAutomaton ??= new FlowArtifactPathAutomaton(other);
+    const pending = [[leftAutomaton.epsilonClosure([0]), rightAutomaton.epsilonClosure([0])]];
+    const visited = new Set();
+    while (pending.length > 0) {
+      const [leftStates, rightStates] = pending.pop();
+      const key = `${[...leftStates].sort((a, b) => a - b).join(",")}|${[...rightStates].sort((a, b) => a - b).join(",")}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (leftStates.has(leftAutomaton.accepting) && rightStates.has(rightAutomaton.accepting)) return true;
+      for (const leftTransition of leftAutomaton.consumingTransitions(leftStates)) {
+        for (const rightTransition of rightAutomaton.consumingTransitions(rightStates)) {
+          if (!characterSetsOverlap(leftTransition.characters, rightTransition.characters)) continue;
+          pending.push([
+            leftAutomaton.epsilonClosure([leftTransition.to]),
+            rightAutomaton.epsilonClosure([rightTransition.to]),
+          ]);
+        }
+      }
+    }
+    return false;
   }
   #matchSource() {
     const expression = this.value.split("/").map((segment) => {
@@ -642,29 +669,6 @@ function characterSetsOverlap(left, right) {
   return [...smaller].some((character) => larger.has(character));
 }
 
-function canonicalPathsOverlap(left, right) {
-  const leftAutomaton = new FlowArtifactPathAutomaton(left);
-  const rightAutomaton = new FlowArtifactPathAutomaton(right);
-  const pending = [[leftAutomaton.epsilonClosure([0]), rightAutomaton.epsilonClosure([0])]];
-  const visited = new Set();
-  while (pending.length > 0) {
-    const [leftStates, rightStates] = pending.pop();
-    const key = `${[...leftStates].sort((a, b) => a - b).join(",")}|${[...rightStates].sort((a, b) => a - b).join(",")}`;
-    if (visited.has(key)) continue;
-    visited.add(key);
-    if (leftStates.has(leftAutomaton.accepting) && rightStates.has(rightAutomaton.accepting)) return true;
-    for (const leftTransition of leftAutomaton.consumingTransitions(leftStates)) {
-      for (const rightTransition of rightAutomaton.consumingTransitions(rightStates)) {
-        if (!characterSetsOverlap(leftTransition.characters, rightTransition.characters)) continue;
-        pending.push([
-          leftAutomaton.epsilonClosure([leftTransition.to]),
-          rightAutomaton.epsilonClosure([rightTransition.to]),
-        ]);
-      }
-    }
-  }
-  return false;
-}
 
 function patternIsEntirelyExcluded(pattern, excludedPrefixes) {
   const literalPrefix = pattern.path.toString().split(/:\{[A-Za-z0-9][A-Za-z0-9._-]*\}/, 1)[0];
@@ -680,7 +684,7 @@ function legacyEntriesOverlap(left, right) {
   if (!leftPattern && !rightPattern) return left.toString() === right.toString();
   if (!leftPattern) return right.matches(left.toString());
   if (!rightPattern) return left.matches(right.toString());
-  if (!canonicalPathsOverlap(left.path, right.path)) return false;
+  if (!left.path.overlaps(right.path)) return false;
   if (patternIsEntirelyExcluded(right, left.excludedPrefixes)) return false;
   if (patternIsEntirelyExcluded(left, right.excludedPrefixes)) return false;
   return true;
@@ -768,7 +772,7 @@ export class FlowArtifactStepOwner {
   constructor({ publicationStep, directoryPath } = {}, mint = null) {
     if (mint !== STEP_OWNER_MINT) throw new Error("Flow artifact step owners must be created by a typed owner factory");
     this.publicationStep = publicationStep === null ? null : authorityActor(publicationStep, "artifact owner publication step");
-    this.directoryPath = new FlowArtifactCanonicalPath(safeRelativePath(directoryPath, "artifact step owner directory"));
+    this.directoryPath = new FlowArtifactCanonicalPath(safePathTemplate(directoryPath, "artifact step owner directory"));
     Object.freeze(this);
   }
   assertOwns(canonicalPath) {
@@ -970,9 +974,9 @@ export class FlowArtifactContract {
     }
     return actor;
   }
-  assertContentPublication(previousBytes, nextBytes) {
+  assertContentPublication(previousBytes, nextBytes, options = {}) {
     if (!Buffer.isBuffer(nextBytes)) throw new Error("artifact publication content must be a Buffer");
-    return this.contentContract?.assertPublication(previousBytes, nextBytes) ?? null;
+    return this.contentContract?.assertPublication(previousBytes, nextBytes, options) ?? null;
   }
 }
 
@@ -1170,7 +1174,7 @@ export class FlowArtifactActivityEvidenceOwner {
     }
     this.nodeId = requiredText(nodeId, "activity evidence nodeId");
     this.publicationStep = authorityActor(publicationStep, "activity evidence publication step");
-    this.directoryPath = new FlowArtifactCanonicalPath(safeRelativePath(directoryPath, "activity evidence owner directory"));
+    this.directoryPath = new FlowArtifactCanonicalPath(safePathTemplate(directoryPath, "activity evidence owner directory"));
     if (typeof historical !== "boolean") throw new Error("activity evidence owner historical flag is invalid");
     this.historical = historical;
     if (this.historical) {
@@ -1320,15 +1324,16 @@ export class FlowArtifactActivityEvidenceDocument {
 
 /** The exact canonical Review record retained by one Spec publication Activity. */
 export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifactActivityEvidenceDocument {
-  constructor(value = {}) {
+  constructor(value = {}, { processEvidence = null } = {}) {
     if (value === null || typeof value !== "object" || Array.isArray(value)
       || Object.keys(value).sort().join(",") !== "activityId,note,observedAt,owner,review,schemaRevision,source") {
       throw new Error("Spec Review Activity evidence has invalid fields");
     }
     const { review, ...observation } = value;
     super(observation);
-    this.review = new CanonicalSpecReview(review);
-    if (!isDeepStrictEqual(this.toJSON(), value)) {
+    this.review = review instanceof CanonicalSpecReview ? review : new CanonicalSpecReview(review, { processEvidence });
+    const expected = review instanceof CanonicalSpecReview ? { ...value, review: review.toJSON() } : value;
+    if (!isDeepStrictEqual(this.toJSON(), expected)) {
       throw new Error("Spec Review Activity evidence must preserve its exact canonical Review record");
     }
     const path = `revisions/${this.review.identity.revision.toString()}/review.json`;
@@ -1341,14 +1346,14 @@ export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifact
     Object.freeze(this);
   }
 
-  static fromJSON(value) { return new this(value); }
+  static fromJSON(value, options = {}) { return new this(value, options); }
 
   static forActivity({ activity, review, sourcePath, observedAt }) {
     if (!(review instanceof CanonicalSpecReview)) throw new TypeError("Spec Review Activity evidence requires a canonical Review");
     return new this({ schemaRevision: 1, activityId: activity.id,
       owner: { nodeId: activity.nodeId, nodeKey: activity.nodeKey },
       observedAt, source: { path: sourcePath, pointer: "", hash: review.digest },
-      note: "Canonical Spec Review publication.", review: review.toJSON() }).assertActivity(activity);
+      note: "Canonical Spec Review publication.", review }).assertActivity(activity);
   }
 
   assertActivity(activity, { specId = this.review.identity.specId } = {}) {
@@ -1370,21 +1375,21 @@ export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifact
 export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentContract {
   constructor() { super(); Object.freeze(this); }
 
-  parse(bytes) {
+  parse(bytes, { processEvidence = null } = {}) {
     if (!Buffer.isBuffer(bytes)) throw new Error("activity evidence content must be a Buffer");
     let value;
     try { value = JSON.parse(bytes.toString("utf8")); } catch (error) {
       throw new Error(`activity evidence must be valid JSON: ${error.message}`);
     }
     return Object.hasOwn(value ?? {}, "review")
-      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value)
+      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value, { processEvidence })
       : FlowArtifactActivityEvidenceDocument.fromJSON(value);
   }
 
-  assertPublication(previousBytes, nextBytes) {
-    const next = this.parse(nextBytes);
+  assertPublication(previousBytes, nextBytes, options = {}) {
+    const next = this.parse(nextBytes, options);
     if (previousBytes !== null) {
-      const previous = this.parse(previousBytes);
+      const previous = this.parse(previousBytes, options);
       if (JSON.stringify(previous.toJSON()) !== JSON.stringify(next.toJSON())) {
         throw new Error("immutable activity evidence cannot replace existing bytes");
       }
@@ -1392,8 +1397,8 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     return next;
   }
 
-  assertCatalogAssociation({ bytes, descriptor, activity } = {}) {
-    const document = this.parse(bytes);
+  assertCatalogAssociation({ bytes, descriptor, activity, processEvidence = null } = {}) {
+    const document = this.parse(bytes, { processEvidence });
     if (descriptor?.activityId === null || descriptor?.activityId === undefined) {
       throw new Error("activity evidence descriptor requires its Activity association");
     }
@@ -1471,7 +1476,7 @@ export class FlowArtifactRegistry {
       for (let right = left + 1; right < contracts.length; right += 1) {
         const leftPath = contracts[left].canonicalPath;
         const rightPath = contracts[right].canonicalPath;
-        if (canonicalPathsOverlap(leftPath, rightPath)) {
+        if (leftPath.overlaps(rightPath)) {
           throw new Error(`overlapping artifact canonical paths: ${leftPath} / ${rightPath}`);
         }
       }
@@ -1627,7 +1632,7 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["execution.response.adoption", "execution.source.manifest", "execution.observation", "execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["execution.response.adoption", "execution.source.manifest", "execution.observation", "execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement", "finalize.cleanup.publication"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
     "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
@@ -1665,6 +1670,7 @@ const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
   ["source.handoff.event", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.settlement", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.rollback-blob", new FlowArtifactMutationPolicy("immutable")],
+  ["finalize.cleanup.publication", new FlowArtifactMutationPolicy("immutable")],
   ["test.requirement.candidate.bundle", new FlowArtifactMutationPolicy("immutable")],
   ["test.requirement.candidate.source", new FlowArtifactMutationPolicy("immutable")],
   ["test.requirement.support", new FlowArtifactMutationPolicy("immutable")],
@@ -2057,6 +2063,9 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("finalize.cleanup.plugin-artifacts", "steps/finalize-cleanup/plugin-artifacts.json", "finalize-cleanup-plugin-artifacts", "canonical-flow-artifacts", "finalize-cleanup", own("finalize-cleanup", ["finalize-cleanup"], ["finalize-cleanup"])),
   contract("finalize.cleanup.runtime-log", ".runtime/finalize-cleanup/runtime-log.json", "finalize-cleanup-runtime-log", "canonical-flow-artifacts", "finalize-cleanup", own("finalize-cleanup", ["finalize-cleanup"], ["finalize-cleanup"]), "transient", "singleton", false),
   contract("finalize.cleanup.journal", ".runtime/finalize-cleanup/journal.json", "finalize-cleanup-journal", "canonical-flow-artifacts", "finalize-cleanup", own("finalize-cleanup", ["finalize-cleanup"], ["finalize-cleanup"]), "transient", "singleton", false),
+  // Version 1 is a new immutable completed-effect publication. It changes no
+  // existing journal or Step receipt format and is absent before cleanup.
+  contract("finalize.cleanup.publication", "artifacts/finalize-cleanup/publication.json", "finalize-cleanup-publication", "canonical-flow-artifacts", "finalize-cleanup", own("finalize-cleanup", ["finalize-cleanup"], ["finalize-cleanup"])),
   // Locks are operational state, never catalog content.  These typed paths
   // keep source-era root lock files out of snapshots and migration payloads.
   contract("runtime.lock.issue-log", ".runtime/locks/issue-log.lock", "issue-log-lock", "canonical-flow-artifacts", "system", own("system", ["system"], ["system"]), "transient", "singleton", false),
@@ -2190,6 +2199,7 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   target("finalize.cleanup.plugin-artifacts", ["plugin-artifacts.json"], "steps/finalize-cleanup/plugin-artifacts.json", "finalize-cleanup", "finalize-cleanup"),
   target("finalize.cleanup.runtime-log", ["runtime-log.json"], ".runtime/finalize-cleanup/runtime-log.json", "finalize-cleanup", "finalize-cleanup"),
   target("finalize.cleanup.journal", ["finalize-cleanup.json"], ".runtime/finalize-cleanup/journal.json", "finalize-cleanup", "finalize-cleanup"),
+  newTarget("finalize.cleanup.publication", "artifacts/finalize-cleanup/publication.json", "finalize-cleanup", "finalize-cleanup"),
   target("runtime.lock.issue-log", [".issue-log.lock"], ".runtime/locks/issue-log.lock", "system", "system"),
   target("runtime.lock.current-flow-state", [".current-flow-state.lock"], ".runtime/locks/current-flow-state.lock", "system", "system"),
   target("runtime.lock.artifact-catalog", [".artifact-catalog.lock"], ".runtime/locks/artifact-catalog.lock", "system", "system"),
@@ -2250,7 +2260,7 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   knownNew("activity.evidence", "steps/:{ownerPath}/activity-evidence/:{digest}.json"),
   knownNew("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json"), knownNew("task.review.aborted.work-unit", "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json"),
   known("flow.findings", "switch", "flow-findings.json"), known("nonblocking.handoffs", "switch", "nonblocking-handoffs.json"), knownNew("test.requirement.gate.raw-log", "steps/test-gate/output.log"), known("test.execute.raw-log", "switch", "tests/.raw/test-execution.log"), knownPattern("final.regression.raw-log", "switch", "tests/.raw/final-regression-attempt-:{attempt}.log"), known("retry.recovery.transaction", "switch", ".retry-recovery.transaction.json"), known("test.requirement.summary", "switch", "tests/.raw/requirement-summary.json"), knownPattern("review.work.unit", "switch", "review-history/work-units/:{workUnitPath}"), knownNew("gate.observation.recurrence", ".runtime/gate-observation-recurrence.json"), knownNew("runtime.step-metadata", ".runtime/step-metadata/:{stepId}.json"),
-  known("finalize.cleanup.agent-metrics", "switch", "agent-metrics.json"), known("finalize.cleanup.notes", "switch", "notes.json"), known("finalize.cleanup.plugin-artifacts", "switch", "plugin-artifacts.json"), known("finalize.cleanup.runtime-log", "switch", "runtime-log.json"), known("finalize.cleanup.journal", "switch", "finalize-cleanup.json"),
+  known("finalize.cleanup.agent-metrics", "switch", "agent-metrics.json"), known("finalize.cleanup.notes", "switch", "notes.json"), known("finalize.cleanup.plugin-artifacts", "switch", "plugin-artifacts.json"), known("finalize.cleanup.runtime-log", "switch", "runtime-log.json"), known("finalize.cleanup.journal", "switch", "finalize-cleanup.json"), knownNew("finalize.cleanup.publication", "artifacts/finalize-cleanup/publication.json"),
   known("runtime.lock.issue-log", "switch", ".issue-log.lock"), known("runtime.lock.current-flow-state", "switch", ".current-flow-state.lock"), known("runtime.lock.artifact-catalog", "switch", ".artifact-catalog.lock"), known("runtime.lock.retry-recovery", "switch", ".retry-recovery.lock"), known("runtime.lock.flow-state-writer", "switch", ".flow.json.writer.lock"), knownPattern("runtime.lock.flow-state-writer-owner", "switch", ".flow.json.writer.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.impl-repair", "switch", ".impl-repair.lock/:{lockPath}"),
   knownPattern("runtime.lock.issue-log-owner", "switch", "..issue-log.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.current-flow-state-owner", "switch", "..current-flow-state.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.artifact-catalog-owner", "switch", "..artifact-catalog.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.retry-recovery-owner", "switch", "..retry-recovery.lock.:{ownerToken}.owner.tmp"),
   known("legacy.flow.version", "remove", "flow-version.json"), known("legacy.activity.view", "remove", "activities.md"), known("legacy.derived.views", "remove", "draft.md"), known("legacy.derived.views", "remove", "draft-review.md"), known("legacy.derived.views", "remove", "draft-review-questions.md"), known("legacy.derived.views", "remove", "draft-review-coverage.md"), known("legacy.derived.views", "remove", "spec.md"), known("legacy.derived.views", "remove", "spec-review.md"), known("legacy.derived.views", "remove", "test.md"), known("legacy.derived.views", "remove", "test-review.md"), known("legacy.derived.views", "remove", "test-result-review.md"), known("legacy.derived.views", "remove", "review.md"), known("legacy.derived.views", "remove", "qa.md"), knownPattern("legacy.task.views", "remove", "tasks/:{taskView}.md"), known("legacy.derived.review.artifacts", "remove", "draft-review-questions-repair.json"), known("legacy.derived.review.artifacts", "remove", "spec-review-triage.json"), known("legacy.scenario.validity", "remove", "scenario-validity-result.json"), known("legacy.scenario.validity", "remove", "tests/.raw/scenario-validity.log"), known("legacy.test.review", "remove", "test-review.json"), known("legacy.test.review", "remove", "test-coverage.json"), knownPattern("legacy.review.history", "remove", new FlowArtifactLegacyPattern("review-history/:{historyPath}", { excludedPrefixes: ["review-history/work-units/"] })), known("legacy.finalize.envelopes", "remove", "report-envelope.json"), known("legacy.finalize.envelopes", "remove", "recovery-envelope.json"), known("legacy.raw.logs", "remove", "tests/.raw/final-regression.log"),

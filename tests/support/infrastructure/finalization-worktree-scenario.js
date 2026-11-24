@@ -10,7 +10,11 @@ import { SharedFinalizeCleanupJournal } from "../../../src/flow/lib/finalize-cle
 import { FinalizeFlowStateOwner } from "../../../src/flow/lib/finalize-flow-state-owner.js";
 import { WorktreeFlowBindingStore } from "../../../src/lib/worktree-flow-binding.js";
 import { CurrentTaskSourceSnapshot } from "../../../src/flow/lib/task-mutation-lineage.js";
-import { StepResult } from "../../../src/flow/engine/step-result.js";
+import { DraftCreatedResult, SpecCreatedResult, StepResult } from "../../../src/flow/engine/step-result.js";
+import { CanonicalPhasePreconditionFixture } from "./flow-setup.js";
+import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
+import { DraftStepSettlementReceipt, settleDraftStepResult, settleSpecStepResult } from "../../../src/flow/definition.js";
+import { validWorkerHandoffTaskSpec } from "./worker-artifact.js";
 
 export const finalizationCleanupJournalPhases = Object.freeze([
   "prepared", "worktree-removed", "branch-deleted", "validated", "pointer-written", "completed",
@@ -20,6 +24,31 @@ export const finalizationCleanupJournalPhases = Object.freeze([
  * metadata or rewrite canonical execution state to manufacture this boundary. */
 export class FinalizationWorktreeScenario extends FinalizationPhaseScenario {
   static async prepare(t, options = {}) {
+    const scenario = await this.prepareWorktree(t, options);
+    const awaiting = await scenario.dispatch(64);
+    assert.equal(awaiting.dispatch?.boundary, "approval_required", JSON.stringify(awaiting));
+    scenario.reload();
+    const awaitingState = scenario.manager.canonicalState(scenario.specId);
+    assert.equal(awaitingState.current?.at(-1) ?? awaitingState.nextAction().nodeId, "approval");
+    assert.equal(awaitingState.policy.autoApprove, false);
+    await scenario.approve();
+    scenario.reload();
+    const auto = await new SetAutoCommand().execute({ ...scenario.context(), value: "on" });
+    assert.equal(auto.autoApprove, true, JSON.stringify(auto));
+    await scenario.advanceTo("finalize-commit");
+    scenario.reload();
+    return scenario;
+  }
+
+  static async prepareProcessBoundary(t, options = {}) {
+    const scenario = await this.prepareWorktree(t, { ...options,
+      requirements: validWorkerHandoffTaskSpec().requirements });
+    await scenario.prepareDraftSource();
+    await scenario.prepareFinalizationPrecondition();
+    return scenario;
+  }
+
+  static async prepareWorktree(t, options = {}) {
     const prepared = PrepareArtifactScenario.create(t, { mode: "worktree",
       request: "Preserve report evidence and exact managed worktree ownership through finalization." });
     fs.appendFileSync(path.join(prepared.root, ".gitignore"), "!/.sennel/output/\n");
@@ -47,17 +76,87 @@ export class FinalizationWorktreeScenario extends FinalizationPhaseScenario {
     assert.equal(scenario.manager.usesWorktreeFlowBinding(), true);
     scenario.binding = new WorktreeFlowBindingStore({ worktreePath: scenario.worktreePath }).load();
     scenario.binding.assertFlowState(scenario.manager.loadReadOnly(scenario.specId));
-    await scenario.advanceTo("approval");
-    const awaiting = await scenario.dispatch(8);
-    assert.equal(awaiting.dispatch?.boundary, "approval_required", JSON.stringify(awaiting));
-    scenario.reload();
-    await scenario.approve();
-    scenario.reload();
-    const auto = await new SetAutoCommand().execute({ ...scenario.context(), value: "on" });
-    assert.equal(auto.autoApprove, true, JSON.stringify(auto));
-    await scenario.advanceTo("finalize-commit");
-    scenario.reload();
     return scenario;
+  }
+
+  /** Generate the initial Draft through its normal dispatcher/worker boundary. */
+  async prepareDraftSource() {
+    assert.equal(this.current(), "draft");
+    await this.advanceTo("draft-questions-review");
+    this.reload();
+    this.assertWorkerCompletion("draft", DraftCreatedResult, settleDraftStepResult);
+    const source = new CanonicalDraftReviewSource({ flowManager: this.manager,
+      state: this.manager.loadReadOnly(this.specId), phase: "draft-questions" });
+    this.draftSourceRevision = source.revision();
+    return this;
+  }
+
+  assertWorkerCompletion(stepId, ResultClass, settle) {
+    const { saved, state } = this.manager.readCanonicalTransitionView({ specId: this.specId, read: (view) => ({
+      state: view.state,
+      saved: view.activities.findLast((entry) => entry.nodeId === stepId
+        && entry.result?.stepResult instanceof ResultClass),
+    }) });
+    assert.ok(saved, `${stepId} must have its real typed worker completion`);
+    DraftStepSettlementReceipt.assertStored(saved.result.draftSettlementReceipt, {
+      result: saved.result.stepResult, settlement: settle(stepId, saved.result.stepResult),
+      binding: { runId: state.runId, specId: state.specId, stepId,
+        attempt: { id: saved.attemptId, sequence: saved.sequence } },
+    });
+    assert.equal(this.requests.filter((request) => request.stepId === stepId).length, 1);
+  }
+
+  /** Explicit phase precondition, never complete Draft/Spec worker coverage.
+   * Review/Gate and FinalRegression/Report use their registered producers. */
+  async prepareFinalizationPrecondition() {
+    const before = this.manager.canonicalState(this.specId);
+    const source = new CanonicalDraftReviewSource({ flowManager: this.manager,
+      state: this.manager.loadReadOnly(this.specId), phase: "draft-questions" });
+    assert.deepEqual(source.revision(), this.draftSourceRevision);
+    const fixture = CanonicalPhasePreconditionFixture.fromExisting({ flowManager: this.manager,
+      specId: this.specId, config: this.options.config });
+    await fixture.activateWithProducers("spec", { activateTarget: false, onActive: (nodeId) => {
+      if (nodeId !== "draft-coverage-review") return;
+      const coverageSource = new CanonicalDraftReviewSource({ flowManager: fixture.flowManager,
+        state: fixture.state(), phase: "draft-coverage" });
+      assert.deepEqual(coverageSource.revision(), this.draftSourceRevision,
+        "worker-free refine must preserve the initial Draft publication authority");
+      this.coverageDraftSourceRevision = coverageSource.revision();
+    } });
+    this.reload();
+    await this.advanceTo("spec-review");
+    this.reload();
+    this.assertWorkerCompletion("spec", SpecCreatedResult, settleSpecStepResult);
+    const afterSpec = CanonicalPhasePreconditionFixture.fromExisting({ flowManager: this.manager,
+      specId: this.specId, config: this.options.config });
+    await afterSpec.activateWithProducers("approval");
+    this.reload();
+    const awaiting = this.manager.canonicalState(this.specId);
+    assert.equal(awaiting.current?.at(-1), "approval");
+    assert.equal(awaiting.policy.autoApprove, false);
+    await afterSpec.activateWithProducers("finalize-commit", {
+      activateTarget: false,
+      sourceMutations: new Map([["T1-impl", () => this.write("src/finalization-input.js",
+        "export const finalizationInput = true;\n")]]),
+    });
+    this.reload();
+    const auto = await new SetAutoCommand().execute({ ...this.context(), value: "on" });
+    assert.equal(auto.autoApprove, true, JSON.stringify(auto));
+    const after = this.manager.canonicalState(this.specId);
+    assert.equal(after.runId, before.runId);
+    assert.equal(after.specId, before.specId);
+    assert.deepEqual(after.execution.toJSON(), before.execution.toJSON());
+    const binding = new WorktreeFlowBindingStore({ worktreePath: this.worktreePath }).load();
+    assert.deepEqual(binding, this.binding);
+    binding.assertFlowState(this.manager.loadReadOnly(this.specId));
+    this.assertResults(["final-regression", "report"]);
+    this.assertCommitEvidence();
+    await this.claimFrontier("finalize-commit");
+    this.reload();
+    this.preconditionCoverage = Object.freeze({ upstream: "phase-preconditions-with-real-draft-and-spec-sources",
+      workerPhaseCoverage: false, registeredProducers: Object.freeze(["draft", "draft-questions-review",
+        "draft-coverage-review", "draft-gate", "spec", "spec-review", "spec-gate", "final-regression", "report"]) });
+    return this;
   }
 
   constructor(options) {

@@ -6,16 +6,16 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { TemporaryPaths } from "../../../src/lib/temporary-paths.js";
 import { TEST_CHECKOUT_ROOT } from "../../test-temporary-root.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 
 import { SeedWorkRoot } from "../builders/seed-work-root.js";
 import { CanonicalFlowFixture, canonicalDraftDocument, makeFlowManager } from "./flow-setup.js";
 import { commitAll } from "./git-repo.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
-import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
-import { readManagedRecord } from "../../../src/lib/managed-process-protocol.js";
 import { CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { DraftLifecycle } from "../../../src/flow/lib/draft-lifecycle.js";
+import { RegisteredCommandLineage } from "./registered-command-lineage.js";
 import { currentRuntimePackage, listRuntimeResources, readRuntimeResource,
   RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 
@@ -24,8 +24,7 @@ const SEMANTIC_CLI = path.resolve("src/cli-main.js");
 const BOOTSTRAP = pathToFileURL(CLI).href;
 const HANDOFF = pathToFileURL(path.resolve("src/flow/lib/worker-artifact-handoff.js")).href;
 const GATE_FAKE = pathToFileURL(path.resolve("tests/support/infrastructure/flow-dispatch-scenario.js")).href;
-const IDENTITY_SOURCE = pathToFileURL(path.resolve("src/lib/process-identity.js")).href;
-const RUNTIME_PACKAGE = pathToFileURL(path.resolve("src/lib/runtime-package.js")).href;
+const PROCESS = pathToFileURL(path.resolve("src/lib/process.js")).href;
 const ATOMIC_FILE = pathToFileURL(path.resolve("src/lib/atomic-file.js")).href;
 const FLOW_MANAGER = pathToFileURL(path.resolve("src/lib/flow-manager.js")).href;
 
@@ -115,13 +114,12 @@ class RuntimeScenarioChild {
 /** A production-created Flow plus an actual deterministic external provider. */
 export class ProcessRuntimeFlowScenario {
   constructor(seed, { test, specId = "runtime-admission", runId = "runtime-admission-run", step = "draft", sealed = false,
-    descendant = false, migratedDescendant = false, sourceMutation = false, nestedUpgrade = false } = {}) {
+    descendant = false, sourceMutation = false, nestedUpgrade = false, commandLineage = false, stopLineage = false } = {}) {
     this.work = new SeedWorkRoot(seed, { prefix: "sennel-runtime-flow-" });
     this.root = this.work.root;
     this.specId = specId;
     this.runId = runId;
     this.children = [];
-    this.migratedDescendant = migratedDescendant;
     test.after(() => this.cleanup());
     const initialDraft = sealed ? canonicalDraftDocument({
       questions: [new CandidateQuestion({ id: "q1", category: "user-visible-behavior",
@@ -137,41 +135,31 @@ export class ProcessRuntimeFlowScenario {
     this.calls = path.join(this.root, ".tmp", "provider-calls.jsonl");
     this.nestedUpgrade = path.join(this.root, ".tmp", "nested-upgrade.json");
     this.nestedUpgradeStarted = path.join(this.root, ".tmp", "nested-upgrade-started.json");
-    this.migrationRelease = path.join(this.root, ".tmp", "member-migrate");
-    this.migrated = path.join(this.root, ".tmp", "member-migrated.json");
+    this.memberStarted = path.join(this.root, ".tmp", "member-started.json");
+    this.providerDraining = path.join(this.root, ".tmp", "provider-draining.json");
     this.memberRelease = path.join(this.root, ".tmp", "member-release");
     this.memberExited = path.join(this.root, ".tmp", "member-exited.json");
+    this.lineage = commandLineage ? new RegisteredCommandLineage({ root: this.root,
+      started: this.memberStarted, release: this.memberRelease, exited: this.memberExited, stop: stopLineage }) : null;
     this.reviewSource = path.join(this.root, ".tmp", "review-source.json");
     this.reviewInput = path.join(this.root, ".tmp", "review-input.json");
     const worker = path.join(this.root, ".tmp", "runtime-provider.mjs");
     fs.mkdirSync(path.dirname(worker), { recursive: true });
-    const migratedWorker = path.join(this.root, ".tmp", "runtime-migrated-member.mjs");
-    if (migratedDescendant) fs.writeFileSync(migratedWorker, [
+    const memberWorker = path.join(this.root, ".tmp", "runtime-registered-member.mjs");
+    if (descendant) fs.writeFileSync(memberWorker, [
       'import fs from "node:fs";',
       'import path from "node:path";',
-      'import { randomUUID } from "node:crypto";',
-      `const {ProcessIdentitySource}=await import(${JSON.stringify(IDENTITY_SOURCE)});`,
-      `const {AtomicFile}=await import(${JSON.stringify(ATOMIC_FILE)});`,
-      'const identity=new ProcessIdentitySource().createOwner(randomUUID());',
-      'const observation=new ProcessIdentitySource().observe(identity);',
-      `new AtomicFile(${JSON.stringify(this.migrated)}).write(JSON.stringify({identity,stat:observation.stat}));`,
       `const release=${JSON.stringify(this.memberRelease)};`,
-      'const finish=(reason)=>{',
-      `new AtomicFile(${JSON.stringify(this.memberExited)}).write(JSON.stringify({reason,pid:process.pid}));`,
-      'process.exit(reason==="released"?0:1);};',
-      'const watcher=fs.watch(path.dirname(release),()=>{if(fs.existsSync(release))finish("released");});',
-      'setTimeout(()=>finish("deadline"),90000);',
-      'if(fs.existsSync(release))finish("released");',
+      `fs.writeFileSync(${JSON.stringify(this.memberStarted)},JSON.stringify({started:true}));`,
+      'await new Promise((resolve)=>{const watcher=fs.watch(path.dirname(release),()=>{if(fs.existsSync(release)){watcher.close();resolve();}});if(fs.existsSync(release)){watcher.close();resolve();}});',
+      'process.stdout.write("registered member released");',
     ].join("\n"));
     fs.writeFileSync(worker, [
       'import fs from "node:fs";',
       'import path from "node:path";',
-      'import { spawn } from "node:child_process";',
-      'import { randomUUID } from "node:crypto";',
       `await import(${JSON.stringify(BOOTSTRAP)});`,
       `const { sealWorkerArtifactHandoff }=await import(${JSON.stringify(HANDOFF)});`,
-      `const { ProcessIdentitySource }=await import(${JSON.stringify(IDENTITY_SOURCE)});`,
-      `const { RuntimeChildExecution }=await import(${JSON.stringify(RUNTIME_PACKAGE)});`,
+      `const { runCmdAsync }=await import(${JSON.stringify(PROCESS)});`,
       `const { AtomicFile }=await import(${JSON.stringify(ATOMIC_FILE)});`,
       'const writeMarker=(file,value)=>new AtomicFile(file).write(JSON.stringify(value));',
       `const root=${JSON.stringify(this.root)};`,
@@ -204,33 +192,25 @@ export class ProcessRuntimeFlowScenario {
         'fs.writeFileSync(path.join(root,"source.txt"),"partial worker edit\\n");',
         'fs.writeFileSync(path.join(root,".sennel","process-runtime-lookalike.txt"),"worker source outside the runtime prefix\\n");',
       ] : []),
-      ...(migratedDescendant ? [
-        // Bash stays in the managed group until the test observes durable capture.
-        // Its PID is not the group leader, so setsid exec preserves its birth.
-        `const child=spawn("bash",["-c",'read -r -t 90 migration || exit 1; exec setsid "$@"',"runtime-member",process.execPath,${JSON.stringify(migratedWorker)}],{stdio:["pipe","ignore","ignore"]});`,
-        `const migrate=${JSON.stringify(this.migrationRelease)};`,
-        'const migrationWatcher=fs.watch(path.dirname(migrate),()=>{if(fs.existsSync(migrate)){migrationWatcher.close();child.stdin.end("migrate\\n");}});',
-        'if(fs.existsSync(migrate)){migrationWatcher.close();child.stdin.end("migrate\\n");}',
-        'child.stdin.on("error",(error)=>{process.stderr.write(error.message);process.exit(1);});',
-        'setTimeout(()=>process.exit(1),90000).unref();',
-      ] : [descendant ? 'const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});' : 'const child=null;']),
-      'const providerIdentity=new ProcessIdentitySource().createOwner(randomUUID());',
-      'const descendantIdentity=child===null?null:new ProcessIdentitySource({pid:child.pid}).createOwner(randomUUID());',
-      `writeMarker(${JSON.stringify(this.started)},{pid:process.pid,descendantPid:child?.pid??null,providerIdentity,descendantIdentity,sealed:${sealed},sealedOutput:${sealed ? "sealedOutput" : "null"}});`,
+      ...(this.lineage !== null ? this.lineage.startSource : descendant ? [
+        `const member=runCmdAsync(process.execPath,[${JSON.stringify(memberWorker)}],{cwd:root,timeout:120000});`,
+        'member.catch(()=>{});',
+        `const memberStarted=${JSON.stringify(this.memberStarted)};`,
+        'await new Promise((resolve)=>{const watcher=fs.watch(path.dirname(memberStarted),()=>{if(fs.existsSync(memberStarted)){watcher.close();resolve();}});if(fs.existsSync(memberStarted)){watcher.close();resolve();}});',
+      ] : ['const member=null;']),
+      `writeMarker(${JSON.stringify(this.started)},{sealed:${sealed},sealedOutput:${sealed ? "sealedOutput" : "null"}});`,
       ...(nestedUpgrade ? [
-        'const upgradeDelivery=new RuntimeChildExecution({environment:process.env});',
-        `const upgrade=spawn(process.execPath,[${JSON.stringify(SEMANTIC_CLI)},"upgrade"],upgradeDelivery.options({cwd:root}));`,
-        'upgradeDelivery.close();',
-        `writeMarker(${JSON.stringify(this.nestedUpgradeStarted)},new ProcessIdentitySource({pid:upgrade.pid}).createOwner(randomUUID()));`,
-        'let upgradeOut="",upgradeErr="";',
-        `upgrade.stdout.on("data",(chunk)=>{upgradeOut+=chunk;fs.appendFileSync(${JSON.stringify(`${this.nestedUpgrade}.stdout`)},chunk);});`,
-        `upgrade.stderr.on("data",(chunk)=>{upgradeErr+=chunk;fs.appendFileSync(${JSON.stringify(`${this.nestedUpgrade}.stderr`)},chunk);});`,
-        'const upgradeStatus=await new Promise((resolve,reject)=>{upgrade.once("error",reject);upgrade.once("close",resolve);});',
-        `writeMarker(${JSON.stringify(this.nestedUpgrade)},{status:upgradeStatus,stdout:upgradeOut,stderr:upgradeErr});`,
+        `writeMarker(${JSON.stringify(this.nestedUpgradeStarted)},{started:true});`,
+        `const upgrade=await runCmdAsync(process.execPath,[${JSON.stringify(SEMANTIC_CLI)},"upgrade"],{cwd:root,timeout:120000});`,
+        `writeMarker(${JSON.stringify(this.nestedUpgrade)},{status:upgrade.status,stdout:upgrade.stdout,stderr:upgrade.stderr});`,
       ] : []),
       `const release=${JSON.stringify(this.release)};`,
       'await new Promise((resolve)=>{const watcher=fs.watch(path.dirname(release),()=>{if(fs.existsSync(release)){watcher.close();resolve();}});if(fs.existsSync(release)){watcher.close();resolve();}});',
-      'process.stdout.write(JSON.stringify({sealed:!!requestPath}));process.exit(0);',
+      `writeMarker(${JSON.stringify(this.providerDraining)},{draining:true});`,
+      ...(this.lineage !== null ? this.lineage.finishSource : [
+        `if(member!==null){const result=await member;writeMarker(${JSON.stringify(this.memberExited)},{status:result.status,receipt:result.processExecutionStopReceipt.toJSON()});if(!result.ok)throw new Error(result.stderr);}`,
+      ]),
+      'process.stdout.write(JSON.stringify({sealed:!!requestPath}));',
     ].join("\n"));
     fs.writeFileSync(path.join(this.root, ".sennel", "config.json"), JSON.stringify({
       lang: "ja", type: "base", docs: { languages: ["ja"], defaultLanguage: "ja" },
@@ -317,22 +297,6 @@ export class ProcessRuntimeFlowScenario {
 
   releaseProvider() { fs.writeFileSync(this.release, "release\n"); }
 
-  outcomePath(callId) {
-    const prefix = path.join(this.root, ".sennel", "process-runtime");
-    const namespace = fs.readdirSync(prefix).find((entry) => fs.existsSync(path.join(prefix, entry, "calls", callId)));
-    assert.notEqual(namespace, undefined, "the managed call must have a durable runtime directory");
-    return path.join(prefix, namespace, "calls", callId, "outcome.json");
-  }
-
-  awaitOutcome(callId, predicate, { signal = null } = {}) {
-    const file = this.outcomePath(callId);
-    return awaitRuntimeObservation(file, () => {
-      const record = readManagedRecord(file);
-      return record !== null && predicate(record) ? record : null;
-    }, 90_000, signal);
-  }
-
-  migrateMember() { fs.writeFileSync(this.migrationRelease, "migrate\n"); }
   releaseMember() { fs.writeFileSync(this.memberRelease, "release\n"); }
 
   preserveFailureEvidence(label) {
@@ -344,7 +308,8 @@ export class ProcessRuntimeFlowScenario {
     fs.cpSync(location.directory, path.join(evidence, "canonical-version"), { recursive: true });
     fs.writeFileSync(path.join(evidence, "canonical-readback.json"), JSON.stringify(this.snapshot(), null, 2));
     for (const file of [this.started, this.request, this.count, this.calls, this.nestedUpgrade,
-      this.nestedUpgradeStarted, this.migrationRelease, this.migrated, this.memberRelease, this.memberExited, `${this.nestedUpgrade}.stdout`, `${this.nestedUpgrade}.stderr`, this.reviewSource, this.reviewInput,
+      this.nestedUpgradeStarted, this.memberStarted, this.providerDraining, this.memberRelease, this.memberExited, `${this.nestedUpgrade}.stdout`, `${this.nestedUpgrade}.stderr`, this.reviewSource, this.reviewInput,
+      ...(this.lineage === null ? [] : [this.lineage.effect, this.lineage.replay]),
       path.join(this.root, "source.txt")]) {
       if (fs.existsSync(file)) fs.copyFileSync(file, path.join(evidence, path.basename(file)));
     }
@@ -372,68 +337,24 @@ export class ProcessRuntimeFlowScenario {
   }
 
   async cleanup() {
-    // Let an escaped fixture member terminate naturally before removing its files.
-    if (fs.existsSync(this.migrated)) this.releaseMember();
-    for (const child of this.children) if (child.child.exitCode === null && child.child.signalCode === null) child.kill();
-    await Promise.allSettled(this.children.map((child) => child.result));
-    // These are test-owned provider handles, used only to clean up a failing
-    // scenario. Product recovery must prove identity through its own registry.
-    if (fs.existsSync(this.started)) {
-      const pids = JSON.parse(fs.readFileSync(this.started, "utf8"));
-      const identities = new ProcessIdentitySource();
-      for (const value of [pids.descendantIdentity, pids.providerIdentity]) {
-        if (value === null) continue;
-        const owned = new ProcessIdentity(value);
-        if (identities.assess(owned).status !== "live") continue;
-        try { process.kill(owned.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-      }
+    // Release fixture-owned work cooperatively. A crashed executor still cannot
+    // acquire new authority or turn these release files into a product receipt.
+    this.releaseProvider();
+    this.releaseMember();
+    for (const child of this.children) {
+      if (child.child.exitCode === null && child.child.signalCode === null) child.kill();
     }
-    let inventory = null;
+    await Promise.allSettled(this.children.map((child) => child.result));
     try {
-      inventory = ProcessExecutionRuntime.inspect({ mainRoot: this.root });
-      if (inventory !== null && inventory.slot !== null) {
-        const recovery = await ProcessExecutionRuntime.acquire({ mainRoot: this.root });
-        await recovery.close();
+      const inventory = ProcessExecutionRuntime.inspect({ mainRoot: this.root });
+      if (inventory.slot !== null) {
+        testTemporaryRoot().retainOnUnconfirmedExecution();
+        return;
       }
     } catch (error) {
-      if (!this.migratedDescendant) throw error;
-      // Before-fix comparisons can withdraw launcher authority permanently.
-      // Preserve that failure before killing only this isolated fixture's anchors.
-      this.preserveFailureEvidence("migration-teardown");
-    } finally {
-      if (this.migratedDescendant && inventory !== null) {
-        const identities = new ProcessIdentitySource();
-        const launchers = inventory.executions.flatMap((entry) => entry.calls)
-          .filter((call) => call.launcherIdentity !== null)
-          .map((call) => new ProcessIdentity(call.launcherIdentity));
-        for (const launcher of launchers) {
-          if (identities.observe(launcher).terminated) continue;
-          assert.equal(identities.assess(launcher).status, "live", "fixture teardown requires authenticated launcher birth");
-          try { process.kill(launcher.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-        }
-        await Promise.all(launchers.map((launcher) => awaitFixtureTermination(launcher)));
-        if (fs.existsSync(this.started)) {
-          const started = JSON.parse(fs.readFileSync(this.started, "utf8"));
-          await Promise.all([started.descendantIdentity, started.providerIdentity].filter(Boolean)
-            .map((value) => awaitFixtureTermination(new ProcessIdentity(value))));
-        }
-      }
-      this.work.cleanup();
+      testTemporaryRoot().retainOnUnconfirmedExecution();
+      throw error;
     }
+    this.work.cleanup();
   }
-}
-
-/** Teardown observes test-owned births; its signals never establish test success. */
-function awaitFixtureTermination(identity) {
-  const source = new ProcessIdentitySource();
-  if (source.observe(identity).terminated) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const poll = setInterval(() => {
-      const observation = source.observe(identity);
-      if (observation.terminated) { finish(); resolve(); }
-      else if (observation.status === "unknown") { finish(); reject(new Error(observation.reason)); }
-    }, 20);
-    const timer = setTimeout(() => { finish(); reject(new Error(`fixture process ${identity.pid} did not stop`)); }, 2000);
-    const finish = () => { clearInterval(poll); clearTimeout(timer); };
-  });
 }

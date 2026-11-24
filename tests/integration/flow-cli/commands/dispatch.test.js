@@ -7,8 +7,8 @@ import { pathToFileURL } from "node:url";
 
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../../support/infrastructure/git-repo.js";
+import { SENNEL_BOOTSTRAP } from "../../../support/infrastructure/node-bootstrap.js";
 import {
-  canonicalImplReviewArtifact,
   CanonicalFlowFixture,
   draftDocumentWithPendingQuestions,
   FlowAtStepFixture,
@@ -18,14 +18,16 @@ import {
   FlowTargetBinding,
   FlowTargetExpectation,
 } from "../../../../src/lib/flow-target-guard.js";
+import { AcceptancePhaseScenario, acceptanceProviderResponse } from "../../../support/acceptance-phase-scenario.js";
 import { ArtifactViewService } from "../../../../src/flow/lib/artifact-view-service.js";
 import { splitArtifactViewSummary } from "../../../../src/flow/lib/artifact-view-summary.js";
 import {
   FlowDispatchSession,
   FlowDispatchTarget,
 } from "../../../../src/flow/lib/dispatch-invocation.js";
-import { attachCanonicalCommandResultArtifact } from "../../../../src/flow/lib/canonical-command-result.js";
-import RunRepairPlanGateCommand from "../../../../src/flow/lib/run-repair-plan-gate.js";
+import { enterSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../../support/infrastructure/spec-gate-repair-scenario.js";
+import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec } from "../../../support/infrastructure/worker-artifact.js";
+import { WorkerArtifactHandoffCoordinator } from "../../../../src/flow/lib/worker-artifact-handoff.js";
 
 const SENNEL = path.resolve("src/sennel.js");
 
@@ -36,9 +38,10 @@ class DispatchFlowScenario {
     pending = false,
     specId = "001-dispatch",
     runId = "run-dispatch",
+    existingFixture = null,
   } = {}) {
     this.root = root;
-    this.manager = makeFlowManager(root);
+    this.manager = existingFixture?.flowManager ?? makeFlowManager(root);
     const fixtureInput = {
       flowManager: this.manager,
       specId,
@@ -48,9 +51,9 @@ class DispatchFlowScenario {
       autoApprove,
       specRecord: { goal: "Dispatch fixture", requirements: [] },
     };
-    this.fixture = pending
+    this.fixture = existingFixture ?? (pending
       ? new CanonicalFlowFixture(fixtureInput).create().registerActive().settleBefore(step)
-      : new FlowAtStepFixture({ ...fixtureInput, targetStep: step }).create();
+      : new FlowAtStepFixture({ ...fixtureInput, targetStep: step }).create());
     this.state = this.fixture.state();
   }
 
@@ -223,133 +226,20 @@ function invokeFlow(root, args) {
   return invokeCli(root, [SENNEL, "flow", ...args]);
 }
 
-function attemptHistory(logicalKey, payload) {
-  return Buffer.from(`${JSON.stringify({
-    attempts: [{ attempt: 1, artifact: { logicalKey, payload } }],
-  }, null, 2)}\n`, "utf8");
-}
-
-function acceptanceDecisionScenario(root) {
-  const manager = makeFlowManager(root);
-  const created = new CanonicalFlowFixture({
-    flowManager: manager,
-    specId: "002-acceptance-decision",
-    runId: "run-acceptance-decision",
-    request: "Verify read-only acceptance decision views.",
-    execution: { mode: "direct" },
-    specRecord: {
-      goal: "Render the cataloged acceptance review.",
-      requirements: [{ id: "R1", desc: "Show the acceptance evidence.", task_ids: ["T1"] }],
-    },
-  }).create().addTask({
-    id: "T1",
-    title: "Render acceptance evidence",
-    goal: "Keep the acceptance decision view bound to its Requirement.",
-    parent: null,
-    origin: "plan",
-    added_round: 0,
-    status: "pending",
-    acceptance: ["The acceptance evidence is visible."],
-  }).registerActive();
-  const repairFingerprint = "a".repeat(64);
-  const implReview = canonicalImplReviewArtifact(created.state(), { blockingFindings: [{
-    findingKey: "source-F1",
-    title: "Cataloged acceptance source",
-    failureMode: "unresolved_acceptance_source",
-    file: null,
-    issue: "An original cataloged finding remains visible.",
-    detail: "This detail comes from the authoritative implementation-review attempt.",
-    suggestion: "Resolve the source finding before a later review.",
-    requirementId: "R1",
-    guardrailId: null,
-    disposition: "informational",
-    rationale: "The cataloged acceptance source remains unresolved.",
-  }] });
-  const sourceFinding = implReview.blockingFindings[0];
-  const deferred = {
-    findingId: "F1",
-    sourceStep: "impl-review",
-    sourceArtifact: "steps/impl/review/result.json",
-    sourceFindingId: sourceFinding.findingId,
-    finalDisposition: "still_open",
-    evidenceRefs: [`steps/impl/review/result.json#${sourceFinding.findingId}`],
-  };
-  created.activate("impl-review");
-  manager.publishArtifacts({
-    specId: created.specId,
-    nodeId: "impl-review",
-    artifactWrites: [
-      {
-        logicalKey: "impl.review",
-        mediaType: "application/json",
-        bytes: attemptHistory("impl.review", implReview),
-      },
-      {
-        logicalKey: "flow.findings",
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify({
-          version: 2,
-          entries: [{
-            findingId: deferred.findingId,
-            sourceStep: deferred.sourceStep,
-            sourceArtifact: deferred.sourceArtifact,
-            sourceFindingId: deferred.sourceFindingId,
-            runId: created.state().runId,
-            fingerprint: sourceFinding.fingerprint,
-            disposition: "deferred",
-            rationale: "The finding remains visible for an explicit decision.",
-            retryExhausted: true,
-            attempts: 5,
-            round: 1,
-            completionKind: "deferred",
-            finalDisposition: deferred.finalDisposition,
-          }],
-        }, null, 2)}\n`, "utf8"),
-      },
-    ],
+async function acceptanceDecisionScenario(t, install) {
+  const producer = AcceptancePhaseScenario.create(t, {
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    acceptanceResponse: (_ordinal, active) => acceptanceProviderResponse(active, { status: "notVerifiable" }),
   });
-  created.activate("acceptance-review");
-  manager.publishArtifacts({
-    specId: created.specId,
-    nodeId: "acceptance-review",
-    artifactWrites: [{
-      logicalKey: "acceptance.review",
-      mediaType: "application/json",
-      bytes: attemptHistory("acceptance.review", {
-        version: 2,
-        repairFingerprint,
-        mechanicalBlockers: [],
-        hardBlockers: [deferred],
-        requirementJudgments: [{
-          requirementId: "R1",
-          status: "notVerifiable",
-          requestRefs: ["flow.request"],
-          requirementRefs: ["spec.json#R1"],
-          diffRefs: [],
-          repairRefs: ["acceptance:no-repair"],
-          testRefs: [],
-          missingEvidence: ["An explicit risk decision is required."],
-        }],
-        deferredFindings: [deferred],
-        userDecision: null,
-        verdict: "user_decision_required",
-      }),
-    }],
+  const assets = install(producer.root);
+  await producer.advanceTo("acceptance-decision");
+  producer.reload();
+  assert.equal(producer.state().policy.autoApprove, true);
+  const scenario = new DispatchFlowScenario(producer.root, {
+    existingFixture: CanonicalFlowFixture.fromExisting({ flowManager: producer.manager, specId: producer.specId }),
   });
-  created.activate("acceptance-decision");
-  const state = created.state();
-  return {
-    manager,
-    state,
-    location: created.location(),
-    binding: FlowTargetBinding.capture({
-      flowState: state,
-      mainRoot: root,
-      authorityRoot: root,
-    }).serialize(),
-  };
+  return { scenario, assets };
 }
-
 function draftQuestionScenario(root) {
   const manager = makeFlowManager(root);
   const created = new CanonicalFlowFixture({
@@ -893,7 +783,7 @@ describe("flow dispatch CLI", () => {
     const dispatchModule = pathToFileURL(path.resolve("src/flow/lib/run-dispatch.js")).href;
     const invocationModule = pathToFileURL(path.resolve("src/flow/lib/dispatch-invocation.js")).href;
     const targetModule = pathToFileURL(path.resolve("src/lib/flow-target-guard.js")).href;
-    const owner = spawnSync(process.execPath, ["--input-type=module", "-e", [
+    const owner = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", [
       `import { FlowDispatchLease } from ${JSON.stringify(dispatchModule)};`,
       `import { FlowDispatchSession, FlowDispatchTarget } from ${JSON.stringify(invocationModule)};`,
       `import { FlowTargetExpectation } from ${JSON.stringify(targetModule)};`,
@@ -1003,77 +893,32 @@ describe("flow dispatch CLI", () => {
     assert.deepEqual(decisionSnapshot(scenario.fixture.location()).approvalReceipts, []);
   });
 
-  it("recovers an approval invalidated by plan-gate repair before issuing its token", () => {
+  it("recovers an approval invalidated by plan-gate repair before issuing its token", async () => {
     root = createTmpDir("sennel-flow-dispatch-invalidated-approval-");
     const worker = installWorker(root);
+    ensureGitRepository(root);
     const manager = makeFlowManager(root);
     const specId = "001-invalidated-approval";
     const fixture = new CanonicalFlowFixture({
-      flowManager: manager,
-      specId,
-      runId: "run-invalidated-approval",
+      flowManager: manager, specId, runId: "run-invalidated-approval",
       request: "Recover a plan-gate-invalidated approval through dispatch.",
-      execution: { mode: "direct" },
-      specRecord: { goal: "Plan-gate recovery fixture", requirements: [] },
-    }).create().registerActive().activate("spec-gate");
-    const source = {
-      issueLogId: "spec-gate-blocking-evidence",
-      step: "spec-gate",
-      phase: "spec",
-      reason: "The spec gate found a blocking requirement omission.",
-      trigger: "gate post hook (auto)",
-      observations: [{
-        kind: "violation",
-        failureMode: "guardrail-violation",
-        requirementRef: "R-1",
-        where: { file: "spec.json", locator: "requirements[0]" },
-        observed: "The required behavior is absent from the specification.",
-        severity: "blocking",
-        refs: ["R-1"],
-      }],
-      timestamp: "2026-08-13T00:00:00.000Z",
-    };
-    const gateResult = attachCanonicalCommandResultArtifact({
-      result: "fail",
-      artifacts: {
-        phase: "spec",
-        nextAction: { diagnosis: { observations: source.observations } },
-      },
-    }, {
-      logicalKey: "spec.gate",
-      payload: {
-        result: "fail",
-        artifacts: {
-          phase: "spec",
-          nextAction: { diagnosis: { observations: source.observations } },
-        },
-      },
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      specRecord: validWorkerHandoffSpec(),
+    }).create().registerActive();
+    for (const task of validWorkerHandoffTaskSpec().tasks) fixture.addTask(task);
+    await fixture.activateWithProducers("spec-gate");
+    await enterSpecGateRepairScenario({ flowManager: manager, flow: fixture, specId });
+    const coordinator = new WorkerArtifactHandoffCoordinator();
+    const repaired = await completeSpecGateRepairHandoff({
+      ctx: { root, mainRoot: root, executionRoot: root, specId, flowManager: manager },
+      invocation: { id: "approval-invalidated-gate-repair", target: { digest: "b".repeat(64) },
+        action: { digest: "a".repeat(64), nextAction: { step: "spec-gate-repair" } } },
+      coordinator, replacement: "The approved specification describes the required bounded behavior.",
     });
-    manager.failCurrentAttempt({
-      specId,
-      failure: {
-        category: "semantic",
-        code: "GATE_REJECTED",
-        message: "The spec gate has blocking evidence.",
-        retryable: true,
-        retryKind: "semantic",
-      },
-      commandResult: gateResult,
-    });
-    manager.appendIssueLog({ specId, entry: source, idempotencyKey: source.issueLogId });
-    const repaired = new RunRepairPlanGateCommand().execute({
-      root,
-      mainRoot: root,
-      executionRoot: root,
-      specId,
-      flowManager: manager,
-      flowState: manager.load(specId),
-    });
-    assert.equal(repaired.ok, true, JSON.stringify(repaired));
-
-    for (const stepId of ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"]) {
-      fixture.settle(stepId);
-    }
+    assert.equal(repaired.result.kind, "spec-gate-repair-review-required");
+    assert.equal(manager.canonicalState(specId).findNode("approval").status, "invalidated",
+      "the genuine Gate repair publication must invalidate the former approval frontier");
+    await fixture.activateWithProducers("approval", { activateTarget: false });
     const recovered = manager.canonicalState(specId);
     assert.equal(recovered.current, null);
     assert.equal(recovered.findNode("approval").status, "invalidated");
@@ -1361,13 +1206,9 @@ describe("flow dispatch CLI", () => {
     assert.equal(fs.existsSync(worker.count), false);
   });
 
-  it("keeps risk-bearing acceptance decisions tokenless and manual under autoApprove", () => {
-    root = createTmpDir("sennel-flow-dispatch-manual-exception-");
-    const worker = installWorker(root);
-    const scenario = new DispatchFlowScenario(root, {
-      step: "acceptance-decision",
-      autoApprove: true,
-    });
+  it("keeps risk-bearing acceptance decisions tokenless and manual under autoApprove", async (t) => {
+    const { scenario, assets: worker } = await acceptanceDecisionScenario(t, installWorker);
+    root = scenario.root;
 
     const result = invoke(scenario);
 
@@ -1405,20 +1246,19 @@ describe("flow dispatch CLI", () => {
     );
   });
 
-  it("keeps acceptance review views tokenless and read-only across success, guarded failure, and binding reacquisition", () => {
-    root = createTmpDir("sennel-flow-dispatch-acceptance-view-lifecycle-");
-    const summaryAgent = installSummaryAgent(root);
-    const scenario = acceptanceDecisionScenario(root);
-    const boundary = invokeFlow(root, ["run", "dispatch", "--expect-binding", scenario.binding]);
+  it("keeps acceptance review views tokenless and read-only across success, guarded failure, and binding reacquisition", async (t) => {
+    const { scenario, assets: summaryAgent } = await acceptanceDecisionScenario(t, installSummaryAgent);
+    root = scenario.root;
+    const boundary = invokeFlow(root, ["run", "dispatch", "--expect-binding", scenario.binding()]);
 
-    assert.equal(boundary.status, 0, boundary.stderr);
+    assert.equal(boundary.status, 0, JSON.stringify({ stderr: boundary.stderr, errors: boundary.envelope?.errors }));
     assert.equal(boundary.envelope.data.dispatch.boundary, "await_user_decision");
     assert.equal(boundary.envelope.data.dispatch.approvalToken, undefined);
     assertReadOnlyDecisionViewLifecycle({
       root,
       manager: scenario.manager,
       state: scenario.state,
-      location: scenario.location,
+      location: scenario.fixture.location(),
       boundary,
       expectedBoundary: "await_user_decision",
       logicalKey: "acceptance.review",

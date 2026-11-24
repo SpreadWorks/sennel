@@ -11,7 +11,7 @@
 
 import fs from "fs";
 import path from "path";
-import { container, initContainer } from "../../lib/container.js";
+import { container, registerPresetBaseDependencies } from "../../lib/container.js";
 import { EsmModule } from "../../lib/esm-module.js";
 
 const MAX_DATA_SOURCE_FILES = 1000;
@@ -32,11 +32,9 @@ const MAX_DATA_SOURCE_FILES = 1000;
  */
 export async function loadDataSources(dataDir, opts) {
   const { existing, onInstance, presetKey } = opts || {};
-  // Factory-form presets resolve base classes from the container. Ensure the
-  // container is initialized so such presets can load even in contexts that
-  // did not explicitly call initContainer() (e.g. unit tests that exercise
-  // individual DataSources without going through the CLI entrypoint).
-  initContainer();
+  // Factory loading needs the package preset API, not ambient project config,
+  // logging, providers, or Flow services. CLI initialization remains separate.
+  registerPresetBaseDependencies();
   const sources = new Map(existing || []);
   const loadedClasses = new Map();
   let entries;

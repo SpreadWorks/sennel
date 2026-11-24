@@ -47,7 +47,7 @@ export async function dispatchFlowCommand({ container, group, name, argv = [], r
 /** Bind a canonical manager and external worker to the production dispatcher. */
 export function dispatchContainer({ root, mainRoot = root, inWorktree = false, config = {}, flowManager, agent }) {
   const container = new Container();
-  container.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
+  container.register("paths", { root, repositoryRoot: mainRoot, agentWorkDir: path.join(root, ".tmp") });
   container.register("mainRoot", mainRoot);
   container.register("config", config);
   container.register("inWorktree", inWorktree);
@@ -147,13 +147,13 @@ export function installGateProviderFake(respond, {
     if (name !== "agent") return originalGet(name);
     const declaredLimit = typeof promptCharacterLimit === "function" ? promptCharacterLimit() : promptCharacterLimit;
     if (transportContext !== null) {
-      const { root, flowManager } = transportContext();
+      const { root, mainRoot = root, flowManager } = transportContext();
       const agent = new ScenarioProviderAgent({
         config: { agent: { default: "fixture", timeout: 30, providers: {
           fixture: { command: "worker", args: ["{{PROMPT}}"],
             jsonSchemaFlag: "--schema", jsonSchemaMode: "inline" },
         } } },
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
+        paths: { root, repositoryRoot: mainRoot, agentWorkDir: path.join(root, ".tmp") },
         logger: new Logger({ logDir: path.join(root, ".tmp", "logs"), enabled: false }),
         flowManager,
       }, { respond, promptCharacterLimit: declaredLimit });

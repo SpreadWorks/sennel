@@ -1,3 +1,4 @@
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "./regular-file-snapshot.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -136,14 +137,14 @@ class MigrationFlowRepositoryEvidence {
 
 function readFlowClaims(specRoot, inspect) {
   const directory = path.join(specRoot.root, ...specRoot.relativePath.split("/"));
-  if (!fs.existsSync(directory)) return;
-  new RealDirectoryAuthority(directory).assertStable();
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+  const directoryAuthority = new RealDirectoryAuthority(directory);
+  if (!directoryAuthority.exists()) return;
+  for (const entry of directoryAuthority.entries({ withFileTypes: true })) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     try { FlowSpecId.from(entry.name); } catch { continue; }
     const candidateRoot = path.join(directory, entry.name);
     const paths = [[path.join(candidateRoot, "flow.json"), 1]];
-    for (const version of fs.readdirSync(candidateRoot, { withFileTypes: true })) {
+    for (const version of directoryAuthority.descendant(candidateRoot).entries({ withFileTypes: true })) {
       if (version.isDirectory() && !version.isSymbolicLink() && /^[0-9]+$/.test(version.name)) {
         paths.push([path.join(candidateRoot, version.name, "flow.json"), Number(version.name)]);
       }
@@ -151,9 +152,7 @@ function readFlowClaims(specRoot, inspect) {
     for (const [file, version] of paths) {
       let state;
       try {
-        const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) continue;
-        state = JSON.parse(fs.readFileSync(file, "utf8"));
+        state = JSON.parse(captureRegularFile(file, { label: "migration flow claim", maxBytes: DEFAULT_MAX_FILE_BYTES, requireSingleLink: true }).text());
       } catch { continue; }
       if (state === null || typeof state !== "object" || Array.isArray(state)) continue;
       // Only identity references are observed. An unrelated version's schema,

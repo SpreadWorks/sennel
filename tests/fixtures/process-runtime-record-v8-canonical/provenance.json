@@ -1,0 +1,60 @@
+{
+  "kind": "authentic-version-8-pure-canonical-records",
+  "sourceVersion": 8,
+  "createdUtc": "2026-10-30T14:48:23.603240+00:00",
+  "notPhysicalMigrationFixture": true,
+  "noAuthorityPrivateOutcomeSpoolLedgerOrOwnerInputsCopied": true,
+  "handoffSha256": "baee90a17bc53c51ca6cd45d4aae2a5c88b0e6efb8e241c0253c2f4481ee20f3",
+  "producerAssetSha256": "116edd38534d8b14947651eee68438b8a5164158852a8b81819ca52e5fab9e39",
+  "producerDriverSha256": "91a4b246ea97deb57561cb456c0653780d162581e0c228517e0ba959d73513a5",
+  "producerHelperSha256": "d16f49bce8f2de2266a8bc6eaa538399f3b6bf6f03701d36ea1227b41f3073f1",
+  "terminalFixtureManifestSha256": "3d798e87a911758d09569cb395ae30a3c05eefaf8f01cc0f6427ea583c0d49a3",
+  "terminalProducerReviewSha256": "1e4a349c4c290749c732a2b9b40f4e63a955e3682d08a2cef587a66c8ce67318",
+  "records": [
+    {
+      "relativePath": "registry.json",
+      "sha256": "09965345089c60b4a569f6190fd3f7a6cb05799b00150fa1ac14f256f41ce596",
+      "byteLength": 446,
+      "originalSource": "/dev/shm/sennel-e799-scope-20261029/reviews/v8-terminal-um5dzxk8/native26-XsDZ0R/target/.sennel/process-runtime/ff11d2929293ade1916c94f1846b5618ee6425b2901b9f3e2b7c0fa1ce344bc6/registry.json",
+      "originalGenerationBeforeEqualsAfter": [
+        29,
+        42487183,
+        33152,
+        446,
+        1793235411409185816,
+        1793235411410185814,
+        1
+      ]
+    },
+    {
+      "relativePath": "archives/f5052b64-f6fe-4105-9a35-56f31d4d91b7.json",
+      "sha256": "660b2a33afcc267083688fca5fbbf8cd6204653ae740c2ba4a4a0959d846d669",
+      "byteLength": 2420,
+      "originalSource": "/dev/shm/sennel-e799-scope-20261029/reviews/v8-terminal-um5dzxk8/native26-XsDZ0R/target/.sennel/process-runtime/ff11d2929293ade1916c94f1846b5618ee6425b2901b9f3e2b7c0fa1ce344bc6/archives/f5052b64-f6fe-4105-9a35-56f31d4d91b7.json",
+      "originalGenerationBeforeEqualsAfter": [
+        29,
+        42487182,
+        33152,
+        2420,
+        1793235411407185819,
+        1793235411408185818,
+        1
+      ]
+    },
+    {
+      "relativePath": "archives/2e9ded1e-d0db-4fa7-ae6b-30b18c03756a.json",
+      "sha256": "7a55b06f21daaf290d22c04fb5313d79f5ec39102984af2f76462c421c887939",
+      "byteLength": 21118,
+      "originalSource": "/dev/shm/sennel-e799-scope-20261029/reviews/v8-terminal-um5dzxk8/native26-XsDZ0R/target/.sennel/process-runtime/ff11d2929293ade1916c94f1846b5618ee6425b2901b9f3e2b7c0fa1ce344bc6/archives/2e9ded1e-d0db-4fa7-ae6b-30b18c03756a.json",
+      "originalGenerationBeforeEqualsAfter": [
+        29,
+        42487161,
+        33152,
+        21118,
+        1793235410599187226,
+        1793235410600187224,
+        1
+      ]
+    }
+  ]
+}

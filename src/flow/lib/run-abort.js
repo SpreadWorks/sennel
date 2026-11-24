@@ -2,6 +2,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { getPorcelainV2Status, runGit } from "../../lib/git-helpers.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
@@ -38,7 +39,7 @@ class FlowAbortJournal {
 
   constructor({ root, state, worktreePath, featureSha, reason, specLocation }) {
     const directory = path.join(root, PRODUCT.managedPath("recovery", "flow-abort"));
-    fs.mkdirSync(directory, { recursive: true });
+    RealDirectoryAuthority.resolve(directory, { create: true });
     this.file = new AtomicJsonFile(FlowAbortJournal.pathFor(root, state.specId));
     this.value = this.file.read(null) || {
       version: 2,
@@ -160,7 +161,7 @@ class AbortExecutionGuard {
 }
 
 function branchSha(root, branch) {
-  const result = runGit(["-C", root, "rev-parse", `refs/heads/${branch}`]);
+  const result = runGit(["-C", root, "rev-parse", `refs/heads/${branch}`], { cwd: root });
   if (!result.ok || !GIT_OBJECT_ID.test(result.stdout.trim())) {
     throw new Error(`flow abort feature branch could not be resolved: ${branch}`);
   }
@@ -230,7 +231,7 @@ export class RunAbortCommand extends FlowCommand {
           if (!removed.ok) return removed.env;
         } else if (!state.worktree && ownsFeatureBranch) {
           const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
-          const unrelatedDirty = getPorcelainV2Status(repositoryRoot).pathSet.toArray()
+          const unrelatedDirty = getPorcelainV2Status(repositoryRoot, { repositoryRoot }).pathSet.toArray()
             .filter((filePath) => outsideTargetSpec(filePath, specLocation.relativeDirectory)
               && !runtimeArtifacts.owns(filePath)
               && filePath !== path.relative(repositoryRoot, history.file).split(path.sep).join("/"));
@@ -243,7 +244,7 @@ export class RunAbortCommand extends FlowCommand {
               { dirtyFiles: unrelatedDirty },
             );
           }
-          const switched = runGit(["-C", repositoryRoot, "switch", state.baseBranch]);
+          const switched = runGit(["-C", repositoryRoot, "switch", state.baseBranch], { cwd: repositoryRoot });
           if (!switched.ok) {
             return Envelope.fail("run", "abort", "ABORT_BASE_SWITCH_FAILED", switched.stderr || switched.stdout);
           }
@@ -253,7 +254,7 @@ export class RunAbortCommand extends FlowCommand {
 
       if (!journal.atLeast("branch-deleted")) {
         if (ownsFeatureBranch) {
-          const branch = runGit(["-C", repositoryRoot, "rev-parse", "--verify", `refs/heads/${state.featureBranch}`]);
+          const branch = runGit(["-C", repositoryRoot, "rev-parse", "--verify", `refs/heads/${state.featureBranch}`], { cwd: repositoryRoot });
           if (branch.ok) {
             const deleted = deleteFeatureBranchForCleanup({
               mainRepoPath: repositoryRoot,
@@ -272,8 +273,9 @@ export class RunAbortCommand extends FlowCommand {
       }
 
       if (!journal.atLeast("spec-removed")) {
-        fs.rmSync(specLocation.directory, { recursive: true });
-        if (fs.readdirSync(rootLocation.directory).length === 0) fs.rmdirSync(rootLocation.directory);
+        new RealDirectoryAuthority(specLocation.directory).removeTree();
+        const rootAuthority = new RealDirectoryAuthority(rootLocation.directory);
+        if (rootAuthority.entries().length === 0) rootAuthority.removeEmpty();
         journal.advance("spec-removed");
       }
 

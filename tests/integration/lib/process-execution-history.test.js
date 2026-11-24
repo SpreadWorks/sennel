@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { ProcessExecutionRuntime, ProcessExecutionHistoricalInventory,
   ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { executionValueDigest } from "../../../src/lib/process-execution-values.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
-function fixture(t) {
+function fixture(t, { cleanupRunId } = {}) {
   const mainRoot = createTmpDir("process-history-");
   const executionRoot = path.join(mainRoot, "checkout");
-  t.after(() => removeTmpDir(mainRoot));
+  const runId = "history-run", specId = "history-spec";
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot, executionRoot, runId: cleanupRunId ?? runId, specId }));
   fs.mkdirSync(executionRoot);
-  return { mainRoot, executionRoot, runId: "history-run", specId: "history-spec" };
+  return { mainRoot, executionRoot, runId, specId };
 }
 
 function savedBytes(directory) {
@@ -85,7 +86,12 @@ test("history reads live owner reservations without promoting an unfinished call
   assert.equal(history.executions[0].calls[0].receipt, null);
   assert.equal(history.executions[0].calls[0].outcome, null);
   assert.deepEqual(savedBytes(path.join(options.mainRoot, ".sennel")), before);
-  await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  const revocation = await runtime.revokeCall(call);
+  assert.equal(revocation.scope, "unlaunched-reservation");
+  const revoked = ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0];
+  assert.equal(revoked.status, "revoked");
+  assert.equal(revoked.receipt, null);
+  assert.deepEqual(revoked.revocation, revocation.toJSON());
   await runtime.close();
 });
 
@@ -108,14 +114,14 @@ test("a stopped managed call retains its stop observation separately from reserv
   assert.ok(Date.parse(call.outcome.timing.stopRequestedAt) >= Date.parse(call.outcome.timing.startedAt));
   assert.ok(Date.parse(call.outcome.timing.finishedAt) >= Date.parse(call.outcome.timing.stopRequestedAt));
   assert.ok(call.outcome.timing.durationMs >= 0);
-  assert.equal(call.receipt.stopEvidence.status, "confirmed");
+  assert.equal(call.receipt.observation.kind, "exited");
   assert.equal(call.receipt.outcomeDigest, executionValueDigest(call.outcome));
   assert.deepEqual(reason.timing, call.outcome.timing);
   assert.deepEqual(savedBytes(path.join(options.mainRoot, ".sennel")), before);
   await runtime.close();
 });
 
-test("an output barrier exposes an ongoing launcher start without writes, then the same call closes with its receipt", async (t) => {
+test("an output barrier exposes the registered start without writes, then the same call closes with its receipt", async (t) => {
   const options = fixture(t);
   const runtime = await ProcessExecutionRuntime.acquire(options);
   t.after(async () => { if (!runtime.closed) await runtime.close(); });
@@ -128,38 +134,40 @@ test("an output barrier exposes an ongoing launcher start without writes, then t
       timeoutMs: 20000, graceMs: 100, abortSignal: controller.signal,
       onStdout() {
         try {
-          const directory = path.join(options.mainRoot, ".sennel");
-          const before = savedBytes(directory);
-          const history = ProcessExecutionRuntime.readHistoricalInventory(options);
-          running = history.executions[0].calls[0];
+          running = ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0];
           assert.equal(running.status, "running");
           assert.equal(running.outcome, null);
           assert.equal(running.receipt, null);
-          assert.equal(running.launcherObservationCoverage, "recorded");
-          assert.equal(running.launcherObservation.state, "running");
-          assert.equal(running.launcherObservation.providerStarted, true);
-          assert.ok(Date.parse(running.launcherObservation.timing.startedAt));
-          assert.equal(running.launcherObservation.timing.finishedAt, null);
-          assert.equal(running.launcherObservation.timing.durationMs, null);
-          assert.equal("capability" in running.launcherObservation, false);
-          assert.equal(history.digest, ProcessExecutionRuntime.readHistoricalInventory(options).digest);
-          assert.deepEqual(savedBytes(directory), before);
+          assert.equal(running.observation, null);
+          assert.ok(Date.parse(running.startedAt));
+          assert.equal("launcherObservation" in running, false);
+          runtime.store.admission.runExclusive(() => {
+            const directory = path.join(options.mainRoot, ".sennel");
+            const before = savedBytes(directory);
+            const history = ProcessExecutionRuntime.readHistoricalInventory(options);
+            assert.deepEqual(history.executions[0].calls[0], running);
+            assert.equal(history.digest, ProcessExecutionRuntime.readHistoricalInventory(options).digest);
+            assert.deepEqual(savedBytes(directory), before);
 
-          const file = path.join(runtime.store.callsAuthority.directory, running.callId, "outcome.json");
-          const saved = fs.readFileSync(file);
-          try {
-            fs.unlinkSync(file);
-            const unavailable = ProcessExecutionRuntime.readHistoricalInventory(options);
-            assert.equal(unavailable.executions[0].calls[0].launcherObservation, null);
-            assert.equal(unavailable.executions[0].calls[0].launcherObservationCoverage, "unavailable");
-            assert.notEqual(unavailable.digest, history.digest);
-            fs.writeFileSync(file, "{");
-            assert.throws(() => ProcessExecutionRuntime.readHistoricalInventory(options),
-              (error) => error.code === "PROCESS_EXECUTION_RECORD_UNREADABLE");
-            fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(saved), callId: "another-call" }));
-            assert.throws(() => ProcessExecutionRuntime.readHistoricalInventory(options),
-              (error) => error.code === "PROCESS_EXECUTION_BINDING_MISMATCH");
-          } finally { fs.writeFileSync(file, saved); }
+            const hadCallDirectory = fs.existsSync(path.join(runtime.store.callsAuthority.directory, running.callId));
+            const callDirectory = runtime.store.callDirectory(running.callId);
+            const file = path.join(callDirectory, "outcome.json");
+            const saved = fs.existsSync(file) ? fs.readFileSync(file) : null;
+            try {
+              if (saved !== null) fs.unlinkSync(file);
+              // The coordinator inventory is authoritative even while the child runs.
+              // A private executor spool is not a second observational truth source.
+              assert.deepEqual(ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0], running);
+              fs.writeFileSync(file, "{");
+              assert.deepEqual(ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0], running);
+            } finally {
+              if (saved === null) {
+                if (fs.existsSync(file)) fs.unlinkSync(file);
+              } else fs.writeFileSync(file, saved);
+              if (!hadCallDirectory) fs.rmdirSync(callDirectory);
+            }
+            assert.deepEqual(savedBytes(directory), before);
+          });
         } catch (error) { barrierFailure = error; }
         finally { controller.abort(reason); }
       },
@@ -170,13 +178,11 @@ test("an output barrier exposes an ongoing launcher start without writes, then t
   const stopped = ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0];
   assert.equal(stopped.callId, running.callId);
   assert.equal(stopped.status, "stopped");
-  assert.equal(stopped.launcherObservation, null);
-  assert.equal(stopped.launcherObservationCoverage, "not-applicable");
-  assert.equal(stopped.outcome.timing.startedAt, running.launcherObservation.timing.startedAt);
+  assert.equal(stopped.observation.kind, "exited");
+  assert.equal(stopped.outcome.timing.startedAt, running.startedAt);
   assert.equal(stopped.receipt.outcomeDigest, executionValueDigest(stopped.outcome));
   assert.deepEqual(savedBytes(path.join(options.mainRoot, ".sennel")), before);
-  // The receipt is the final authority: a retired launcher's optional spool
-  // record must no longer participate in historical verification.
+  // A private executor spool does not replace the retained coordinator receipt.
   fs.unlinkSync(path.join(runtime.store.callsAuthority.directory, stopped.callId, "outcome.json"));
   const retiredBytes = savedBytes(path.join(options.mainRoot, ".sennel"));
   assert.deepEqual(ProcessExecutionRuntime.readHistoricalInventory(options).executions[0].calls[0], stopped);
@@ -185,13 +191,17 @@ test("an output barrier exposes an ongoing launcher start without writes, then t
 });
 
 test("historical archives survive owner turnover, newer run and deleted checkout with exact source identity", async (t) => {
-  const options = fixture(t);
+  const successorRunId = "newer-run";
+  const options = fixture(t, { cleanupRunId: successorRunId });
   const runtime = await ProcessExecutionRuntime.acquire(options);
   const checkoutIdentity = runtime.checkoutIdentity;
-  const call = await runtime.reserveCall({ invocation: { commandId: "reserved" } });
-  await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  const completed = await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", ""], {
+    cwd: options.executionRoot, timeoutMs: 10000, commandId: "reserved",
+  }));
+  const receipt = completed.processExecutionStopReceipt;
+  assert.equal(receipt.observation.kind, "exited");
   await runtime.close();
-  const successor = await ProcessExecutionRuntime.acquire({ ...options, runId: "newer-run" });
+  const successor = await ProcessExecutionRuntime.acquire({ ...options, runId: successorRunId });
   await successor.close();
   fs.rmdirSync(options.executionRoot);
   const before = savedBytes(path.join(options.mainRoot, ".sennel"));
@@ -200,7 +210,7 @@ test("historical archives survive owner turnover, newer run and deleted checkout
   assert.equal(history.inventory.executions.length, 2);
   assert.equal(history.executions.length, 1);
   assert.equal(history.executions[0].executionId, runtime.executionId);
-  assert.equal(history.executions[0].calls[0].receipt.callId, call.callId);
+  assert.equal(history.executions[0].calls[0].receipt.callId, receipt.callId);
   assert.deepEqual(history.checkoutIdentity.toJSON(), checkoutIdentity.toJSON());
   assert.deepEqual(savedBytes(path.join(options.mainRoot, ".sennel")), before);
   assert.throws(() => ProcessExecutionRuntime.readHistoricalInventory({ ...options,

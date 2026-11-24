@@ -12,7 +12,7 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { PrepareArtifactScenario } from "../../support/prepare-artifact-scenario.js";
-import { dispatchContainer, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
@@ -22,7 +22,7 @@ import * as Definition from "../../../src/flow/definition.js";
 import { CurrentFlowVersionStore } from "../../../src/flow/lib/current-flow-state.js";
 import { WorktreeFlowBindingStore } from "../../../src/lib/worktree-flow-binding.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { LockOwnerSession } from "../../../src/lib/process-lock.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { PrepareExecutionObserver } from "../../support/infrastructure/prepare-execution-observer.js";
 
@@ -33,6 +33,26 @@ function journalRecord(scenario) {
 
 function assertNoWorker(scenario) {
   assert.equal(fs.existsSync(path.join(scenario.root, ".tmp", "unexpected-agent-calls")), false);
+}
+
+function exposeProcessRuntime(scenario, { operationLock = false } = {}) {
+  fs.appendFileSync(path.join(scenario.root, ".gitignore"), [
+    "!/.sennel/process-runtime/",
+    "!/.sennel/process-runtime/**",
+    "!/.sennel/process-runtime-lookalike/",
+    "!/.sennel/process-runtime-lookalike/**",
+    ...(operationLock ? ["!/.sennel/.repository-flow-operation.lock"] : []),
+    "",
+  ].join("\n"));
+  scenario.git(["add", ".gitignore"]);
+  scenario.git(["commit", "-m", "Expose process runtime for preparation preflight"]);
+  scenario.baseOid = scenario.git(["rev-parse", "HEAD"]).trim();
+}
+
+function assertNestedProjectRoot(scenario) {
+  const gitRoot = fs.realpathSync(scenario.git(["rev-parse", "--show-toplevel"]).trim());
+  assert.equal(gitRoot, fs.realpathSync(scenario.repositoryRoot));
+  assert.notEqual(gitRoot, fs.realpathSync(scenario.root));
 }
 
 function canonicalBytes(scenario) {
@@ -179,7 +199,7 @@ function boundaryInputWithChangedField(value, field, replacement) {
 /** Observe the real Draft consumer at the sole external worker boundary. */
 async function startDraft(scenario) {
   const requests = [];
-  const agent = { async call(prompt, options) {
+  const agent = withScenarioProviderAdmission({ async call(prompt, options) {
     const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
     const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
     requests.push({ request,
@@ -189,7 +209,7 @@ async function startDraft(scenario) {
     sealWorkerArtifactHandoff({ requestPath,
       invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
     return "sealed";
-  } };
+  } });
   const manager = scenario.reload();
   const ctx = scenario.context();
   ctx.expectBinding = FlowTargetBinding.capture({ flowState: ctx.flowState,
@@ -754,7 +774,7 @@ for (const { stepId, fault, mode } of persistenceCases) {
         const retainedJournal = journalRecord(scenario);
         assert.notEqual(retainedJournal, null, "unacknowledged committed work must retain its owned recovery journal");
         assert.equal(retainedJournal.attemptId, ownedJournal.attemptId);
-        assert.deepEqual(retainedJournal.processIdentity, ownedJournal.processIdentity);
+        assert.deepEqual(retainedJournal.owner, ownedJournal.owner);
         savedPreparation(scenario, stepId, kind, "draft");
       }
     } else {
@@ -945,7 +965,7 @@ it("P20 required plugin success publishes real evidence that survives reload and
   assertPreparedDraftInput(scenario, requests, receipt);
 });
 
-it("P21 a terminated worktree owner reloads through journal recovery into one preparation and actual Draft", async (t) => {
+it("P21 a terminated worktree owner preserves unknown exclusion and refuses recovery without mutation", async (t) => {
   const scenario = PrepareArtifactScenario.create(t, { mode: "worktree", issue: 472 });
   await scenario.initialize();
   const preparing = scenario.flowManager.loadPreparingFlow(scenario.runId);
@@ -955,53 +975,30 @@ it("P21 a terminated worktree owner reloads through journal recovery into one pr
   assert.equal(abandoned.runId, scenario.runId);
   assert.equal(abandoned.specId, stopped.specId);
   assert.equal(abandoned.expectedOid, scenario.baseOid);
-  assert.equal(fs.existsSync(abandoned.worktreePath), true,
-    "abrupt process exit must leave the production Git publication instead of synchronous rollback");
+  assert.equal(fs.existsSync(abandoned.worktreePath), true);
   assert.equal(scenario.git(["rev-parse", abandoned.branchName]).trim(), scenario.baseOid);
   assert.equal(fs.existsSync(path.join(scenario.root, "specs", abandoned.specId)), false);
   const operationLock = new RepositoryFlowOperationLock({ mainRoot: scenario.root });
   const abandonedOperation = operationLock.lock.inspect();
-  assert.notEqual(abandonedOperation, null, "the exiting command must leave its real operation owner");
-  const identities = new ProcessIdentitySource();
-  assert.equal(identities.assess(abandoned.processIdentity).status, "stale");
-  assert.equal(identities.assess(abandonedOperation.processIdentity).status, "stale");
-  assert.equal(abandoned.processIdentity.pid, abandonedOperation.processIdentity.pid);
+  assert.notEqual(abandonedOperation, null);
+  assert.deepEqual(new LockOwnerSession(abandonedOperation).toJSON(), abandoned.owner);
+  const journalPath = path.join(scenario.root, ".sennel", ".worktree-prepare-attempt.json");
+  const journalBefore = fs.readFileSync(journalPath);
+  const lockBefore = fs.readFileSync(operationLock.lockPath);
+  const gitBefore = scenario.git(["worktree", "list", "--porcelain"]);
   assertNoWorker(scenario);
   assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
-
-  const observer = new PrepareExecutionObserver(t);
-  let replacement = null;
-  await scenario.prepare({ worktreePrepareFaultInjector(event) {
-    if (event.phase === "after-journal-publication") replacement = journalRecord(scenario);
-  } });
-  await t.test("P21 existing stale journal and operation-owner recovery preserves identity and one Git publication", () => {
-    assert.notEqual(replacement, null, "stale journal recovery must publish a fresh owned attempt");
-    assert.notEqual(replacement.attemptId, abandoned.attemptId);
-    assert.equal(replacement.runId, abandoned.runId);
-    assert.equal(replacement.specId, abandoned.specId);
-    assert.equal(scenario.specId, abandoned.specId);
-    assert.equal(scenario.executionRoot, abandoned.worktreePath);
-    assert.equal(scenario.reload().loadReadOnly(scenario.specId).runId, scenario.runId);
-    assert.equal(journalRecord(scenario), null);
-    assert.equal(operationLock.lock.inspect(), null);
-    assert.equal(scenario.git(["worktree", "list", "--porcelain"]).match(/^worktree /gm).length, 2);
-    assert.equal(scenario.git(["for-each-ref", "--format=%(refname:short)", `refs/heads/${abandoned.branchName}`]).trim(),
-      abandoned.branchName);
-    assert.equal(scenario.git(["rev-parse", "HEAD"], scenario.executionRoot).trim(), scenario.baseOid);
-    assertNoWorker(scenario);
-  });
-  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
-  const receipt = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
-  observer.assertExecuted(["branch", "prepare-spec"]);
-  observer.restore();
+  await assert.rejects(() => scenario.prepare(), (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY");
+  assert.deepEqual(fs.readFileSync(journalPath), journalBefore);
+  assert.deepEqual(fs.readFileSync(operationLock.lockPath), lockBefore);
+  assert.equal(scenario.git(["worktree", "list", "--porcelain"]), gitBefore);
+  assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
   assertNoWorker(scenario);
-  const { requests } = await startDraft(scenario);
-  assertPreparedDraftInput(scenario, requests, receipt);
 });
 
 it("P22 branch publication stops before mandatory work and resumes without another branch Activity", async (t) => {
   // no-branch is the representative branch leaf publication; Git restart is
-  // separately covered by P21. This checkpoint is a local persistence fault,
+  // covered by prepare-worktree-branch-resume. This is a local persistence fault,
   // since production has no public fault callback immediately after branch save.
   const scenario = PrepareArtifactScenario.create(t);
   scenario.installPreparePlugin({ observeInvocation: true });
@@ -1185,16 +1182,11 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
   const scenario = PrepareArtifactScenario.create(t, { mode: "worktree" });
   const advancedOid = advancedBaseRevision(scenario);
   await scenario.initialize();
-  let startFingerprint = "100";
-  const identities = new ProcessIdentitySource({ platform: "linux",
-    readBootIdentity: () => "prepare-race-fixture-boot", readProcessStartFingerprint: () => startFingerprint });
-  scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
-    inWorktree: false, processIdentitySource: identities });
   const failure = new Error("Stop after journal-bound branch publication");
   const fault = new PreparePublicationFault(t, { scenario, stepId: "branch", kind: "branch-prepared",
     fault: "receipt-read-failure", failure });
   let publishedJournal = null;
-  const stopped = await scenario.prepare({ worktreePrepareProcessIdentitySource: identities,
+  const stopped = await scenario.prepare({
     worktreePrepareFaultInjector(event) {
       if (event.phase !== "after-journal-publication") return;
       publishedJournal = journalRecord(scenario);
@@ -1202,7 +1194,7 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
     },
   }).then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
   fault.restore();
-  assert.notEqual(publishedJournal, null);
+  assert.notEqual(publishedJournal, null, stopped.error?.stack ?? JSON.stringify(stopped.value));
   assert.equal(publishedJournal.expectedOid, scenario.baseOid);
   assert.equal(scenario.git(["rev-parse", publishedJournal.branchName]).trim(), scenario.baseOid,
     "Git publication after journal creation must retain the journal's selected seed");
@@ -1219,13 +1211,13 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
   assertNoWorker(scenario);
   scenario.git(["update-ref", "refs/heads/main", scenario.baseOid, advancedOid]);
   const gitPublication = scenario.git(["worktree", "list", "--porcelain"]);
-  // Only the external process-start fingerprint changes. This proves persisted
-  // recovery composition; actual process-exit recovery is owned by P21.
-  startFingerprint = "101";
-  assert.equal(identities.assess(journal.processIdentity).status, "stale");
+  // The failed command released the actual operation lock in finally; a fresh
+  // manager can acquire a new token and validate the saved branch receipt.
+  assert.deepEqual(new LockOwnerSession(journal.owner).toJSON(), journal.owner);
+  assert.equal(new RepositoryFlowOperationLock({ mainRoot: scenario.root }).lock.inspect(), null);
   scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
-    inWorktree: false, processIdentitySource: identities });
-  assert.equal((await scenario.prepare({ worktreePrepareProcessIdentitySource: identities })).result, "ok");
+    inWorktree: false });
+  assert.equal((await scenario.prepare()).result, "ok");
   assert.equal(scenario.git(["worktree", "list", "--porcelain"]), gitPublication);
   assert.equal(journalRecord(scenario), null);
   assert.deepEqual(savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec"), branch);
@@ -1277,3 +1269,130 @@ it("P27 required config preflight checks the selected base tree after its ref mo
   assert.equal(scenario.git(["worktree", "list", "--porcelain"]).match(/^worktree /gm).length, 1);
   assertNoWorker(scenario);
 });
+
+it("P28 CLI-owned process runtime permits branch preparation, durable replay and the actual Draft consumer", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+  exposeProcessRuntime(scenario);
+  await scenario.initialize({ cli: true });
+  assert.match(scenario.git(["status", "--short"]), /\?\? \.sennel\/process-runtime\//,
+    "the normal CLI must produce the runtime artifact that branch preflight encounters");
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  const state = scenario.reload().canonicalState(scenario.specId);
+  assert.equal(state.runId, scenario.runId);
+  assert.equal(state.execution.mode, "branch");
+  assert.equal(scenario.git(["branch", "--show-current"]).trim(), state.execution.featureBranch);
+  assert.equal(scenario.git(["rev-parse", "HEAD"]).trim(), scenario.baseOid);
+  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
+  const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+  const before = canonicalBytes(scenario);
+  scenario.reload();
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  assert.deepEqual(canonicalBytes(scenario), before,
+    "a fresh CLI retry must reuse the persisted preparation without another publication");
+  assertNoWorker(scenario);
+  const { requests } = await startDraft(scenario);
+  assertPreparedDraftInput(scenario, requests, ready);
+  assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+});
+
+for (const userPath of [".sennel/config.json", ".sennel/process-runtime-lookalike/資料.txt"]) {
+  it(`P29 owned process runtime does not hide dirty user path ${userPath}`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+    exposeProcessRuntime(scenario);
+    await scenario.initialize({ cli: true });
+    const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+    const branches = scenario.git(["branch", "--format=%(refname)"]);
+    const file = path.join(scenario.root, userPath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, userPath.endsWith("config.json")
+      ? JSON.stringify({ ...scenario.config, lang: "ja" }) : "uncommitted user content\n");
+    const result = scenario.cli(["prepare", "--title", "prepare-artifact", "--base", "main", "--run-id", scenario.runId]);
+    assert.equal(result.status, 1);
+    assert.equal(result.envelope?.ok, false);
+    assert.deepEqual(result.envelope.errors.map((entry) => entry.code), ["ERROR"]);
+    const messages = result.envelope.errors.flatMap((entry) => entry.messages).join("\n");
+    assert.match(messages, /dirty worktree/);
+    assert.ok(messages.includes(userPath.endsWith("config.json") ? userPath : ".sennel/process-runtime-lookalike/"));
+    assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+    assert.equal(fs.existsSync(path.join(scenario.root, "specs")), false);
+    assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+    assert.equal(journalRecord(scenario), null);
+    assertNoWorker(scenario);
+  });
+}
+
+it("P30 competing active branch refusal precedes user dirtiness when process runtime is visible", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+  exposeProcessRuntime(scenario);
+  await scenario.initialize({ cli: true });
+  await scenario.prepare({ cli: true });
+  const firstSpecId = scenario.specId;
+  const before = canonicalBytes(scenario);
+  const branches = scenario.git(["branch", "--format=%(refname)"]);
+  await scenario.initialize({ cli: true });
+  const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+  fs.appendFileSync(path.join(scenario.root, "README.md"), "uncommitted user content\n");
+  const result = scenario.cli(["prepare", "--title", "competing-branch", "--base", "main", "--run-id", scenario.runId]);
+  assert.equal(result.status, 1);
+  assert.equal(result.envelope?.ok, false);
+  assert.ok(result.envelope.errors.flatMap((entry) => entry.messages).join("\n")
+    .includes(`active branch flow already exists: ${firstSpecId}`));
+  assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+  assert.deepEqual(canonicalBytes(scenario), before);
+  assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+  assert.equal(fs.readdirSync(path.join(scenario.root, "specs")).length, 1);
+  assertNoWorker(scenario);
+});
+
+it("P31 nested configured project prepares with its own visible runtime and operation lock and feeds Draft", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch", projectDirectory: "packages/app" });
+  assertNestedProjectRoot(scenario);
+  exposeProcessRuntime(scenario, { operationLock: true });
+  assert.equal(scenario.git(["status", "--short"]), "");
+  await scenario.initialize({ cli: true });
+  assert.match(scenario.git(["status", "--short"]), /\?\? \.sennel\/process-runtime\//);
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  const state = scenario.reload().canonicalState(scenario.specId);
+  assert.equal(state.runId, scenario.runId);
+  assert.equal(state.execution.mode, "branch");
+  assert.equal(scenario.git(["branch", "--show-current"]).trim(), state.execution.featureBranch);
+  assert.equal(scenario.git(["rev-parse", "HEAD"]).trim(), scenario.baseOid);
+  assert.equal(fs.existsSync(scenario.flowManager.specLocation(scenario.specId).specFile), true);
+  assert.equal(fs.existsSync(path.join(scenario.root, ".sennel", ".repository-flow-operation.lock")), false);
+  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
+  const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+  assertNoWorker(scenario);
+  const { requests } = await startDraft(scenario);
+  assertPreparedDraftInput(scenario, requests, ready);
+  assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+});
+
+for (const userPath of ["README.md", "packages/sibling/untracked.txt"]) {
+  it(`P31 nested configured project refuses outside user change ${userPath} without preparation effects`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode: "branch", projectDirectory: "packages/app" });
+    assertNestedProjectRoot(scenario);
+    exposeProcessRuntime(scenario, { operationLock: true });
+    await scenario.initialize({ cli: true });
+    const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+    const branches = scenario.git(["branch", "--format=%(refname)"]);
+    const file = path.join(scenario.repositoryRoot, userPath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, "uncommitted outside user content\n");
+    const result = scenario.cli(["prepare", "--title", "prepare-artifact", "--base", "main", "--run-id", scenario.runId]);
+    assert.equal(result.status, 1);
+    assert.equal(result.envelope?.ok, false);
+    assert.deepEqual(result.envelope.errors.map((entry) => entry.code), ["ERROR"]);
+    const messages = result.envelope.errors.flatMap((entry) => entry.messages).join("\n");
+    assert.match(messages, /dirty worktree/);
+    assert.ok(messages.includes(userPath === "README.md" ? "../../README.md" : "../sibling/"),
+      "the refusal must retain the user change outside the configured project");
+    assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+    assert.equal(scenario.git(["branch", "--show-current"]).trim(), "main");
+    assert.equal(fs.existsSync(path.join(scenario.root, "specs")), false);
+    assert.equal(fs.existsSync(path.join(scenario.repositoryRoot, "specs")), false);
+    assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+    assert.equal(journalRecord(scenario), null);
+    assert.equal(fs.existsSync(path.join(scenario.root, ".sennel", ".repository-flow-operation.lock")), false);
+    assertNoWorker(scenario);
+  });
+}

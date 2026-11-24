@@ -1,0 +1,22 @@
+{
+  "id": "portable-runtime-observation",
+  "sourceId": "04309f5bfb84895b26743161cc4185eb13c849499c05f2d5674351d78b36d196",
+  "kind": "agent-started",
+  "entityId": "portable-logical-call",
+  "recordedAt": "2026-10-25T00:00:00.000Z",
+  "binding": {
+    "flowVersionId": "flow-version-portable-state-created",
+    "runId": "run-portable-state-created",
+    "specId": "portable-state-created",
+    "nodeId": "branch",
+    "attemptId": "attempt-branch-05537a0d-923f-4134-8058-a539dd752295",
+    "taskId": null,
+    "attemptSequence": 1,
+    "executionContractId": null,
+    "executionGeneration": null,
+    "outboxAttemptId": null
+  },
+  "data": {
+    "source": "immutable-old-producer-capture"
+  }
+}

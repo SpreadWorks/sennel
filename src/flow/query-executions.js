@@ -1,4 +1,5 @@
 import { ProcessExecutionRuntime } from "../lib/process-execution-runtime.js";
+import { withRuntimeRecordMigrationPreview } from "../lib/process-runtime-migration-guidance.js";
 import { validateSchema } from "../lib/schema-validate.js";
 import { captureExecutionObservations, executionProducerCoverage } from "../lib/flow-execution-observation.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../lib/flow-artifact-contract.js";
@@ -7,7 +8,7 @@ import { FlowExecutionContract } from "./lib/flow-execution-contract.js";
 import { capturePromptResponseAdoptionsFromView } from "./lib/prompt-response-adoption-publication.js";
 import { CurrentFlowOutboxAttemptHistory } from "./lib/flow-outbox-attempt-history.js";
 import { CurrentFlowAttemptHistory } from "./lib/current-flow-state.js";
-import { FLOW_QUERY_ERROR_CODES, FLOW_QUERY_LIMITS, FLOW_QUERY_RESPONSE_SCHEMA, isFlowQueryDatetime, validateFlowQueryRequest } from "./query-contract.js";
+import { FLOW_QUERY_SCHEMA_REVISION, FLOW_QUERY_ERROR_CODES, FLOW_QUERY_LIMITS, FLOW_QUERY_RESPONSE_SCHEMA, isFlowQueryDatetime, validateFlowQueryRequest } from "./query-contract.js";
 import { QueryError, canonicalDigest, canonicalJson, boundedPublic, publicArtifactId } from "./query-values.js";
 
 const ITEM_KINDS = Object.freeze(["step-attempt", "agent-invocation", "provider-attempt", "process-call", "outbox-attempt"]);
@@ -165,24 +166,26 @@ export class QueryExecutionInputs {
   }
 
   static async capture({ mainRoot, state, activities, catalog, readArtifact, artifactCapture }) {
-    let observations;
+    let capturedObservations;
     try {
-      observations = (await captureExecutionObservations({ catalog, readArtifact,
-        expectedBinding: { flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId } })).toJSON();
+      capturedObservations = await captureExecutionObservations({ catalog, readArtifact,
+        expectedBinding: { flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId } });
     } catch (cause) {
       if (cause instanceof QueryError) throw cause;
       inconsistent("Canonical execution observations are inconsistent", cause);
     }
+    const observations = capturedObservations.toJSON();
     const attempts = new Set(activities.flatMap((activity) => [activity.attemptId, activity.transition.attempt?.id]).filter(Boolean));
     if (state.attempt) attempts.add(state.attempt.id);
     const runtimeSources = [];
     const seen = new Set();
-    for (const manifest of observations.manifests) {
+    for (const manifest of capturedObservations.manifests) {
       if (manifest.runtimeSourceId === null || seen.has(manifest.runtimeSourceId)) continue;
       seen.add(manifest.runtimeSourceId);
       try {
-        const captured = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot, executionRoot: manifest.checkoutIdentity.executionRoot,
-          checkoutIdentity: manifest.checkoutIdentity, runId: state.runId, specId: state.specId });
+        const runtimeRoots = { mainRoot, executionRoot: manifest.checkoutIdentity.executionRoot };
+        const captured = withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.readHistoricalInventory({ ...runtimeRoots,
+          checkoutIdentity: manifest.checkoutIdentity, runId: state.runId, specId: state.specId }));
         const executions = captured.executions.map(serialize).map((execution) => ({ executionId: execution.executionId,
           status: execution.status, calls: execution.calls.map(serialize).filter((call) => {
             const binding = call.binding;
@@ -485,8 +488,8 @@ export class QueryExecutionGraph {
     const logical = this.ref("agent-invocation", { logicalInvocationId: start.data.logicalInvocationId });
     const physicalStart = this.inputs.runtimeSources.flatMap((source) => source.executions.flatMap((execution) => execution.calls))
       .find((call) => call.invocation.providerAttemptId === start.entityId
-        && (call.outcome?.providerStarted === true || call.launcherObservation?.providerStarted === true));
-    const physicalTiming = physicalStart?.outcome?.timing ?? physicalStart?.launcherObservation?.timing;
+        && (call.outcome?.providerStarted === true || call.startedAt !== null));
+    const physicalTiming = physicalStart?.outcome?.timing ?? (physicalStart ? { startedAt: physicalStart.startedAt, finishedAt: physicalStart.observation?.observedAt ?? null, durationMs: null } : null);
     const sources = facts.map((fact) => this.sourceForFact(fact));
     if (physicalStart) {
       const runtimeSource = this.inputs.runtimeSources.find((source) => source.executions.some((execution) => execution.calls.includes(physicalStart)));
@@ -541,8 +544,8 @@ export class QueryExecutionGraph {
       if (providerStart && invocation.measurementId != null && invocation.measurementId !== providerStart.data.measurementId) inconsistent("Physical provider measurement differs from its immutable reservation");
       const logical = logicalId ? this.ref("agent-invocation", { logicalInvocationId: logicalId }) : null;
       const provider = providerId ? this.ref("provider-attempt", { providerAttemptId: providerId }) : null;
-      const outcome = call.outcome ?? (call.launcherObservation?.state === "finished" ? call.launcherObservation.outcome : null);
-      const timing = call.outcome?.timing ?? call.launcherObservation?.timing;
+      const outcome = call.outcome;
+      const timing = call.outcome?.timing ?? { startedAt: call.startedAt, finishedAt: call.observation?.observedAt ?? null, durationMs: null };
       const outbox = this.outboxRefs.get(call.binding.outboxAttemptId);
       const controlFailure = call.controlFailure;
       const stop = call.receipt;
@@ -563,8 +566,7 @@ export class QueryExecutionGraph {
           signal: outcome.signal ?? null, startFailureCode: outcome.startFailureCode ?? outcome.error?.code ?? null },
         stopVerification: stop ? "verified" : "unverified", controlFailure: controlFailure ? { code: controlFailure.code ?? null, reason: controlFailure.reason ?? null } : null,
         timing: { reservedAt: invocation.reservedAt ?? null, startedAt: timing?.startedAt ?? null, finishedAt: timing?.finishedAt ?? null, durationMs: timing?.durationMs ?? null } }, [sourceRef],
-      call.launcherObservationCoverage === "unavailable" ? Object.fromEntries(["/timing/startedAt", "/timing/finishedAt", "/timing/durationMs"].map((pointer) => [pointer,
-        { availability: "unavailable", reason: "LAUNCHER_OBSERVATION_NOT_RETAINED", sources: [sourceRef] }])) : {}));
+      {}));
       if (parent) this.relate("calls", parent, reference, { executionId: execution.executionId, callId: call.callId, parentCallId: call.parentCallId }, [sourceRef]);
       if (provider) this.relate("realizes", reference, provider, { executionId: execution.executionId, callId: call.callId, providerAttemptId: providerId }, [sourceRef]);
       if (outbox) this.relate("part-of-outbox", reference, outbox, { executionId: execution.executionId, callId: call.callId, outboxAttemptId: call.binding.outboxAttemptId }, [sourceRef]);
@@ -706,7 +708,7 @@ export class QueryExecutionGraph {
 /** The executions cursor is bound to both selection and observed source generation. */
 export class ExecutionCursor {
   constructor(request, snapshotId, afterId) {
-    this.payload = { version: 1, schemaRevision: 3, resource: "executions", specId: request.specId, flowVersion: request.flowVersion,
+    this.payload = { version: 1, schemaRevision: FLOW_QUERY_SCHEMA_REVISION, resource: "executions", specId: request.specId, flowVersion: request.flowVersion,
       target: request.target, snapshotId, afterId };
   }
   encode() {
@@ -718,7 +720,7 @@ export class ExecutionCursor {
       payload = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
       const { digest: hash, ...content } = payload;
       const expectedFields = ["version", "schemaRevision", "resource", "specId", "flowVersion", "target", "snapshotId", "afterId", "digest"].sort().join();
-      if (Object.keys(payload).sort().join() !== expectedFields || hash !== digest(content) || content.version !== 1 || content.schemaRevision !== 3
+      if (Object.keys(payload).sort().join() !== expectedFields || hash !== digest(content) || content.version !== 1 || content.schemaRevision !== FLOW_QUERY_SCHEMA_REVISION
         || content.resource !== "executions" || typeof content.afterId !== "string" || !/^sha256:[a-f0-9]{64}$/.test(content.snapshotId)
         || validateFlowQueryRequest({ resource: content.resource, condition: { specId: content.specId, flowVersion: content.flowVersion },
           page: { limit: 1, after: null }, ...(content.target === null ? {} : { target: content.target }) }).length > 0

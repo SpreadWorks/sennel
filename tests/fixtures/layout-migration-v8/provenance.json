@@ -1,0 +1,9 @@
+{
+  "producerCommit": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "producerPath": "src/lib/layout-migration.js",
+  "producerSha256": "7ef70a373e10a684315219064c2678c2e21632d8a25f252b901677c456f2ef24",
+  "journalSha256": "b2fe07fa9b2501db655beba53f1aca4f4d03864b3271669b2c609a8d32e8da6a",
+  "method": "Unmodified previous producer domain code with imports directed to current unchanged foundation APIs. Injected post-publication I/O refusal; production finally published explicit writer release. No owner/receipt fields fabricated.",
+  "originalRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-source/.tmp/e799/layout-v8-producer-QCVgW6",
+  "formatVersion": 8
+}

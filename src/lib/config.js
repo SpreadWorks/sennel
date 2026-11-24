@@ -1,3 +1,4 @@
+import { CommandInvocation, COMMAND_INVOCATION_SCHEMA } from "./command-invocation.js";
 /**
  * sennel/lib/config.js
  *
@@ -6,6 +7,7 @@
 
 import fs from "fs";
 import path from "path";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 import { ProviderRegistry } from "./provider.js";
 import { validateSchema } from "./schema-validate.js";
 import { defaultAgentProfiles } from "./agent-defaults.js";
@@ -54,7 +56,7 @@ export function loadJsonFile(filePath) {
     err.code = "ERR_MISSING_FILE";
     throw err;
   }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  return JSON.parse(captureRegularFile(filePath, { label: "configuration JSON", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
 }
 
 /**
@@ -69,7 +71,7 @@ export function loadPackageField(root, field) {
   const pkgPath = path.join(root, "package.json");
   if (!fs.existsSync(pkgPath)) return undefined;
   try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const pkg = loadJsonFile(pkgPath);
     return pkg[field];
   } catch (_) {
     return undefined;
@@ -321,7 +323,7 @@ const CONFIG_SCHEMA = {
         },
         hooks: {
           type: "object",
-          additionalProperties: { type: "string" },
+          additionalProperties: COMMAND_INVOCATION_SCHEMA,
         },
       },
     },
@@ -368,7 +370,7 @@ const CONFIG_SCHEMA = {
     test: {
       type: "object",
       properties: {
-        command: { type: "string", minLength: 1 },
+        command: COMMAND_INVOCATION_SCHEMA,
         projectPaths: { type: "array", items: { type: "string", minLength: 1 } },
         timeout: { type: "number", minimum: 1 },
         finalRegressionTimeout: { type: "number", minimum: 1 },
@@ -463,9 +465,7 @@ export function validate(raw, options = {}) {
   }
 
   if (raw.test) {
-    if (typeof raw.test.command === "string") {
-      validateTestCommand(raw.test.command, errors);
-    }
+    if (raw.test.command !== undefined) validateConfiguredInvocation(raw.test.command, "test.command", raw.lang, errors);
     if (Array.isArray(raw.test.projectPaths)) {
       raw.test.projectPaths.forEach((entry, index) => validateProjectTestPath(entry, index, errors));
     }
@@ -483,6 +483,7 @@ export function validate(raw, options = {}) {
     errors.push(error.message);
   }
 
+  for (const [name, command] of Object.entries(raw.flow?.hooks ?? {})) validateConfiguredInvocation(command, `flow.hooks.${name}`, raw.lang, errors);
   if (raw.plugin) validatePluginConfig(raw.plugin, errors);
   if (errors.length > 0) {
     throw new Error(`Config validation failed:\n  - ${errors.join("\n  - ")}`);
@@ -521,12 +522,9 @@ function validatePluginConfig(plugin, errors) {
   }
 }
 
-const TEST_COMMAND_FORBIDDEN = /(\|\||&&|[|&;<>`$()]|\*|\?|\[|\]|\{|\})/;
-
-function validateTestCommand(command, errors) {
-  if (TEST_COMMAND_FORBIDDEN.test(command)) {
-    errors.push("'test.command' contains unsupported shell control or expansion syntax");
-  }
+function validateConfiguredInvocation(command, source, language, errors) {
+  try { CommandInvocation.fromStored(command, { source, language }); }
+  catch (error) { errors.push(error.message); }
 }
 
 function validateProjectTestPath(entry, index, errors) {
@@ -562,6 +560,14 @@ export function loadConfig(root, options = {}) {
  */
 export function loadConfigFromManagedDirectory(directory, options = {}) {
   const raw = loadRawConfigFromManagedDirectory(directory);
+  // Validate identifiers before they select plugin files. Contributed schemas
+  // and defaults participate only after this existing config boundary accepts
+  // the paths used to locate them.
+  if (raw?.plugin) {
+    const errors = [];
+    validatePluginConfig(raw.plugin, errors);
+    if (errors.length > 0) throw new Error(`Config validation failed:\n  - ${errors.join("\n  - ")}`);
+  }
   const pluginConfig = loadEnabledPluginConfig(directory, raw);
   const merged = mergeDefaults(raw, pluginConfig.defaults);
   return validate(merged, { ...options, schema: mergeConfigSchemas(CONFIG_SCHEMA, pluginConfig.schemas) });
@@ -622,7 +628,7 @@ function loadEnabledPluginConfig(managedDirectory, raw) {
     const manifestPath = path.join(pluginRoot, "plugin.json");
     if (!fs.existsSync(manifestPath)) continue;
     try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const manifest = loadJsonFile(manifestPath);
       const config = manifest.contributions?.config;
       if (config?.schema) schemas.push(loadJsonFile(path.join(pluginRoot, config.schema)));
       if (config?.defaults) defaults.push(migratePluginDefaultNamespaces(loadJsonFile(path.join(pluginRoot, config.defaults))));

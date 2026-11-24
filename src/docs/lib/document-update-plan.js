@@ -9,6 +9,14 @@ export class DocumentValidationError extends Error {
   }
 }
 
+export class DocumentRevisionConflict extends Error {
+  constructor(filePath) {
+    super(`document changed before commit or rollback: ${filePath}`);
+    this.name = "DocumentRevisionConflict";
+    this.code = "DOCUMENT_REVISION_CONFLICT";
+  }
+}
+
 export class DocumentValidationResult {
   constructor(ok, reason = null) {
     if (typeof ok !== "boolean") throw new Error("document validation status must be boolean");
@@ -72,23 +80,23 @@ export class DocumentUpdatePlan {
   }
 
   assertCurrent() {
+    this.#assertBytes(this.#originalBytes);
+  }
+
+  #assertBytes(expected) {
     const current = new AtomicFile(this.filePath).read(null);
-    if (current == null || !current.equals(this.#originalBytes)) {
-      const error = new Error(`document changed before commit: ${this.filePath}`);
-      error.code = "DOCUMENT_REVISION_CONFLICT";
-      throw error;
-    }
+    if (current == null || !current.equals(expected)) throw new DocumentRevisionConflict(this.filePath);
   }
 
   commit(faultInjector) {
     this.validate();
     this.assertCurrent();
     if (!this.changed) return { committed: false, path: this.filePath };
-    return new AtomicFile(this.filePath, { faultInjector }).write(this.#proposedBytes);
+    return new AtomicFile(this.filePath, { faultInjector, commitGuard: () => this.assertCurrent() }).write(this.#proposedBytes);
   }
 
   rollback() {
-    return new AtomicFile(this.filePath).write(this.#originalBytes);
+    return new AtomicFile(this.filePath, { commitGuard: () => this.#assertBytes(this.#proposedBytes) }).write(this.#originalBytes);
   }
 }
 
@@ -110,8 +118,12 @@ export class DocumentUpdateTransaction {
     try {
       for (const plan of this.plans) {
         if (!plan.changed) continue;
-        attempted.push(plan);
-        plan.commit(this.faultInjector);
+        try {
+          if (plan.commit(this.faultInjector).committed) attempted.push(plan);
+        } catch (error) {
+          if (error.committedToVisibleName) attempted.push(plan);
+          throw error;
+        }
       }
     } catch (primaryError) {
       const rollbackErrors = [];

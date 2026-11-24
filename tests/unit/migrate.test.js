@@ -33,7 +33,7 @@ describe("migrate CLI grammar", () => {
   });
 
   it("retains one literal spec selector across every supported revision", () => {
-    for (const revision of [1, 2, 3, 4]) {
+    for (const revision of [1, 2, 3, 4, 5, 6]) {
       assert.deepEqual(parseMigrateArgs(["specs", "--spec", "515-active", "--to", String(revision), "--dry-run"]), {
         component: "specs", to: revision, specId: "515-active", dryRun: true, help: false,
       });
@@ -67,8 +67,8 @@ describe("migration selection identity", () => {
     assert.throws(() => MigrationSpecSelection.from("../515-active"), /literal identifier/);
     const root = new MigrationSpecRoot({ root: "/project", relativePath: "nested/specs", authority: "canonical" });
     const other = new MigrationSpecRoot({ root: "/project", relativePath: "specs", authority: "canonical" });
-    const names = [1, 2, 3, 4].map((revision) => selected.journalFileName(root, revision));
-    assert.equal(new Set(names).size, 4);
+    const names = [1, 2, 3, 4, 5, 6].map((revision) => selected.journalFileName(root, revision));
+    assert.equal(new Set(names).size, 6);
     assert.ok(names.every((name) => /^[a-f0-9]{64}\.json$/.test(name)));
     assert.notEqual(selected.journalFileName(root), selected.journalFileName(other));
     assert.throws(() => MigrationSpecSelection.from(null).journalFileName(root), /requires one spec/);

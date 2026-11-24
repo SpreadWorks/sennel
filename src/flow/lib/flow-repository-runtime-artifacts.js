@@ -1,5 +1,4 @@
 import path from "node:path";
-import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
 
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { FlowVersionRuntimeLockLocation } from "../../lib/flow-version.js";
@@ -35,8 +34,6 @@ export class FlowRepositoryRuntimeArtifactRegistry {
     this.#exact = new Set([
       PRODUCT.managedPath(".active-flow"),
       ...FlowTargetIdentityAuthority.repositoryPaths(),
-      PRODUCT.managedPath(".repository-flow-operation.lock"),
-      PRODUCT.managedPath(".repository-maintenance.lock"),
       PRODUCT.managedPath(".worktree-prepare-attempt.json"),
       PRODUCT.managedPath("flow-identity.json"),
       PRODUCT.managedPath(".flow-identity.publication.json"),
@@ -48,13 +45,9 @@ export class FlowRepositoryRuntimeArtifactRegistry {
     this.#prefixes = Object.freeze([
       ".tmp/",
       `${PRODUCT.managedPath(".active-flow")}.`,
-      PRODUCT.managedPath(".flow-dispatch-"),
-      PRODUCT.managedPath(".flow-handoff-"),
       `${PRODUCT.managedPath("agent-cache")}/`,
       `${PRODUCT.managedPath("agent-work")}/`,
-      `${PRODUCT.managedPath("review-execution-locks")}/`,
       `${PRODUCT.managedPath("process-runtime")}/`,
-      FlowCommandExecutionLease.repositoryPrefix,
       `${PRODUCT.managedPath("output")}/`,
       `${PRODUCT.managedPath("recovery")}/`,
       `${PRODUCT.managedPath("worktree")}/`,
@@ -76,13 +69,14 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       || runtimeLocks.some((lock) => lock.matchesRepositoryPath(relativePath));
   }
 
-  gitPathspecExcludes() {
+  gitPathspecExcludes({ relativeToCwd = false } = {}) {
+    const anchor = relativeToCwd ? "" : ",top";
     return Object.freeze([
       ...[...this.#exact].flatMap((owned) => [
-        `:(exclude,top,literal)${owned}`,
-        `:(exclude,top,glob)${owned}.*.tmp`,
+        `:(exclude${anchor},literal)${owned}`,
+        `:(exclude${anchor},glob)${owned}.*.tmp`,
       ]),
-      ...this.#prefixes.map((prefix) => `:(exclude,top,glob)${prefix}**`),
+      ...this.#prefixes.map((prefix) => `:(exclude${anchor},glob)${prefix}**`),
     ]);
   }
 

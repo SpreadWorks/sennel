@@ -18,6 +18,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { completeDraftWorkerThroughStep, prepareConditionalDraftWorkerThroughStep } from "../../support/infrastructure/draft-worker-step.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function snapshot(manager, specId) {
   const source = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-refine" });
@@ -100,7 +101,7 @@ test("ordinary Draft Await reuses only the current exact question receipt and ne
 });
 
 test("Draft Step Error replacement renews Await and refuses the old answer receipt before same-Step completion", async (t) => {
-  const root = createTmpDir("draft-await-error-replacement-");
+  const root = fixtureRepository("draft-await-error-replacement-");
   t.after(() => removeTmpDir(root));
   const specId = "001-await-error-replacement";
   let manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
@@ -118,8 +119,7 @@ test("Draft Step Error replacement renews Await and refuses the old answer recei
   const coordinator = new WorkerArtifactHandoffCoordinator();
   const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager: manager };
   const execution = await prepareConditionalDraftWorkerThroughStep({ coordinator, ctx,
-    state: manager.loadReadOnly(specId), invocation: { id: "await-error-candidate", target: { digest: "b".repeat(64) },
-      action: { digest: "a".repeat(64), nextAction: { step: "draft-refine" } } } });
+    state: manager.loadReadOnly(specId), invocationId: "await-error-candidate" });
   fs.writeFileSync(execution.request.payloadPath("draft.json"), `${JSON.stringify(draft, null, 2)}\n`);
   sealWorkerArtifactHandoff({ requestPath: execution.request.requestPath,
     invocationId: execution.request.dispatchInvocationId });

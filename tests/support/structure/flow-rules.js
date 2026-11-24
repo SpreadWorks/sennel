@@ -1,9 +1,8 @@
-import { builtinModules } from "node:module";
+import { sourceBuiltin } from "./source-graph.js";
 
 const contracts = new Set([
   "src/flow/engine/step.js", "src/flow/engine/step-result.js", "src/flow/engine/flow-execution-error.js",
 ]);
-const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
 const allowedBuiltins = new Set(["path", "util", "crypto"]);
 
 /** Flow-specific path roles and dependency policy; the reader and graph remain reusable. */
@@ -21,8 +20,7 @@ export class FlowStructureRules {
     return this.isClosureRole(fromRole) && (toRole === "helper" || toRole === "contract");
   }
   builtin(specifier) {
-    const name = specifier.replace(/^node:/, "");
-    return builtins.has(name) ? name : null;
+    return sourceBuiltin(specifier);
   }
   allowsBuiltin(name) { return allowedBuiltins.has(name); }
   role(file, module, isStepClass) {

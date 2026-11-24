@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock } from "node:test";
 import { container } from "../../../src/lib/container.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
 import { FLOW_QUERY_LIMITS } from "../../../src/flow/query-contract.js";
@@ -86,10 +87,12 @@ function migrateLegacyVersion(root, specId) {
     tasks: [],
   });
 
-  const result = spawnSync(process.execPath, [QUERY_CLI, "migrate", "specs", "--to", "2"], {
-    cwd: root,
-    encoding: "utf8",
+  const invocation = new NativeExecutableInvocation({ executable: process.execPath,
+    args: [QUERY_CLI, "migrate", "specs", "--to", "2"], cwd: root,
     env: { ...process.env, SENNEL_WORK_ROOT: root, SENNEL_SOURCE_ROOT: root },
+  });
+  const result = spawnSync(invocation.executable, invocation.args, {
+    ...invocation.processOptions(), shell: false, encoding: "utf8",
   });
   if (result.status !== 0) {
     throw new Error(`migrated query fixture could not be materialized: ${result.stderr || result.stdout}`);
@@ -144,10 +147,12 @@ function failUntilBlocked(flowManager, specId) {
 
 function gitStatus(root) {
   try {
-    return execFileSync("git", ["status", "--short", "--untracked-files=all"], {
-      cwd: root,
-      encoding: "utf8",
+    const invocation = new NativeExecutableInvocation({ executable: "git",
+      args: ["status", "--short", "--untracked-files=all"], cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
+    });
+    return execFileSync(invocation.executable, invocation.args, {
+      ...invocation.processOptions(), shell: false, encoding: "utf8",
     });
   } catch {
     return null;

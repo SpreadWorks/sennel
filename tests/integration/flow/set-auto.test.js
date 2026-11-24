@@ -11,7 +11,8 @@ import { prepareDraftService } from "../../support/infrastructure/draft-service.
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { initGitRepo } from "../../support/infrastructure/git-repo.js";
 import {
   writeStubAgentScript,
   writeCapturingStubAgentScript,
@@ -47,7 +48,7 @@ function lowResponse() {
 function createTmpProject(agentResponse = passResponse()) {
   const tmp = createTestDirectory("set-auto-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
-  execFileSync("git", ["init", tmp], { stdio: "ignore" });
+  initGitRepo(tmp);
 
   const stubPath = writeStubAgentScript(tmp, ".stub-agent.js", agentResponse);
   fs.writeFileSync(
@@ -75,7 +76,7 @@ function createFlowState(tmp, request = "add a progress bar") {
 
 function runFlowCommand(tmp, args) {
   const script = path.resolve("src/sennel.js");
-  return spawnSync("node", [script, ...args], {
+  return spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     cwd: tmp,
     env: { ...process.env, SENNEL_WORK_ROOT: tmp },
@@ -287,12 +288,7 @@ describe("flow set auto", () => {
     fm.createPreparingFlow(runIdA, { request: "add a progress bar" });
     fm.createPreparingFlow(runIdB, { request: "add a progress bar" });
 
-    const script = path.resolve("src/sennel.js");
-    const res = spawnSync(
-      "node",
-      [script, "flow", "set", "auto", "on", "--run-id", runIdB],
-      { encoding: "utf8", cwd: tmp, env: { ...process.env, SENNEL_WORK_ROOT: tmp } },
-    );
+    const res = runSetAuto(tmp, "on", ["--run-id", runIdB]);
     assert.equal(res.status, 0, res.stderr);
     assert.equal(fm.loadPreparingFlow(runIdA).autoApprove, false);
     assert.equal(fm.loadPreparingFlow(runIdB).autoApprove, true);
@@ -316,7 +312,7 @@ describe("flow set auto", () => {
   it("appends draft.json to auto-check input when draft-gate done (spec 220)", () => {
     tmp = createTestDirectory("set-auto-draft-");
     fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
-    execFileSync("git", ["init", tmp], { stdio: "ignore" });
+    initGitRepo(tmp);
 
     const capturePath = path.join(tmp, "captured-prompt.txt");
     const stubPath = writeCapturingStubAgentScript(
@@ -387,7 +383,7 @@ describe("flow set auto", () => {
   it("falls back to request+issue input when approval pending and no draft.json (R5)", () => {
     tmp = createTestDirectory("set-auto-fallback-");
     fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
-    execFileSync("git", ["init", tmp], { stdio: "ignore" });
+    initGitRepo(tmp);
 
     const capturePath = path.join(tmp, "captured-prompt.txt");
     const stubPath = writeCapturingStubAgentScript(
@@ -436,44 +432,11 @@ describe("flow set auto", () => {
   });
 
   describe("PREPARING_FLOW_NOT_FOUND for unknown --run-id", () => {
-    function createCapturingFixture(prefix) {
-      const dir = createTestDirectory(prefix);
-      fs.mkdirSync(path.join(dir, ".sennel"), { recursive: true });
-      execFileSync("git", ["init", dir], { stdio: "ignore" });
-      const capturePath = path.join(dir, "captured-prompt.txt");
-      const stubPath = writeCapturingStubAgentScript(
-        dir,
-        ".stub-agent.js",
-        capturePath,
-        passResponse(),
-      );
-      fs.writeFileSync(
-        path.join(dir, ".sennel", "config.json"),
-        JSON.stringify({
-          lang: "ja",
-          type: "base",
-          docs: { languages: ["ja"], defaultLanguage: "ja" },
-          agent: stubAgentConfig(stubPath),
-        }),
-      );
-      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fixture" }));
-      return { dir, capturePath };
-    }
-
-    function runSetAutoWithRunId(dir, value, runId) {
-      const script = path.resolve("src/sennel.js");
-      return spawnSync(
-        "node",
-        [script, "flow", "set", "auto", value, "--run-id", runId],
-        { encoding: "utf8", cwd: dir, env: { ...process.env, SENNEL_WORK_ROOT: dir } },
-      );
-    }
-
     it("fails for 'on' without invoking AI", () => {
-      const fixture = createCapturingFixture("set-auto-notfound-on-");
+      const fixture = createCapturingProject("set-auto-notfound-on-");
       tmp = fixture.dir;
       const nonexistent = "00000000-0000-0000-0000-000000000000";
-      const res = runSetAutoWithRunId(tmp, "on", nonexistent);
+      const res = runSetAuto(tmp, "on", ["--run-id", nonexistent]);
       assert.notEqual(res.status, 0);
       const envelope = JSON.parse(res.stdout.trim());
       assert.equal(envelope.ok, false);
@@ -493,10 +456,10 @@ describe("flow set auto", () => {
     });
 
     it("fails for 'off' without invoking AI", () => {
-      const fixture = createCapturingFixture("set-auto-notfound-off-");
+      const fixture = createCapturingProject("set-auto-notfound-off-");
       tmp = fixture.dir;
       const nonexistent = "11111111-1111-1111-1111-111111111111";
-      const res = runSetAutoWithRunId(tmp, "off", nonexistent);
+      const res = runSetAuto(tmp, "off", ["--run-id", nonexistent]);
       assert.notEqual(res.status, 0);
       const envelope = JSON.parse(res.stdout.trim());
       assert.equal(envelope.ok, false);
@@ -520,10 +483,11 @@ describe("flow set auto", () => {
   // schema dialect.
   // ---------------------------------------------------------------------------
 
-  function createCapturingProject() {
-    const dir = createTestDirectory("set-auto-trust-");
+  function createCapturingProject(prefix = "set-auto-trust-") {
+    const dir = createTestDirectory(prefix);
+    tmp = dir;
     fs.mkdirSync(path.join(dir, ".sennel"), { recursive: true });
-    execFileSync("git", ["init", dir], { stdio: "ignore" });
+    initGitRepo(dir);
     const capturePath = path.join(dir, "captured-prompt.txt");
     const stubPath = writeCapturingStubAgentScript(
       dir,
@@ -551,6 +515,7 @@ describe("flow set auto", () => {
     const state = JSON.parse(fs.readFileSync(location.flowStateFile, "utf8"));
     state.autoCheck = autoCheck;
     fs.writeFileSync(location.flowStateFile, `${JSON.stringify(state, null, 2)}\n`);
+    return location;
   }
 
   it("trusts persisted autoCheck on preparing flow without re-invoking the agent", () => {
@@ -628,10 +593,10 @@ describe("flow set auto", () => {
     assert.equal(preparing.autoCheck.reason, "persisted ineligible");
   });
 
-  it("rejects a retired active autoCheck cache without invoking the agent", () => {
+  it("refuses changed canonical Flow authority without invoking the agent or rewriting evidence", () => {
     const { dir, capturePath } = createCapturingProject();
     tmp = dir;
-    writeRetiredActiveAutoCheck(tmp, {
+    const location = writeRetiredActiveAutoCheck(tmp, {
       eligible: true,
       score: 20,
       maxScore: 24,
@@ -642,39 +607,24 @@ describe("flow set auto", () => {
       reason: "retired active cache",
     });
 
+    const protectedFiles = [location.flowStateFile, location.catalogFile, location.activitiesFile]
+      .map((file) => ({ file, bytes: fs.readFileSync(file) }));
     const res = runSetAuto(tmp, "on");
-    assert.notEqual(res.status, 0);
-    assert.match(res.stderr, /artifact content does not match the catalog: flow\.json/);
+    assert.equal(res.error, undefined);
+    assert.equal(res.signal, null);
+    assert.equal(res.status, 1);
+    assert.equal(res.stderr, "");
+    const envelope = JSON.parse(res.stdout);
+    assert.equal(envelope.ok, false);
+    assert.deepEqual(envelope.errors.map((entry) => entry.code), ["FLOW_INTEGRITY_ERROR"]);
+    assert.equal(envelope.guidance.code, "FLOW_INTEGRITY_ERROR");
 
     assert.equal(
       fs.existsSync(capturePath),
       false,
-      "agent must not be invoked when active state violates the exact schema",
+      "untrusted canonical authority must not invoke the auto-check provider",
     );
-  });
-
-  it("rejects a retired active cache missing goalGate as the same schema violation", () => {
-    const { dir, capturePath } = createCapturingProject();
-    tmp = dir;
-    writeRetiredActiveAutoCheck(tmp, {
-      eligible: true,
-      score: 20,
-      maxScore: 24,
-      threshold: 18,
-      breakdown: {},
-      staticGates: { G: false, H: false, I: false },
-      reason: "retired cache without goal gate",
-    });
-
-    const res = runSetAuto(tmp, "on");
-    assert.notEqual(res.status, 0);
-    assert.match(res.stderr, /artifact content does not match the catalog: flow\.json/);
-
-    assert.equal(
-      fs.existsSync(capturePath),
-      false,
-      "agent must not be invoked when active state violates the exact schema",
-    );
+    for (const { file, bytes } of protectedFiles) assert.deepEqual(fs.readFileSync(file), bytes);
   });
 
   it("falls back to agent invocation on preparing flow when no autoCheck is persisted", () => {

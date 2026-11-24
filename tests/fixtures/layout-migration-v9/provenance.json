@@ -1,0 +1,24 @@
+{
+  "status": "IMMUTABLE_PREVIOUS_REVISION9_PUBLIC_API_BODY_IMPORT_RELOCATION_ONLY",
+  "originalSourceSha256": "b848ba53250d7b88bb6f901760ac8ce71789e2a47d93833f347738cff74b76d2",
+  "fixtureSha256": "c104268ffb65039f84d8562c0154892821e31848700cd39cbb2d24357a3f8858",
+  "importRelocations": {
+    "./regular-file-snapshot.js": "../../../src/lib/regular-file-snapshot.js",
+    "./file-identity.js": "../../../src/lib/file-identity.js",
+    "./atomic-file.js": "../../../src/lib/atomic-file.js",
+    "./real-directory-authority.js": "../../../src/lib/real-directory-authority.js",
+    "./config.js": "../../../src/lib/config.js",
+    "./legacy-managed-directory-migration.js": "../../../src/lib/legacy-managed-directory-migration.js",
+    "./legacy-managed-metadata-migration.js": "../../../src/lib/legacy-managed-metadata-migration.js",
+    "./presets.js": "../../../src/lib/presets.js",
+    "./migration-process-owner.js": "../../../src/lib/migration-process-owner.js",
+    "./process-execution-values.js": "../../../src/lib/process-execution-values.js",
+    "./product.js": "../../../src/lib/product.js",
+    "./temporary-paths.js": "../../../src/lib/temporary-paths.js",
+    "./migration.js": "../../../src/lib/migration.js",
+    "./portable-path.js": "../../../src/lib/portable-path.js"
+  },
+  "contract": "Previous complete public LayoutMigrationRevisionOne implementation body and serializer unchanged. Only module imports relocated to existing shared src primitives. Tests run the previous public API in a fresh consumer-owned fixture and use explicit writer release; no old private runtime or fabricated journal/receipt.",
+  "notFullOldPackage": "Shared primitive implementations come from the candidate; this provenance does not claim an immutable previous whole package.",
+  "createdUtc": "2026-11-05T10:58:07.462497+00:00"
+}

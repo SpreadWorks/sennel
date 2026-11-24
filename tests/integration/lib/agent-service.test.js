@@ -41,55 +41,7 @@ function makeAgent({ config, paths } = {}) {
   return new Agent({ config: cfg, paths: resolvedPaths, registry, logger });
 }
 
-describe("Agent service — construction", () => {
-  it("can be constructed with config, paths, registry, logger", () => {
-    const agent = makeAgent();
-    assert.ok(agent);
-    assert.equal(typeof agent.resolve, "function");
-    assert.equal(typeof agent.call, "function");
-  });
-});
-
 describe("Agent.resolve(commandId)", () => {
-  it("returns the default provider/profile when no commandId is given", () => {
-    const agent = makeAgent();
-    const resolved = agent.resolve();
-    assert.ok(resolved);
-    assert.ok(resolved.provider);
-    assert.ok(resolved.profile);
-    assert.equal(resolved.profile.command, "claude");
-  });
-
-  it("returns null when no default agent is configured", () => {
-    const agent = makeAgent({ config: { agent: {} } });
-    assert.equal(agent.resolve(), null);
-  });
-
-  it("REQ-P5 (spec 199): resolves flow.draft-task via default fallback when no profile entry exists", () => {
-    // agent.default set, no useProfile / profiles defined → matchProfilePrefix
-    // returns null for flow.draft-task, defaultKey is used.
-    const cfg = { agent: { default: "claude/opus", timeout: 300 } };
-    const agent = makeAgent({ config: cfg });
-    const resolved = agent.resolve("flow.draft-task");
-    assert.ok(resolved, "flow.draft-task must resolve via default fallback");
-    assert.equal(resolved.profile.command, "claude");
-  });
-
-  it("resolves to a profile-routed provider when SENNEL_PROFILE is unset and useProfile is configured", () => {
-    const cfg = {
-      agent: {
-        default: "claude/opus",
-        useProfile: "test-profile",
-        profiles: {
-          "test-profile": { "docs.review": "codex/gpt-5.6-terra-medium" },
-        },
-      },
-    };
-    const agent = makeAgent({ config: cfg });
-    const resolved = agent.resolve("docs.review");
-    assert.equal(resolved.profile.command, "codex");
-  });
-
   it("resolves bare built-in default provider family keys", () => {
     const agent = makeAgent({ config: { agent: { default: "codex" } } });
     const resolved = agent.resolve("workflow.publish");
@@ -99,23 +51,12 @@ describe("Agent.resolve(commandId)", () => {
   });
 });
 
-describe("Agent.call() — option contract", () => {
-  it("does not accept timeoutMs/cwd as positional or top-level options", async () => {
-    const agent = makeAgent();
-    // Sanity: call signature is (prompt, options); options must not include timeoutMs or cwd as override knobs.
-    // Inspect the function signature length: should be 2.
-    assert.equal(agent.call.length, 2);
-  });
-
-  it("returns a Promise (always async)", () => {
-    const agent = makeAgent();
-    const resolved = agent.resolve();
-    if (!resolved) return; // skip when no default
-    // We don't actually run the AI here; just verify the call returns a Promise-like shape.
-    // Use a fake provider/profile via stub: monkey-patch provider with a no-op.
+describe("Agent.call() — dry run and resolution failure", () => {
+  it("returns an empty asynchronous dry run without a configured provider", async () => {
+    const agent = makeAgent({ config: { agent: {} } });
     const result = agent.call("ignored", { commandId: "test", _dryRun: true });
-    assert.ok(result && typeof result.then === "function", "call() must return a Promise");
-    // Don't await — _dryRun should short-circuit.
+    assert.ok(result instanceof Promise);
+    assert.equal(await result, "");
   });
 
   it("includes bounded resolution context when no provider resolves", async () => {

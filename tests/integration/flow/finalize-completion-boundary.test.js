@@ -108,3 +108,35 @@ test("ignored configured spec root is left untracked while docs still commit", (
   assert.equal(git(["ls-files", "flow-artifacts/specs/485-ignored"]), "");
   assert.equal(fs.existsSync(path.join(root, "flow-artifacts/specs/485-ignored/001/flow.json")), true);
 });
+
+test("completion keeps a user-staged blob inside an owned artifact path and replays without a new commit", () => {
+  root = createTmpDir("finalize-completion-owned-stage-");
+  initGitRepo(root);
+  write("docs/overview.md", "before\n");
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+  const fixture = new CanonicalFlowFixture({ flowManager: manager, specId: "485-owned-stage", runId: "run-owned-stage" }).create();
+  commitAll(root, "test: canonical baseline");
+  manager.addNote("New permanent canonical evidence", { specId: fixture.specId });
+  write("docs/overview.md", "after\n");
+  const ownedPath = "specs/485-owned-stage/001/flow.json";
+  const userBlob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: root, encoding: "utf8", input: "user staged artifact content\n",
+  }).trim();
+  git(["update-index", "--cacheinfo", "100644", userBlob, ownedPath]);
+  const beforeWorktree = fs.readFileSync(path.join(root, ownedPath));
+  const options = { root, specRoot: "specs", specId: fixture.specId, idempotencyKey: "run-owned-stage:finalize-cleanup:1" };
+  const first = commitFinalizeCompletion(options);
+  assert.equal(first.status, "done");
+  assert.equal(git(["show", `:${ownedPath}`]), "user staged artifact content");
+  assert.deepEqual(fs.readFileSync(path.join(root, ownedPath)), beforeWorktree);
+  assert.equal(git(["show", `HEAD:${ownedPath}`]), beforeWorktree.toString("utf8").trim());
+  assert.equal(git(["diff", "--cached", "--name-only"]), ownedPath);
+  const head = git(["rev-parse", "HEAD"]);
+  const indexBeforeReplay = git(["write-tree"]);
+  const replay = commitFinalizeCompletion(options);
+  assert.equal(replay.status, "skipped");
+  assert.equal(replay.resumed, true);
+  assert.equal(git(["rev-parse", "HEAD"]), head);
+  assert.equal(git(["write-tree"]), indexBeforeReplay);
+  assert.equal(git(["show", `:${ownedPath}`]), "user staged artifact content");
+});

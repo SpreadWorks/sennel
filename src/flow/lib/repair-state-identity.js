@@ -1,28 +1,38 @@
+import { withManagedProcessScopeSync, withReadOnlyManagedProcessScopeSync } from "../../lib/managed-process.js";
+import { GitConfigurationObservation, readGitBoolean } from "../../lib/git-source-observation.js";
+import { exactKeys } from "./source-effect-fields.js";
+import { LogicalPathSet } from "../../lib/portable-path.js";
+import { SourceWorkingFileCapture, observeSourceUntrackedMode, selectedSourceGitRoot } from "./source-working-file-capture.js";
 import crypto from "node:crypto";
+import { GitSourceEntry, SourceWorkingFile } from "./source-working-file.js";
+import { GitNulFields, GitNameStatusDecoder, GitRefObservation, GitPorcelainV2StatusExecution, LoggedGitCommandExecution, runGit, runGitToFile, withGitOutputCleanup } from "../../lib/git-helpers.js";
+import { CommandExecutionBatchFailure } from "../../lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
-import { runGit, runGitToFile } from "../../lib/git-helpers.js";
 import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { CurrentFlowContext } from "./current-flow-state.js";
+import { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
 import { compareText } from "./text-order.js";
 
-export const REPAIR_STATE_VERSION = 3;
+export const REPAIR_STATE_VERSION = 4;
 export const DEFAULT_REPAIR_CHANGED_PATH_LIMIT = 20_000;
 export const MAX_REPAIR_CHANGED_PATH_LIMIT = 1_000_000;
 export const REPAIR_TRANSACTION_FILE = "impl-repair-transaction.json";
 export const REPAIR_MIGRATION_FILE = "repair-state-migration.json";
 export const REPAIR_LOCK_DIR = ".impl-repair.lock";
 
+// Streaming hashes and Git records do not retain the complete file in memory.
+const MAX_REPAIR_STREAM_BYTES = Number.MAX_SAFE_INTEGER - 1;
 const MAX_PATH_LENGTH = 4096;
 const HASH_PATTERN = /^[a-f0-9]{64}$/i;
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const REPAIR_REF_PATTERN = new RegExp(`^refs/${PRODUCT.machineName}/flows/([A-Za-z0-9._-]+)/baseline$`);
-const ENTRY_MODE_PATTERN = /^(?:100644|100755|120000|160000|missing)$/;
 const ENTRY_STATUS_PATTERN = /^(?:(?:committed|index|worktree):(?:[ACDMTUXBR]|untracked)|explicit:(?:input|missing)|filesystem:input)$/;
-const ENTRY_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 export class RepairStateError extends Error {
   constructor(code, message, details = {}) {
@@ -78,20 +88,35 @@ function baselineIdentity(baseline) {
   };
 }
 
-function runGitRequired(root, args, label) {
-  const result = runGit(args, { cwd: root });
+function requiredGitOutput(result, label) {
   if (!result.ok) throw new Error(`${label}: ${result.stderr || result.stdout}`.trim());
   return result.stdout;
 }
 
-function gitObjectFormat(root) {
-  const result = runGit(["rev-parse", "--show-object-format"], { cwd: root });
-  if (!result.ok) return "sha1";
-  const format = result.stdout.trim();
-  if (format !== "sha1" && format !== "sha256") {
-    throw new Error(`unsupported Git object format: ${format}`);
+function runGitRequired(root, args, label) {
+  return requiredGitOutput(runGit(args, { cwd: root }), label);
+}
+
+/** One native observation of the repository format and an optional revision. */
+class GitRevisionObservation {
+  constructor(result) {
+    const records = result.stdout.trim().split("\n");
+    this.objectFormat = records.shift();
+    if (!this.objectFormat) throw new RepairStateError("REPAIR_GIT_UNAVAILABLE", "Git object format could not be read");
+    if (this.objectFormat !== "sha1" && this.objectFormat !== "sha256") {
+      throw new Error(`unsupported Git object format: ${this.objectFormat}`);
+    }
+    this.ok = result.ok;
+    if (this.ok && records.length !== 1) throw new Error("Git revision observation must contain one object id");
+    this.oid = this.ok ? requireOid(records[0], "revisionOid", this.objectFormat) : null;
+    this.stdout = records.join("\n");
+    this.stderr = result.stderr;
+    Object.freeze(this);
   }
-  return format;
+
+  static read(root, revision) {
+    return new this(runGit(["rev-parse", "--show-object-format", "--verify", "--end-of-options", revision], { cwd: root }));
+  }
 }
 
 function oidPattern(format) {
@@ -153,34 +178,18 @@ export class CanonicalRepairEntry {
     this.oldPath = input.oldPath == null ? null : normalizeRepairPath(input.oldPath);
     this.statuses = Object.freeze([...new Set((input.statuses || []).map((entry) => requireString(entry, "status")))].sort());
     if (this.statuses.length === 0) throw new Error(`repair state entry has no status: ${this.path}`);
-    this.mode = requireString(input.mode, "mode");
-    if (!this.statuses.every((status) => ENTRY_STATUS_PATTERN.test(status))) {
-      throw new Error(`repair state entry has an invalid status: ${this.path}`);
-    }
-    if (!ENTRY_MODE_PATTERN.test(this.mode)) throw new Error(`repair state entry has an invalid mode: ${this.path}`);
-    this.indexOid = input.indexOid == null ? null : requireString(input.indexOid, "indexOid").toLowerCase();
-    if (this.indexOid != null && !ENTRY_OID_PATTERN.test(this.indexOid)) {
-      throw new Error(`repair state entry has an invalid indexOid: ${this.path}`);
-    }
-    this.contentHash = requireHash(input.contentHash, "contentHash");
+    if (!this.statuses.every((status) => ENTRY_STATUS_PATTERN.test(status))) throw new Error(`invalid repair entry status: ${this.path}`);
+    this.working = input.working instanceof SourceWorkingFile ? input.working : SourceWorkingFile.fromStored(input.working);
+    this.git = input.git === null ? null : input.git instanceof GitSourceEntry ? input.git : GitSourceEntry.fromStored(input.git);
     Object.freeze(this);
   }
 
-  toJSON() {
-    return {
-      path: this.path,
-      oldPath: this.oldPath,
-      statuses: [...this.statuses],
-      mode: this.mode,
-      indexOid: this.indexOid,
-      contentHash: this.contentHash,
-    };
-  }
-
-  canonicalParts() {
-    return [this.path, this.oldPath || "", this.mode, this.contentHash];
-  }
-
+  get mode() { return this.git?.worktreeMode ?? this.working.kind; }
+  get indexOid() { return this.git?.indexOid ?? null; }
+  get contentHash() { return this.working.digest ?? canonicalHash([this.working.kind]); }
+  toJSON() { return { path: this.path, oldPath: this.oldPath, statuses: [...this.statuses],
+    working: this.working.toJSON(), git: this.git?.toJSON() ?? null }; }
+  canonicalParts() { return [this.path, this.oldPath || "", this.mode, this.contentHash]; }
 }
 
 class RepairFingerprintManifestBase {
@@ -201,11 +210,12 @@ class RepairFingerprintManifestBase {
     this.environmentHash = requireHash(input.environmentHash, "environmentHash");
     if (!Array.isArray(input.entries)) throw new Error("repair fingerprint entries must be an array");
     this.entries = Object.freeze(input.entries.map((entry) => (
-      entry instanceof CanonicalRepairEntry ? entry : new CanonicalRepairEntry(entry)
+      entry instanceof CanonicalRepairEntry ? entry : (() => {
+        exactKeys(entry, ["path", "oldPath", "statuses", "working", "git"], "repair source entry");
+        return new CanonicalRepairEntry(entry);
+      })()
     )).sort((a, b) => compareText(a.path, b.path)));
-    if (new Set(this.entries.map((entry) => entry.path)).size !== this.entries.length) {
-      throw new Error("repair fingerprint entries must not contain duplicate paths");
-    }
+    new LogicalPathSet(this.entries.map((entry) => entry.path), { allowDirectoryPrefixes: true });
     const parts = [
       this.version,
       JSON.stringify(baselineIdentity(this.baseline)),
@@ -325,14 +335,18 @@ function resolveSingleMergeBase(root, baseRef) {
   return candidates[0];
 }
 
-export function captureRepairBaseline({ root, baseRef, runId, useMergeBase = false, pin = true }) {
-  const objectFormat = gitObjectFormat(root);
+export function captureRepairBaseline(options) {
+  return withManagedProcessScopeSync({ executionRoot: options.root }, () => captureGitRepairBaseline(options));
+}
+
+function captureGitRepairBaseline({ root, baseRef, runId, useMergeBase = false, pin = true }) {
   const sourceRef = requireString(baseRef, "baseRef");
   const ref = pin ? PRODUCT.flowBaselineRef(assertSafeRunId(runId)) : null;
-  const pinned = ref ? runGit(["rev-parse", "--verify", ref], { cwd: root }) : null;
-  let commitCandidate = pinned?.ok ? pinned.stdout.trim() : null;
+  const pinned = ref ? GitRevisionObservation.read(root, ref) : null;
+  const source = pinned?.ok ? null : GitRevisionObservation.read(root, `${sourceRef}^{commit}`);
+  const objectFormat = (pinned ?? source).objectFormat;
+  let commitCandidate = pinned?.ok ? pinned.oid : null;
   if (commitCandidate == null) {
-    const source = runGit(["rev-parse", "--verify", "--end-of-options", `${sourceRef}^{commit}`], { cwd: root });
     if (!source.ok) {
       throw new RepairStateError(
         "REPAIR_BASELINE_UNRESOLVABLE",
@@ -340,7 +354,7 @@ export function captureRepairBaseline({ root, baseRef, runId, useMergeBase = fal
         { sourceRef },
       );
     }
-    const sourceCommit = source.stdout.trim();
+    const sourceCommit = source.oid;
     commitCandidate = useMergeBase ? resolveSingleMergeBase(root, sourceCommit) : sourceCommit;
   }
   const commitOid = requireOid(commitCandidate, "commitOid", objectFormat);
@@ -387,14 +401,11 @@ export function deleteRepairBaselineForFlow(root, flowState) {
   return true;
 }
 
-function isGitRepository(root) {
-  return runGit(["rev-parse", "--is-inside-work-tree"], { cwd: root }).stdout.trim() === "true";
-}
 
 function readConfiguredBoundary(root) {
   const file = path.join(root, PRODUCT.managedDirName, "config.json");
   if (!fs.existsSync(file)) return { maxChangedPaths: DEFAULT_REPAIR_CHANGED_PATH_LIMIT, include: [] };
-  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  const config = JSON.parse(captureRegularFile(file, { label: "repair fingerprint configuration", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
   const input = config?.flow?.repairFingerprint || {};
   for (const key of Object.keys(input)) {
     if (!new Set(["maxChangedPaths", "include"]).has(key)) {
@@ -416,37 +427,26 @@ function readConfiguredBoundary(root) {
 
 function forEachGitNulField(root, directory, args, label, visit) {
   const outputPath = path.join(directory, "stdout.bin");
-  try {
+  return withGitOutputCleanup(() => {
     const result = runGitToFile(args, { cwd: root, outputPath });
     if (!result.ok) throw new Error(`${label}: ${result.stderr}`.trim());
-    const descriptor = fs.openSync(outputPath, "r");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
     let pending = Buffer.alloc(0);
-    try {
-      for (;;) {
-        const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-        if (bytes === 0) break;
-        const chunk = pending.length === 0
-          ? Buffer.from(buffer.subarray(0, bytes))
-          : Buffer.concat([pending, buffer.subarray(0, bytes)]);
+    visitRegularFileChunks(outputPath, {
+      label, maxBytes: MAX_REPAIR_STREAM_BYTES,
+      visit(buffer) {
+        const chunk = pending.length === 0 ? Buffer.from(buffer) : Buffer.concat([pending, buffer]);
         let start = 0;
         for (let index = 0; index < chunk.length; index += 1) {
           if (chunk[index] !== 0) continue;
-          visit(chunk.subarray(start, index).toString("utf8"));
+          visit(GitNulFields.decodeField(chunk.subarray(start, index), label));
           start = index + 1;
         }
         pending = Buffer.from(chunk.subarray(start));
-        if (pending.length > (MAX_PATH_LENGTH * 4) + 128) {
-          throw new Error(`${label}: Git emitted an overlong field`);
-        }
-      }
-      if (pending.length !== 0) throw new Error(`${label}: Git output is not NUL terminated`);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-  } finally {
-    fs.rmSync(outputPath, { force: true });
-  }
+        if (pending.length > (MAX_PATH_LENGTH * 4) + 128) throw new Error(`${label}: Git emitted an overlong field`);
+      },
+    });
+    if (pending.length !== 0) throw new Error(`${label}: Git output is not NUL terminated`);
+  }, () => new AtomicFile(outputPath).remove());
 }
 
 class MutableChangedPath {
@@ -478,45 +478,37 @@ function changedPathEntry(changed, relPath, boundary) {
   return entry;
 }
 
-function streamNameStatus(root, directory, args, scope, changed, boundary) {
-  let status = null;
-  let oldPath = null;
+function streamNameStatus(root, directory, args, scope, changed, boundary, registry) {
+  const decoder = new GitNameStatusDecoder(`malformed ${scope} Git name-status output`);
   forEachGitNulField(root, directory, args, `failed to collect ${scope} repair delta`, (field) => {
-    if (status == null) {
-      status = field;
-      return;
+    const observed = decoder.accept(field);
+    if (observed !== null && !registry.owns(observed.path)) {
+      const entry = changedPathEntry(changed, observed.path, boundary);
+      entry.addStatus(scope, observed.rawStatus[0], observed.originalPath);
     }
-    if (/^[RC]/.test(status) && oldPath == null) {
-      oldPath = field;
-      return;
-    }
-    const entry = changedPathEntry(changed, field, boundary);
-    entry.addStatus(scope, status[0], oldPath);
-    status = null;
-    oldPath = null;
   });
-  if (status != null || oldPath != null) throw new Error(`malformed ${scope} Git name-status output`);
+  decoder.finish();
 }
 
-function collectGitChangedPaths(root, directory, baseline, boundary) {
+function collectGitChangedPaths(root, directory, baseline, boundary, registry, status) {
   const changed = new Map();
   const scratchRelative = path.relative(root, directory).split(path.sep).join("/");
   streamNameStatus(root, directory, [
     "diff", "--name-status", "-z", "--no-ext-diff", "--find-renames", baseline.commitOid, "HEAD",
-  ], "committed", changed, boundary);
+  ], "committed", changed, boundary, registry);
   streamNameStatus(root, directory, [
     "diff", "--cached", "--name-status", "-z", "--no-ext-diff", "--find-renames", "HEAD",
-  ], "index", changed, boundary);
-  streamNameStatus(root, directory, [
-    "diff", "--name-status", "-z", "--no-ext-diff", "--find-renames",
-  ], "worktree", changed, boundary);
-  forEachGitNulField(root, directory, [
-    "ls-files", "--others", "--exclude-standard", "-z",
-  ], "failed to collect untracked repair inputs", (relPath) => {
-    if (relPath.startsWith(`${scratchRelative}/`)) return;
+  ], "index", changed, boundary, registry);
+  // Porcelain verifies content without refreshing the real index; name-status
+  // can retain stat-only worktree candidates after bytes return to their baseline.
+  for (const statusEntry of status.entries) {
+    if (statusEntry.kind !== "untracked" && statusEntry.worktreeStatus === ".") continue;
+    const relPath = statusEntry.path;
+    if ((statusEntry.kind === "untracked" && relPath.startsWith(`${scratchRelative}/`))
+      || registry.owns(relPath)) continue;
     const entry = changedPathEntry(changed, relPath, boundary);
-    entry.addStatus("worktree", "untracked");
-  });
+    entry.addStatus("worktree", statusEntry.kind === "untracked" ? "untracked" : statusEntry.worktreeStatus);
+  }
   return changed;
 }
 
@@ -570,14 +562,66 @@ function assertSupportedIndexFlags(root, directory) {
     }
     if (tag === "S") skipWorktreePaths.push(relPath);
   });
-  return Object.freeze(skipWorktreePaths.sort(compareText));
+  return new RepairIndexFlagObservation(skipWorktreePaths, sparse);
 }
 
-function environmentHash(root, skipWorktreePaths) {
-  const config = runGit(["config", "--null", "--get-regexp", "^(core\\.(autocrlf|eol|symlinks|filemode|ignorecase|precomposeunicode)|filter\\..*\\.(clean|smudge|process|required))$"], { cwd: root });
-  if (!config.ok && config.status !== 1) throw new Error(`failed to inspect Git filter environment: ${config.stderr}`);
-  const sparseConfig = runGit(["config", "--bool", "core.sparseCheckout"], { cwd: root });
-  const sparseEnabled = sparseConfig.ok && sparseConfig.stdout.trim() === "true";
+class RepairIndexFlagObservation {
+  constructor(paths, sparseEnabled) {
+    if (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string") || typeof sparseEnabled !== "boolean") throw new TypeError("Git index flags require paths and a sparse policy observation");
+    this.skipWorktreePaths = Object.freeze([...paths].sort(compareText));
+    this.sparseEnabled = sparseEnabled;
+    Object.freeze(this);
+  }
+}
+
+/** Exact native HEAD/tree pair from the existing bounded command. */
+class RepairGitHeadObservation {
+  constructor(result, objectFormat) {
+    const records = requiredGitOutput(result, "failed to resolve repair state HEAD and tree").trim().split("\n");
+    if (records.length !== 2) throw new Error("repair state HEAD and tree evidence is invalid");
+    this.headOid = requireOid(records[0], "headOid", objectFormat);
+    this.headTreeOid = requireOid(records[1], "headTreeOid", objectFormat);
+    Object.freeze(this);
+  }
+}
+
+/** Independent bounded native reads; interpretation keeps the original order. */
+class RepairGitMetadataObservation {
+  #statusRead;
+  #results;
+  constructor(statusRead, results) {
+    if (!(statusRead instanceof GitPorcelainV2StatusExecution)) throw new TypeError("Repair metadata requires its native status query");
+    this.#statusRead = statusRead; this.#results = results;
+    Object.freeze(this);
+  }
+  static read(root) {
+    const status = new GitPorcelainV2StatusExecution(root, { repositoryRoot: root, forceFileMode: false,
+      pathspecs: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes({ relativeToCwd: true }) });
+    const configuration = new LoggedGitCommandExecution(["config", "--null", "--get-regexp", "^(core\\.(autocrlf|eol|symlinks|filemode|ignorecase|precomposeunicode)|filter\\..*\\.(clean|smudge|process|required))$"], { cwd: root });
+    const head = new LoggedGitCommandExecution(["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: root });
+    let results;
+    try { results = LoggedGitCommandExecution.runTogether([status, configuration, head]); }
+    catch (cause) {
+      if (cause instanceof CommandExecutionBatchFailure) {
+        const control = cause.controlFailure();
+        if (control !== null) throw control;
+      }
+      throw cause;
+    }
+    return new this(status, results);
+  }
+  get status() { return this.#statusRead.parseResult(this.#results[0]); }
+  get filterConfiguration() {
+    const config = this.#results[1];
+    if (!config.ok && config.status !== 1) throw new Error(`failed to inspect Git filter environment: ${config.stderr}`);
+    return config;
+  }
+  head(objectFormat) { return new RepairGitHeadObservation(this.#results[2], objectFormat); }
+}
+
+function environmentHash(root, flags, config) {
+  const sparseEnabled = flags.sparseEnabled;
+  const skipWorktreePaths = flags.skipWorktreePaths;
   const sparse = sparseEnabled ? runGit(["sparse-checkout", "list"], { cwd: root }) : null;
   if (sparseEnabled && !sparse.ok) throw new Error(`failed to inspect sparse checkout definition: ${sparse.stderr || sparse.stdout}`);
   return canonicalHash([
@@ -587,91 +631,13 @@ function environmentHash(root, skipWorktreePaths) {
   ]);
 }
 
-function hashRegularFile(file) {
-  const hash = crypto.createHash("sha256");
-  hash.update("file\0");
-  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  const before = fs.fstatSync(descriptor, { bigint: true });
-  if (!before.isFile()) {
-    fs.closeSync(descriptor);
-    throw new Error(`repair input changed type while opening: ${file}`);
-  }
-  try {
-    const openedPath = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (!openedPath?.isFile() || openedPath.dev !== before.dev || openedPath.ino !== before.ino) {
-      throw new Error(`repair input changed while opening: ${file}`);
-    }
-    for (;;) {
-      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytes === 0) break;
-      hash.update(buffer.subarray(0, bytes));
-    }
-    const after = fs.fstatSync(descriptor, { bigint: true });
-    const pathAfter = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (
-      !pathAfter?.isFile()
-      || before.dev !== after.dev
-      || before.ino !== after.ino
-      || before.size !== after.size
-      || before.mtimeNs !== after.mtimeNs
-      || before.ctimeNs !== after.ctimeNs
-      || pathAfter.dev !== after.dev
-      || pathAfter.ino !== after.ino
-      || pathAfter.size !== after.size
-      || pathAfter.mtimeNs !== after.mtimeNs
-      || pathAfter.ctimeNs !== after.ctimeNs
-    ) {
-      throw new Error(`repair input changed while hashing: ${file}`);
-    }
-    return {
-      mode: (after.mode & 0o111n) === 0n ? "100644" : "100755",
-      contentHash: hash.digest("hex"),
-    };
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-
-function hashSymbolicLink(file) {
-  const before = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-  if (!before?.isSymbolicLink()) throw new Error(`repair input changed type while reading symlink: ${file}`);
-  const target = fs.readlinkSync(file);
-  const after = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-  if (
-    !after?.isSymbolicLink()
-    || before.dev !== after.dev
-    || before.ino !== after.ino
-    || before.size !== after.size
-    || before.mtimeNs !== after.mtimeNs
-    || before.ctimeNs !== after.ctimeNs
-    || fs.readlinkSync(file) !== target
-  ) {
-    throw new Error(`repair input changed while reading symlink: ${file}`);
-  }
-  return { mode: "120000", contentHash: canonicalHash(["symlink", target]) };
-}
-
-function contentIdentity(root, relPath, indexEntry) {
-  const absolute = path.resolve(root, relPath);
-  const stat = fs.lstatSync(absolute, { throwIfNoEntry: false });
-  if (!stat) return { mode: indexEntry?.mode || "missing", contentHash: canonicalHash(["missing"]) };
-  if (stat.isSymbolicLink()) return hashSymbolicLink(absolute);
-  if (indexEntry?.mode === "160000" || stat.isDirectory()) {
-    if (!stat.isDirectory()) throw new Error(`gitlink repair input is not a directory: ${relPath}`);
-    const status = runGitRequired(absolute, ["status", "--porcelain", "--untracked-files=all"], `failed to inspect submodule ${relPath}`);
-    if (status.trim() !== "") {
-      throw new RepairStateError(
-        "REPAIR_DIRTY_SUBMODULE",
-        `dirty submodule is not valid repair evidence: ${relPath}`,
-        { path: relPath },
-      );
-    }
-    const oid = runGitRequired(absolute, ["rev-parse", "HEAD"], `failed to inspect submodule HEAD ${relPath}`).trim();
-    return { mode: "160000", contentHash: canonicalHash(["gitlink", oid]) };
-  }
-  if (!stat.isFile()) throw new Error(`unsupported repair input type: ${relPath}`);
-  return hashRegularFile(absolute);
+function contentIdentity(root, relPath, indexEntry, { observedModes = new Map(), symlinks = true, filemode = true, skipWorktree = false, gitRepository = false } = {}) {
+  const { working } = SourceWorkingFileCapture.capture(root, relPath, { maxBytes: MAX_REPAIR_STREAM_BYTES });
+  const git = !gitRepository || working.kind === "directory" ? null : new GitSourceEntry({ logicalMode: indexEntry?.mode ?? null, indexOid: indexEntry?.oid ?? null,
+    assumeUnchanged: false, skipWorktree, worktreeMode: working.kind === "missing" ? null
+      : observedModes.get(relPath) ?? indexEntry?.mode ?? observeSourceUntrackedMode(root, relPath, { filemode, maxBytes: MAX_REPAIR_STREAM_BYTES }) });
+  git?.assertRepresentation(working, { symlinks });
+  return { working, git };
 }
 
 function collectExplicitTree(root, relPath, changed, registry, boundary) {
@@ -711,9 +677,7 @@ function buildFilesystemManifest({ root, specPath, boundary, registry }) {
       path: entry.path,
       oldPath: entry.oldPath,
       statuses: [...entry.statuses],
-      mode: identity.mode,
-      indexOid: null,
-      contentHash: identity.contentHash,
+      working: identity.working, git: null,
     });
   });
   if (entries.length > boundary.maxChangedPaths) {
@@ -742,38 +706,63 @@ function buildFilesystemManifest({ root, specPath, boundary, registry }) {
   });
 }
 
-function baselineFromStateOrRepository({ root, state }) {
-  const objectFormat = gitObjectFormat(root);
-  const runId = state?.runId;
-  if (runId) {
-    const ref = PRODUCT.flowBaselineRef(assertSafeRunId(runId));
-    const pinned = runGit(["rev-parse", "--verify", ref], { cwd: root });
-    if (pinned.ok) {
-      const commitOid = requireOid(pinned.stdout.trim(), "commitOid", objectFormat);
-      const treeOid = requireOid(runGitRequired(root, ["rev-parse", `${commitOid}^{tree}`], "failed to read pinned repair baseline").trim(), "treeOid", objectFormat);
-      return new ImmutableGitBaseline({
-        kind: "git",
-        objectFormat,
-        commitOid,
-        treeOid,
-        sourceRef: state.baseBranch || "pinned",
-        ref,
-        capturedAt: state.createdAt || new Date().toISOString(),
-      });
+/** Read existing historical authority; fingerprint capture never pins a Git ref. */
+function baselineFromStateOrRepository({ root, state, pinMissingBaseline }) {
+  if (state?.runId) {
+    const runId = assertSafeRunId(state.runId);
+    const ref = PRODUCT.flowBaselineRef(runId);
+    const pinned = GitRefObservation.resolve({ root, ref });
+    let baseOid = null;
+    if (!pinMissingBaseline && state.context !== undefined) {
+      if (!(state.context instanceof CurrentFlowContext)) {
+        throw new RepairStateError("REPAIR_BASELINE_UNRESOLVABLE", "repair baseline requires typed canonical context");
+      }
+      baseOid = state.context.baseOid;
     }
-  }
-  let defaultBaseRef = "HEAD";
-  for (const candidate of ["main", "master"]) {
-    if (runGit(["show-ref", "--verify", `refs/heads/${candidate}`], { cwd: root }).ok) {
-      defaultBaseRef = candidate;
-      break;
+    if (baseOid !== null && pinned.present && pinned.oid !== baseOid.toLowerCase()) {
+      throw new RepairStateError("REPAIR_BASELINE_UNRESOLVABLE", "Flow preparation base conflicts with its existing run baseline");
     }
+    const source = baseOid ?? pinned.oid;
+    if (source === null) {
+      // The direct Manifest API retains its existing lazy-pinning producer.
+      // The value API instead falls through to its original fresh repository
+      // observation; no creation-time historical identity is asserted there.
+      if (pinMissingBaseline) {
+        return repositoryBaseline(root, state, true);
+      }
+      return repositoryBaseline(root);
+    }
+    const commit = GitRevisionObservation.read(root, `${source}^{commit}`);
+    if (!commit.ok || commit.oid !== source.toLowerCase()) {
+      throw new RepairStateError("REPAIR_BASELINE_OBJECT_MISSING", "Flow historical baseline commit is unavailable");
+    }
+    const treeOid = requireOid(runGitRequired(root, ["rev-parse", "--verify", `${commit.oid}^{tree}`],
+      "failed to read Flow historical baseline tree").trim(), "treeOid", commit.objectFormat);
+    return new ImmutableGitBaseline({ kind: "git", objectFormat: commit.objectFormat,
+      commitOid: commit.oid, treeOid,
+      sourceRef: baseOid === null ? state.baseBranch || "pinned" : state.execution?.baseBranch || baseOid,
+      ref: pinned.present ? ref : null,
+      capturedAt: state.createdAt || new Date().toISOString() });
   }
-  const baseRef = state?.baseBranch || defaultBaseRef;
-  return captureRepairBaseline({ root, baseRef, runId: runId || "unbound", useMergeBase: baseRef !== "HEAD", pin: Boolean(runId) });
+  return repositoryBaseline(root, pinMissingBaseline ? state : null, pinMissingBaseline);
 }
 
-export function buildRepairStateManifest({ root, artifactRoot = null, specPath, state = null }) {
+function repositoryBaselineRef(root) {
+  for (const candidate of ["main", "master"]) {
+    if (runGit(["show-ref", "--verify", `refs/heads/${candidate}`], { cwd: root }).ok) return candidate;
+  }
+  return "HEAD";
+}
+
+/** Select the existing repository source; only the direct producer may pin it. */
+function repositoryBaseline(root, state = null, pinMissingBaseline = false) {
+  const baseRef = state?.baseBranch || repositoryBaselineRef(root);
+  const runId = state?.runId || "unbound";
+  return captureRepairBaseline({ root, baseRef, runId, useMergeBase: baseRef !== "HEAD",
+    pin: pinMissingBaseline && Boolean(state?.runId) });
+}
+
+export function buildRepairStateManifest({ root, artifactRoot = null, specPath, state = null, pinMissingBaseline = true }) {
   requireString(root, "root");
   const normalizedSpec = normalizeRepairPath(specPath);
   const registry = new RepairArtifactRegistry(normalizedSpec);
@@ -781,16 +770,28 @@ export function buildRepairStateManifest({ root, artifactRoot = null, specPath, 
     artifactRoot || flowStateSpecLocation(state)?.repositoryRoot || root,
   );
   const boundary = readConfiguredBoundary(root);
-  if (!isGitRepository(root)) return buildFilesystemManifest({ root, specPath: normalizedSpec, boundary, registry });
-  const baseline = baselineFromStateOrRepository({ root, state });
+  if (!selectedSourceGitRoot(root)) return buildFilesystemManifest({ root, specPath: normalizedSpec, boundary, registry });
+  const captureBaseline = pinMissingBaseline ? withManagedProcessScopeSync : withReadOnlyManagedProcessScopeSync;
+  const scope = pinMissingBaseline ? { executionRoot: root }
+    : { mainRoot: resolvedArtifactRoot, executionRoot: root };
+  const baseline = captureBaseline(scope, () => baselineFromStateOrRepository({ root, state, pinMissingBaseline }));
+  return withReadOnlyManagedProcessScopeSync({ mainRoot: root, executionRoot: root }, () => buildGitRepairStateManifest({
+    root, resolvedArtifactRoot, normalizedSpec, state, baseline, boundary, registry,
+  }));
+}
+
+function buildGitRepairStateManifest({ root, resolvedArtifactRoot, normalizedSpec, state, baseline, boundary, registry }) {
   const temporaryPaths = new TemporaryPaths(resolvedArtifactRoot);
   const temporaryDirectory = state?.specId && state?.runId
     ? temporaryPaths.flow(state.specId, state.runId)
     : temporaryPaths.runtime("repair-git");
   const directory = temporaryPaths.create(temporaryDirectory, PRODUCT.temporaryPrefix("repair-git"));
-  try {
-    const skipWorktreePaths = assertSupportedIndexFlags(root, directory);
-    const changed = collectGitChangedPaths(root, directory, baseline, boundary);
+  return withGitOutputCleanup(() => {
+    const flags = assertSupportedIndexFlags(root, directory);
+    const skipWorktreePaths = flags.skipWorktreePaths;
+    const metadata = RepairGitMetadataObservation.read(root);
+    const status = metadata.status;
+    const changed = collectGitChangedPaths(root, directory, baseline, boundary, registry, status);
     collectExplicitTree(root, PRODUCT.managedPath("config.json"), changed, registry, boundary);
     collectExplicitTree(root, PRODUCT.managedPath("config.local.json"), changed, registry, boundary);
     collectExplicitTree(resolvedArtifactRoot, normalizedSpec, changed, registry, boundary);
@@ -808,31 +809,33 @@ export function buildRepairStateManifest({ root, artifactRoot = null, specPath, 
       );
     }
     const index = collectIndexState(root, directory, baseline.objectFormat, changed.keys());
+    const observedModes = new Map(status.entries.filter((entry) => entry.worktreeMode > 0)
+      .map((entry) => [entry.path, entry.worktreeMode.toString(8)]));
+    const filterConfiguration = metadata.filterConfiguration;
+    const configuration = GitConfigurationObservation.fromRecords(Buffer.from(filterConfiguration.ok ? filterConfiguration.stdout : ""));
+    const symlinks = configuration.boolean("core.symlinks", true, () => readGitBoolean(root, "core.symlinks", true, { execute: runGit }));
+    const filemode = configuration.boolean("core.filemode", true, () => readGitBoolean(root, "core.filemode", true, { execute: runGit }));
+    const sparsePaths = new Set(skipWorktreePaths);
     const entries = [...changed.values()].map((entry) => {
       const indexEntry = index.get(entry.path) || null;
       const isSpecInput = entry.path === normalizedSpec
         || entry.path.startsWith(`${testSourceDirectory}/`);
-      const identity = contentIdentity(isSpecInput ? resolvedArtifactRoot : root, entry.path, indexEntry);
+      const identity = contentIdentity(isSpecInput ? resolvedArtifactRoot : root, entry.path, indexEntry, { observedModes, symlinks, filemode, skipWorktree: sparsePaths.has(entry.path), gitRepository: !isSpecInput || resolvedArtifactRoot === path.resolve(root) });
       return new CanonicalRepairEntry({
         path: entry.path,
         oldPath: entry.oldPath,
         statuses: [...entry.statuses],
-        mode: identity.mode,
-        indexOid: indexEntry?.oid || null,
-        contentHash: identity.contentHash,
+        working: identity.working, git: identity.git,
       });
     });
-    const headOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD"], "failed to resolve repair state HEAD").trim(), "headOid", baseline.objectFormat);
-    const headTreeOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD^{tree}"], "failed to resolve repair state tree").trim(), "headTreeOid", baseline.objectFormat);
+    const { headOid, headTreeOid } = metadata.head(baseline.objectFormat);
     return new RepairFingerprintManifest({
       version: REPAIR_STATE_VERSION,
       baseline,
       headOid,
       headTreeOid,
-      environmentHash: environmentHash(root, skipWorktreePaths),
+      environmentHash: environmentHash(root, flags, filterConfiguration),
       entries,
     });
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  }, () => temporaryPaths.cleanup(directory));
 }

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { it } from "node:test";
 
+import { testTemporaryRoot } from "../../test-environment.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { managedOutputDir } from "../../../src/lib/config.js";
 import { FlowTargetExpectation, FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -18,7 +19,7 @@ import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonica
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import { DispatchExecutionRepositoryBinding, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { createScenarioProviderFake, dispatchContainer, dispatchFlowCommand, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -290,10 +291,13 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
     assert.notEqual(repairs[0].id, repairs[1].id);
     const introduced = manager.activityLedger(specId).filter((entry) => entry.transition.attempt?.nodeId === "draft-gate-repair");
     assert.deepEqual(introduced.map((entry) => entry.transition.attempt.sequence), [2, 4], "Skipped lifecycle slots have no fabricated worker Attempt");
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
   } finally {
     gateProvider?.mock.restore();
     reviewProcess?.mock.restore();
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root });
   }
 });
 
@@ -350,7 +354,12 @@ for (const phase of ["questions", "coverage"]) {
           const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager,
             phase: "draft", config, flowState: flowManager.loadReadOnly(specId) };
           const result = await new RunReviewCommand().execute(ctx);
-          assert.equal(result.result, "ok", JSON.stringify(result));
+          const failure = flowManager.canonicalState(specId).attempt?.failure;
+          if (result.ok === false && result.guidance?.currentState?.stop === "unconfirmed") {
+            testTemporaryRoot().retainOnUnconfirmedExecution();
+            fs.writeFileSync(path.join(root, ".tmp", "review-failure.json"), JSON.stringify({ result, failure }, null, 2));
+          }
+          assert.equal(result.result, "ok", JSON.stringify({ root, result, failure }));
           await FLOW_COMMANDS.run.review.post(ctx, result);
           return result;
         };
@@ -433,14 +442,17 @@ for (const phase of ["questions", "coverage"]) {
         assert.equal(result.stepResult.kind, `draft-${phase}-triage-completed`);
         const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, `draft-${phase}-repair`);
+      } catch (error) {
+        testTemporaryRoot().retainOnUnconfirmedExecution(error);
+        throw error;
       } finally {
-        removeTmpDir(root);
+        removeQuiescentRuntimeFixture({ mainRoot: root });
       }
     });
   }
 }
 
-it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async () => {
+it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async (t) => {
   const root = fixtureRepository("draft-artifact-scenario-");
   let gateAgentLookup;
   let reviewProcess;
@@ -733,9 +745,43 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(specAfterRefusal.bytes, specRefusalSnapshots[0].bytes);
     assert.equal(reloaded.activityLedger(specId).some((entry) => entry.result?.stepResult?.kind === "spec-created"), false);
 
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    // TAP otherwise reports the selected close refusal without its original
+    // body/communication cause. Keep the actual bounded chain, then rethrow.
+    const pending = [{ failure: error, parentIndex: null, via: "thrown" }];
+    const seen = new Set();
+    for (let index = 0; index < pending.length && index < 12; index += 1) {
+      const { failure, parentIndex, via } = pending[index];
+      if (failure == null || seen.has(failure)) continue;
+      seen.add(failure);
+      t.diagnostic(JSON.stringify({ draftPhaseBoundaryFailure: {
+        index, parentIndex, via,
+        name: typeof failure.name === "string" ? failure.name.slice(0, 80) : null,
+        code: typeof failure.code === "string" ? failure.code.slice(0, 160) : null,
+        reason: typeof failure.reason === "string" ? failure.reason.slice(0, 160) : null,
+        messageHead: String(failure.message ?? failure).slice(0, 512),
+        frames: typeof failure.stack === "string" ? failure.stack.split("\n").slice(1, 7).map((line) => line.slice(0, 512)) : [],
+        executionId: failure.executionId ?? null, callId: failure.callId ?? null,
+        primaryCause: failure.primaryCause == null ? null : {
+          code: failure.primaryCause.code,
+          messageHead: failure.primaryCause.message.slice(0, 512),
+          executionId: failure.primaryCause.executionId, callId: failure.primaryCause.callId,
+        },
+        diagnostic: failure.diagnostic?.toJSON() ?? null,
+        communication: failure.communication?.toJSON() ?? null,
+      } }));
+      if (failure.cause != null && pending.length < 12) pending.push({ failure: failure.cause, parentIndex: index, via: "cause" });
+      if (failure instanceof AggregateError) {
+        for (const member of failure.errors.slice(0, 12 - pending.length)) {
+          pending.push({ failure: member, parentIndex: index, via: "errors" });
+        }
+      }
+    }
+    throw error;
   } finally {
     reviewProcess?.mock.restore();
     gateAgentLookup?.mock.restore();
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root });
   }
 });

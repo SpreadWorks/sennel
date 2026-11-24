@@ -11,6 +11,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 
 import crypto from "node:crypto";
 import path from "node:path";
+import { RequirementTestArtifactStore, RequirementTestCatalogReader } from "./requirement-test-store.js";
 import {
   CanonicalCommandAttemptArtifactHistory,
 } from "./canonical-command-result.js";
@@ -189,26 +190,43 @@ class CanonicalTestSourceMemberFinalization {
   }
 }
 
-/** Approval evidence that canonically finalizes an intentionally empty test tree. */
+/** The current Requirement plan finalizes an intentionally empty active test tree. */
 class CanonicalEmptyTestSourceFinalization {
-  constructor({ activities } = {}) {
-    if (!Array.isArray(activities)) {
-      throw new CanonicalTestSourceProvenanceError("empty canonical test source requires an Activity ledger");
+  constructor({ state, catalog, activities, readCatalogedArtifact } = {}) {
+    const plans = catalog.artifacts.filter((descriptor) => descriptor.logicalKey === "test.requirement.plan");
+    if (plans.length !== 1 || typeof plans[0].activityId !== "string" || plans[0].activityId.trim() === "") {
+      throw new CanonicalTestSourceProvenanceError("empty canonical test source requires its current Requirement plan");
     }
-    const confirmations = activities.filter((activity) => (
-      activity?.type === "result_confirmed"
-      && activity.transition?.operation === "initialize_requirement_test_lifecycle"
-      && activity.transition?.nodeId === "approval"
-      && activity.transition?.requirementTestInitialization?.target === "implement"
-      && JSON.stringify(activity.transition.requirementTestInitialization.skippedLeafIds)
-        === JSON.stringify(["test-generate", "test-review", "test-repair", "test-gate"])
-      && activity.result?.outcome === "passed"
-      && isIsoTimestamp(activity.result?.confirmedAt)
-    ));
-    if (confirmations.length !== 1) {
-      throw new CanonicalTestSourceProvenanceError("empty canonical test source has no unique approval finalization");
+    const producers = activities.filter((activity) => activity?.id === plans[0].activityId);
+    if (producers.length !== 1) {
+      throw new CanonicalTestSourceProvenanceError("empty canonical test source has no unique current plan producer");
     }
-    this.finalizedAt = confirmations[0].result.confirmedAt;
+    const producer = producers[0];
+    const initialization = producer.transition?.requirementTestInitialization;
+    const lifecycle = producer.transition?.requirementTestLifecycle;
+    const approvedEmptyPlan = producer.transition?.operation === "initialize_requirement_test_lifecycle"
+      && producer.nodeId === "approval" && initialization?.target === "implement"
+      && JSON.stringify(initialization.skippedLeafIds)
+        === JSON.stringify(["test-generate", "test-review", "test-repair", "test-gate"]);
+    const deferredEmptyPlan = producer.transition?.operation === "advance_requirement_test_lifecycle"
+      && lifecycle?.disposition === "defer" && lifecycle.target === "implement"
+      && lifecycle.nextStatus === "deferred" && lifecycle.nextRequirementId === null
+      && lifecycle.acceptanceHandoff === true;
+    if (producer.type !== "result_confirmed" || producer.transition?.nodeId !== producer.nodeId
+      || plans[0].slot?.publicationStep !== producer.nodeId
+      || producer.result?.outcome !== "passed" || !isIsoTimestamp(producer.result?.confirmedAt)
+      || !(approvedEmptyPlan || deferredEmptyPlan)) {
+      throw new CanonicalTestSourceProvenanceError("empty canonical test source has no completed current plan finalization");
+    }
+    try {
+      const reader = new RequirementTestCatalogReader({ catalog, readCatalogedArtifact });
+      const execution = new RequirementTestArtifactStore({ flowManager: reader, state })
+        .readExecutionLifecycle("test-execute");
+      if (execution.promotedIds.size !== 0) throw new Error("promoted Requirement tests are missing from the catalog");
+    } catch (error) {
+      throw new CanonicalTestSourceProvenanceError(`empty canonical test source disposition is invalid: ${error.message}`);
+    }
+    this.finalizedAt = producer.result.confirmedAt;
     Object.freeze(this);
   }
 }
@@ -259,7 +277,7 @@ export class CanonicalTestSourceRevision {
     Object.freeze(this);
   }
 
-  static fromCatalog({ state, catalog, activities = [] } = {}) {
+  static fromCatalog({ state, catalog, activities = [], readCatalogedArtifact } = {}) {
     const canonical = canonicalState(state);
     if (catalog === null || typeof catalog !== "object" || !Array.isArray(catalog.artifacts)) {
       throw new Error("canonical test source revision requires an artifact catalog");
@@ -281,7 +299,7 @@ export class CanonicalTestSourceRevision {
       });
     const members = descriptors.map(({ descriptor, ...member }) => member);
     const finalizedAt = descriptors.length === 0
-      ? new CanonicalEmptyTestSourceFinalization({ activities }).finalizedAt
+      ? new CanonicalEmptyTestSourceFinalization({ state: canonical, catalog, activities, readCatalogedArtifact }).finalizedAt
       : descriptors
         .map(({ descriptor }) => new CanonicalTestSourceMemberFinalization({ descriptor, activities }).finalizedAt)
         .sort((left, right) => Date.parse(left) - Date.parse(right))
@@ -360,12 +378,7 @@ export class CanonicalTestArtifactStore {
   get directory() { return this.location.directory; }
 
   readSpec(consumerNodeId) {
-    const resolved = this.flowManager.readArtifact({
-      specId: this.specId,
-      logicalKey: "spec.record",
-      consumerNodeId,
-    });
-    return Object.freeze(parseJson(resolved.bytes, "canonical spec.json"));
+    return readCanonicalTestSpec({ flowManager: this.flowManager, specId: this.specId, consumerNodeId });
   }
 
   /** Return the latest payload in a producer-owned attempts[] result file. */
@@ -409,10 +422,12 @@ export class CanonicalTestArtifactStore {
 
   /** Derive the current test-tree revision from catalog provenance only. */
   testSourceRevision() {
-    return CanonicalTestSourceRevision.fromCatalog({
-      state: this.state,
-      catalog: this.flowManager.artifactCatalog(this.specId),
-      activities: this.flowManager.activityLedger(this.specId),
+    return this.flowManager.readCanonicalTransitionView({
+      specId: this.specId,
+      read: (view) => CanonicalTestSourceRevision.fromCatalog({
+        state: view.state, catalog: view.catalog, activities: view.activities,
+        readCatalogedArtifact: (descriptor) => view.readCatalogedArtifact(descriptor),
+      }),
     });
   }
 
@@ -443,4 +458,10 @@ export class CanonicalTestArtifactStore {
 
 export function isCanonicalFlowState(state) {
   return state?.schemaRevision === CURRENT_FLOW_SCHEMA_REVISION;
+}
+
+/** Read the canonical Spec with only the artifact capability needed by its consumers. */
+export function readCanonicalTestSpec({ flowManager, specId, consumerNodeId }) {
+  const resolved = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId });
+  return Object.freeze(parseJson(resolved.bytes, "canonical spec.json"));
 }

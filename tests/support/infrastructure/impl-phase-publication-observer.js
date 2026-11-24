@@ -1,4 +1,4 @@
-import { SourcePublicationCaptureFile } from "./source-publication-capture.js";
+import { SourcePublicationCaptureFile, CapturedPublicationBinding } from "./source-publication-capture.js";
 import assert from "node:assert/strict";
 
 // FlowManager initializes the production composition graph before its shared
@@ -50,8 +50,8 @@ class PublicationObservation {
   #priorActivities;
 
   constructor(producer, operation, input, captured = null) {
-    this.#input = snapshot(input);
-    this.#producer = producer instanceof FlowManager ? producer._store : producer;
+    this.#input = snapshot({ ...input, binding: CapturedPublicationBinding.from(input.binding) });
+    this.#producer = new WeakRef(producer instanceof FlowManager ? producer._store : producer);
     this.operation = operation;
     this.authorityRoot = captured?.authorityRoot ?? producer.executionRoot();
     const { binding, stepResult } = input;
@@ -85,7 +85,7 @@ class PublicationObservation {
   }
 
   authenticate(manager, activity, result, settlement) {
-    assert.notEqual(manager._store, this.#producer,
+    assert.notEqual(manager._store, this.#producer.deref(),
       "IMPL_PHASE_PUBLICATION_RELOAD_REQUIRED: authentication must use a fresh manager/Store");
     const input = snapshot(this.#input);
     assert.equal(stepResultDigest(input.stepResult), this.resultDigest,
@@ -146,17 +146,25 @@ export class ImplPhasePublicationObserver {
         if (!saveOperation.test(name) || typeof descriptor.value !== "function") continue;
         const original = descriptor.value;
         const observer = this;
-        this.#mocks.push(t.mock.method(Type.prototype, name, function (...args) {
-          try { observer.#capture(this, `${Type.name}.${name}`, args); }
-          catch (error) {
-            if (observer.#sourceCapture !== null) throw error;
-            observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error });
+        const mocked = t.mock.method(Type.prototype, name, function (...args) {
+          try {
+            try { observer.#capture(this, `${Type.name}.${name}`, args); }
+            catch (error) {
+              if (observer.#sourceCapture !== null) throw error;
+              observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error });
+            }
+            // Preserve the receiver, argument identities, return/Promise identity,
+            // and thrown error. Typed recording precedes the call, including
+            // postcommit response loss.
+            return original.apply(this, args);
+          } finally {
+            // The typed observations own authentication. Node's independent
+            // recorder would also retain every unrelated input and old Store.
+            // It appends this call after return, so keep at most the latest one.
+            mocked.mock.resetCalls();
           }
-          // Preserve the receiver, argument identities, return/Promise identity,
-          // and thrown error. Recording precedes the call, including postcommit
-          // response loss; no finally/readback or async continuation is injected.
-          return original.apply(this, args);
-        }));
+        });
+        this.#mocks.push(mocked);
       }
     }
   }

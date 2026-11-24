@@ -1,15 +1,17 @@
 /**
  * Non-authoritative cache for explicitly requested human artifact views.
  *
- * Cache files live under the exact Version root's .runtime/views directory.
+ * Direct service callers keep caches under the exact Version root's .runtime/views
+ * directory. Public read-only CLI calls supply their minted invocation workspace instead.
  * They are deliberately absent from the artifact catalog and are never read
  * as Flow transition input. A cache failure is therefore represented as a
  * warning after successful rendering rather than as a Flow failure.
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { ReadOnlyInvocationWorkspace } from "../../lib/readonly-invocation-workspace.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "./artifact-view-registry.js";
 import { ArtifactFullView } from "./artifact-view-renderer.js";
 import { ArtifactViewTarget, artifactViewRuntimeDirectory } from "./artifact-view-reader.js";
@@ -167,14 +169,17 @@ export class ArtifactViewCacheWrite {
  * already generated.
  */
 export class ArtifactViewCache {
-  constructor({ target, faultInjector = null, registry = FLOW_ARTIFACT_VIEW_REGISTRY } = {}) {
+  constructor({ target, faultInjector = null, registry = FLOW_ARTIFACT_VIEW_REGISTRY, workspace = null } = {}) {
     if (!(target instanceof ArtifactViewTarget)) throw new Error("artifact view cache requires an ArtifactViewTarget");
     if (faultInjector !== null && typeof faultInjector !== "function") throw new Error("artifact view cache faultInjector must be a function or null");
     if (!registry || typeof registry.require !== "function") throw new Error("artifact view cache requires an ArtifactViewRegistry");
+    if (workspace !== null && !(workspace instanceof ReadOnlyInvocationWorkspace)) throw new TypeError("artifact view cache workspace must be a ReadOnlyInvocationWorkspace");
     this.target = target;
     this.registry = registry;
     this.faultInjector = faultInjector;
-    this.directory = artifactViewRuntimeDirectory(target);
+    this.workspace = workspace;
+    this.directory = workspace === null ? artifactViewRuntimeDirectory(target)
+      : workspace.runtime(path.posix.join("artifact-views", target.specId, String(target.version)));
     Object.freeze(this);
   }
 
@@ -182,7 +187,9 @@ export class ArtifactViewCache {
     try {
       const key = new ArtifactViewCacheKey({ logicalKey, mode, registry: this.registry });
       const expected = new ArtifactViewCacheMetadata({ revision, fingerprint });
-      const bytes = new AtomicFile(this.#filePath(key), { phaseNamespace: "artifact-view-cache-read" }).read(null);
+      const bytes = this.workspace === null
+        ? new AtomicFile(this.#filePath(key), { phaseNamespace: "artifact-view-cache-read" }).read(null)
+        : this.workspace.readFile(this.#filePath(key), null);
       if (bytes === null) return new ArtifactViewCacheRead({ hit: false });
       const parsed = ArtifactViewCacheMetadata.parse(bytes.toString("utf8"));
       if (parsed.metadata.revision !== expected.revision || parsed.metadata.fingerprint !== expected.fingerprint) {
@@ -205,10 +212,13 @@ export class ArtifactViewCache {
         throw new Error("artifact view cache Markdown must not include cache metadata");
       }
       this.#ensureDirectory();
-      new AtomicFile(this.#filePath(key), {
+      const options = {
         phaseNamespace: "artifact-view-cache",
         ...(this.faultInjector ? { faultInjector: this.faultInjector } : {}),
-      }).write(`${metadata.toComment()}${markdown}`);
+      };
+      const content = `${metadata.toComment()}${markdown}`;
+      if (this.workspace === null) new AtomicFile(this.#filePath(key), options).write(content);
+      else this.workspace.writeFile(this.#filePath(key), content, options);
       return new ArtifactViewCacheWrite({ saved: true });
     } catch (error) {
       return new ArtifactViewCacheWrite({
@@ -229,10 +239,14 @@ export class ArtifactViewCache {
 
   #ensureDirectory() {
     this.target.location.assertAuthority(null, { mustExist: true });
+    if (this.workspace !== null) {
+      this.workspace.ensureDirectory(this.directory);
+      return;
+    }
     const runtime = this.target.location.resolve(".runtime");
-    fs.mkdirSync(runtime, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(runtime, { create: true });
     this.target.location.assertAuthority(".runtime", { mustExist: true });
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(this.directory, { create: true });
     this.target.location.assertAuthority(path.posix.join(".runtime", "views"), { mustExist: true });
   }
 }

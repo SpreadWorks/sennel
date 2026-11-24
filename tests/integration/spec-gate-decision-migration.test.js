@@ -9,8 +9,13 @@ import { afterEach, describe, it } from "node:test";
 
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
 import { WorkerArtifactHandoffCoordinator } from "../../src/flow/lib/worker-artifact-handoff.js";
-import { readSpecGateRepairInput } from "../../src/flow/lib/spec-gate-repair-input.js";
+import { readSpecGateRepairInput, SpecGateRepairRuleSet } from "../../src/flow/lib/spec-gate-repair-input.js";
+import { readSpecGateRepairSources } from "../../src/flow/lib/spec-gate-repair-sources.js";
+import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
+import { FlowExecutionContractRefusal } from "../../src/flow/lib/flow-execution-contract.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { FlowArtifactCatalog } from "../../src/lib/flow-version.js";
+import { FlowActivity } from "../../src/flow/lib/current-flow-state.js";
 import { CanonicalRevisionRootTransaction, SpecsMigrationTransaction } from "../../src/lib/specs-migration.js";
 import { resolveMigrationSpecRoot } from "../../src/lib/migration-spec-root.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
@@ -78,7 +83,17 @@ function replaceCatalogArtifact(version, relativePath, bytes) {
   assert.ok(descriptor, `missing Catalog descriptor: ${relativePath}`);
   descriptor.hash = crypto.createHash("sha256").update(bytes).digest("hex");
   descriptor.size = bytes.length;
-  fs.writeFileSync(catalogFile, `${JSON.stringify(catalog, null, 2)}\n`);
+  fs.writeFileSync(catalogFile, `${JSON.stringify(new FlowArtifactCatalog({ artifacts: catalog.artifacts }).toJSON(), null, 2)}\n`);
+}
+
+function sourceEvidenceDigest(flowManager, state, executionRoot) {
+  const spec = JSON.parse(flowManager.readArtifact({
+    specId: state.specId, logicalKey: "spec.record", consumerNodeId: "spec-gate-repair",
+  }).bytes.toString("utf8"));
+  return SpecGateRepairContext.evidenceDigestFor({
+    sources: readSpecGateRepairSources({ flowManager, state, executionRoot, spec }),
+    guardrails: new SpecGateRepairRuleSet({ executionRoot, spec }).guardrails,
+  });
 }
 
 function manager(root) {
@@ -118,20 +133,22 @@ describe("migrate specs --to 4", () => {
     assert.equal(current.result.kind, "spec-gate-repair-context-required");
     assert.equal(current.receipt.settlementKind, "execution");
     const newActivities = activityLedger(version);
-    assert.deepEqual(newActivities.filter((entry) => entry.type === "note_recorded"),
-      oldActivities.filter((entry) => entry.type === "note_recorded"));
+    const notes = (entries) => entries.filter((entry) => entry.type === "note_recorded")
+      .map((entry) => new FlowActivity(entry).toJSON());
+    assert.deepEqual(notes(newActivities), notes(oldActivities));
     const publication = JSON.parse(fs.readFileSync(path.join(version, publicationPath), "utf8"));
     assert.equal(publication.proposal.stage, "spec-gate-repair-draft-return");
     assert.equal(publication.proposal.decision, JSON.parse(originalPublication).proposal.question);
     assert.match(publication.proposal.unresolvedBecause, /legacy worker record did not explain/);
-    const worktreeSource = readSpecGateRepairInput({ flowManager: manager(root), state,
-      executionRoot: worktreePath });
-    const mainSource = readSpecGateRepairInput({ flowManager: manager(root), state,
-      executionRoot: root });
-    assert.equal(publication.context.evidenceDigest, worktreeSource.context.evidenceDigest,
+    const worktreeSource = sourceEvidenceDigest(manager(root), state, worktreePath);
+    const mainSource = sourceEvidenceDigest(manager(root), state, root);
+    assert.equal(publication.context.evidenceDigest, worktreeSource,
       "migration baseline must use the Flow execution worktree");
-    assert.notEqual(publication.context.evidenceDigest, mainSource.context.evidenceDigest,
+    assert.notEqual(publication.context.evidenceDigest, mainSource,
       "main repository evidence differs from the active worktree");
+    assert.throws(() => readSpecGateRepairInput({ flowManager: manager(root), state,
+      executionRoot: worktreePath }), /Spec Gate repair target revision is stale or absent/,
+      "historical question migration must not invent current Gate target authority");
     assert.equal(migrate(root).status, 0, "repeated migration must be a no-op");
     assert.deepEqual(fs.readFileSync(path.join(version, "activities.jsonl")),
       Buffer.from(newActivities.map((entry) => `${JSON.stringify(entry)}\n`).join("")));
@@ -242,7 +259,7 @@ describe("migrate specs --to 4", () => {
     catalog.artifacts = catalog.artifacts.filter((entry) => (
       !entry.relativePath.startsWith(`${archiveRelative}/`)
     ));
-    fs.writeFileSync(catalogFile, `${JSON.stringify(catalog, null, 2)}\n`);
+    fs.writeFileSync(catalogFile, `${JSON.stringify(new FlowArtifactCatalog({ artifacts: catalog.artifacts }).toJSON(), null, 2)}\n`);
     fs.rmSync(worktreePath, { recursive: true });
 
     const migrated = migrate(root);
@@ -280,7 +297,8 @@ describe("migrate specs --to 4", () => {
     const beforeActivities = flowManager.activityLedger(SPEC_ID);
     const beforeCatalog = flowManager.artifactCatalog(SPEC_ID);
     assert.throws(() => planSpecGateRepairWorkerExecution({ ctx, state,
-      handoffCoordinator: coordinator }), { code: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" });
+      handoffCoordinator: coordinator }), (error) => error instanceof FlowExecutionContractRefusal
+        && error.code === "FLOW_EXECUTION_CONTRACT_MISMATCH");
     assert.deepEqual(manager(root).canonicalState(SPEC_ID), beforeState);
     assert.deepEqual(manager(root).activityLedger(SPEC_ID), beforeActivities);
     assert.deepEqual(manager(root).artifactCatalog(SPEC_ID), beforeCatalog);

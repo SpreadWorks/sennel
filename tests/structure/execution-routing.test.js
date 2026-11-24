@@ -82,6 +82,48 @@ test("process admission follows the exact Gate and Review callback and preserves
   }
 });
 
+test("read-only display scope preserves canonical routing and rejects wrapper bypasses", () => {
+  const file = "src/flow/lib/get-next-action.js";
+  const source = original.get(file);
+  const statement = "return withReadOnlyManagedProcessScope({\n"
+    + "      mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,\n"
+    + "    }, () => this.executeCanonical(ctx));";
+  const importStatement = 'import { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";';
+  const routeFailures = (files) => inspect(files).diagnostics.filter((entry) => entry.rule === "A10"
+    && entry.file === file && entry.message === "next-action public entry can bypass canonical registered routing");
+  assert.equal(source.includes(statement), true);
+  assert.equal(source.includes(importStatement), true);
+  assert.equal(inspect(original).ok, true);
+  for (const [before, after] of [
+    [statement, `if (ctx.skip) return null; ${statement}`],
+    [statement, statement.replace("() => this.executeCanonical(ctx)", "() => null")],
+    [statement, statement.replace("() => this.executeCanonical(ctx)", "() => ctx.execute()")],
+    [statement, statement.replace("executeCanonical(ctx)", "executeCanonical({ ...ctx })")],
+    [statement, statement.replace("executionRoot: ctx.executionRoot || ctx.root", "executionRoot: ctx.otherRoot")],
+    ["async execute(ctx) {", "async execute(ctx, withReadOnlyManagedProcessScope) {"],
+    [importStatement, 'import { withReadOnlyManagedProcessScope } from "./fake-readonly.js";'],
+    [importStatement, "function withReadOnlyManagedProcessScope(input, callback) { return callback(); }"],
+  ]) {
+    assert.equal(source.includes(before), true, `fixture target exists: ${before}`);
+    const files = new Map(original);
+    files.set(file, source.replace(before, after));
+    files.set("src/flow/lib/fake-readonly.js",
+      "export function withReadOnlyManagedProcessScope(input, callback) { return callback(); }");
+    const failures = routeFailures(files);
+    assert.ok(failures.length > 0, `must reject ${after}`);
+    assert.equal(failures.every((entry) => entry.line > 0 && entry.column > 0 && entry.trace.includes(file)), true);
+    files.set(file, source);
+    assert.deepEqual(routeFailures(files), []);
+  }
+  const aliased = new Map(original);
+  aliased.set(file, source.replace(importStatement,
+    'import { withReadOnlyManagedProcessScope as inspectReadOnly } from "./readonly-reexport.js";')
+    .replace(statement, statement.replace("withReadOnlyManagedProcessScope", "inspectReadOnly")));
+  aliased.set("src/flow/lib/readonly-reexport.js",
+    'export { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";');
+  assert.deepEqual(routeFailures(aliased), []);
+});
+
 test("registered Gate, Review, and display routes reject Step-specific bypasses", () => {
   for (const [file, before, after] of [
     ["src/flow/engine/composition/registered-step-execution.js",

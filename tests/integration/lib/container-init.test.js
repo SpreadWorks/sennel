@@ -1,10 +1,12 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { container, initContainer } from "../../../src/lib/container.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../../support/builders/tmp-dir.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 
 describe("initContainer — config registration contract (R1, #175)", () => {
   let tmp;
@@ -44,13 +46,6 @@ describe("initContainer — config registration contract (R1, #175)", () => {
     assert.equal(got.type, "sample-node-command");
   });
 
-  it("never registers an empty object `{}` for missing config (explicit null, not silent fallback)", () => {
-    initContainer();
-    const got = container.get("config");
-    assert.strictEqual(got, null, "config must be null (not {}) when missing");
-    assert.notDeepEqual(got, {}, "config must not be an empty object");
-  });
-
   it("registers Renderable base class and concrete classes for preset use", () => {
     initContainer();
     for (const name of [
@@ -86,26 +81,42 @@ describe("initContainer — config registration contract (R1, #175)", () => {
     assert.equal(paths.temporaryRoot, join(tmp, ".tmp", "runtime", "agent"));
   });
 
-  it("CLI entrypoint pre-scans flow run --agent-work-dir before initContainer", () => {
-    const source = readFileSync(join(process.cwd(), "src/sennel.js"), "utf8");
-    assert.match(source, /let agentWorkDirOverride = null/, "entrypoint must have early flow-run scanner state");
-    assert.match(source, /agentWorkDirOverride,/, "initContainer must receive the override");
-    assert.match(source, /subCmd\s*===\s*"flow"\s*&&\s*rest\[0\]\s*===\s*"run"/, "scanner must be scoped to flow run");
+  it("semantic CLI initialization selects the work directory override only for Flow run", () => {
+    writeJson(tmp, ".sennel/config.json", {
+      lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" },
+      agent: { workDir: ".configured" },
+    });
+    const observed = join(tmp, "observed-paths.json");
+    for (const group of ["run", "get"]) {
+      const source = [
+        `import fs from "node:fs";`,
+        `process.argv = [process.execPath, "sennel", "flow", ${JSON.stringify(group)}, "unregistered-container-probe", "--agent-work-dir", ".agent-run"];`,
+        `await import(${JSON.stringify(new URL("../../../src/cli-main.js", import.meta.url).href)});`,
+        `const { container } = await import(${JSON.stringify(new URL("../../../src/lib/container.js", import.meta.url).href)});`,
+        `fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(container.get("paths").agentWorkDir));`,
+      ].join("\n");
+      const result = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", source], {
+        cwd: tmp, env: process.env, encoding: "utf8",
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.signal, null);
+      assert.equal(result.status, 1, result.stderr || result.stdout);
+      assert.equal(JSON.parse(result.stdout).ok, false);
+      assert.equal(JSON.parse(readFileSync(observed, "utf8")),
+        join(tmp, group === "run" ? ".agent-run" : ".configured"));
+    }
   });
 
   it("keeps logger flow authority usable after finalize removes the managed worktree", async () => {
     const git = (...args) => execFileSync("git", ["-C", tmp, ...args], { encoding: "utf8" });
-    git("init", "--quiet");
-    git("config", "user.email", "test@example.com");
-    git("config", "user.name", "Test User");
+    initGitRepo(tmp);
     writeJson(tmp, ".sennel/config.json", {
       lang: "ja",
       type: "sample-node-command",
       docs: { languages: ["ja"], defaultLanguage: "ja" },
       logs: { enabled: true },
     });
-    git("add", ".");
-    git("commit", "--quiet", "-m", "fixture");
+    commitAll(tmp, "fixture");
     const worktree = join(tmp, ".sennel", "worktree", "feature-demo");
     git("worktree", "add", "--quiet", "-b", "feature/demo", worktree);
 

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { captureRegularFile } from "./regular-file-snapshot.js";
 
 import { managedDir } from "./config.js";
 import {
@@ -15,52 +17,16 @@ function canonicalDirectory(value, field) {
     throw new Error(`${field} must be an absolute directory`);
   }
   const resolved = path.resolve(value);
-  const stat = fs.lstatSync(resolved);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(resolved) !== resolved) {
-    throw new Error(`${field} must be a canonical real directory`);
-  }
+  new RealDirectoryAuthority(resolved).assertStable();
   return resolved;
 }
 
-function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
 function readRecoveryDocument(filePath) {
-  const expected = fs.lstatSync(filePath);
-  if (
-    !expected.isFile()
-    || expected.isSymbolicLink()
-    || expected.nlink !== 1
-    || fs.realpathSync(filePath) !== filePath
-  ) {
-    throw new Error("recovery flow state must be one canonical regular file");
-  }
-  if (expected.size > MAX_RECOVERY_STATE_BYTES) {
-    throw new Error(`recovery flow state exceeds ${MAX_RECOVERY_STATE_BYTES} bytes`);
-  }
-
-  const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  const bytes = captureRegularFile(filePath, { label: "recovery flow state", maxBytes: MAX_RECOVERY_STATE_BYTES, requireSingleLink: true }).bytes;
   try {
-    const opened = fs.fstatSync(descriptor);
-    if (!opened.isFile() || opened.nlink !== 1 || !sameFile(expected, opened)) {
-      throw new Error("recovery flow state authority changed while opening");
-    }
-    const bytes = fs.readFileSync(descriptor);
-    if (bytes.length > MAX_RECOVERY_STATE_BYTES) {
-      throw new Error(`recovery flow state exceeds ${MAX_RECOVERY_STATE_BYTES} bytes`);
-    }
-    const visible = fs.lstatSync(filePath);
-    if (!sameFile(opened, visible) || visible.nlink !== 1) {
-      throw new Error("recovery flow state authority changed while reading");
-    }
-    try {
-      return JSON.parse(bytes.toString("utf8"));
-    } catch (cause) {
-      throw new Error(`recovery flow state is malformed: ${cause.message}`, { cause });
-    }
-  } finally {
-    fs.closeSync(descriptor);
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (cause) {
+    throw new Error(`recovery flow state is malformed: ${cause.message}`, { cause });
   }
 }
 

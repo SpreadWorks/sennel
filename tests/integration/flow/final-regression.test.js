@@ -2,6 +2,8 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import RunFinalRegressionCommand from "../../../src/flow/lib/run-final-regression.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
@@ -12,11 +14,20 @@ import {
 } from "../../../src/flow/lib/final-regression-transition-facts.js";
 import { validateFinalRegressionResult } from "../../../src/flow/lib/test-artifacts.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
 import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { shellPrintChildProcessRecord } from "../../support/infrastructure/child-process-record.js";
+
+import {
+  configureAdmittedFinalRegressionProject, readFinalRegressionArtifact,
+  assertAdmittedFinalRegressionPublication,
+  assertChangedSourcePublicationRefusal,
+  assertChangedJournalPublicationRefusal,
+  assertStaleAttemptPublicationRefusal
+} from "./final-regression-publication.contract.js";
 
 const SPEC_ID = "001-test";
 const FIXTURE_PATH = "final-regression-fixture.sh";
@@ -26,12 +37,12 @@ function failingFixtureBody(message) {
   return `printf '%s\\n' ${JSON.stringify(message)} >&2\nexit 1\n`;
 }
 
-function setupProject(tmp, scriptBody, { targetStep = "final-regression" } = {}) {
+async function setupProject(tmp, scriptBody, { targetStep = "final-regression" } = {}) {
   writeFile(tmp, FIXTURE_PATH, scriptBody);
   initGitRepo(tmp);
   commitAll(tmp, "initial");
   const flowManager = makeFlowManager(tmp);
-  const fixture = new FlowAtStepFixture({
+  const fixture = await new FlowAtStepFixture({
     flowManager,
     specId: SPEC_ID,
     runId: "run-final-regression",
@@ -42,14 +53,19 @@ function setupProject(tmp, scriptBody, { targetStep = "final-regression" } = {})
       requirements: [{ id: "R-1", desc: "The full project regression is recorded." }],
     },
     targetStep,
-  }).create();
+  }).createWithProducers({
+    implementationFiles: new Map([["R-1", [FIXTURE_PATH, "regression-behavior.js"]]]),
+    sourceMutations: new Map([["implement", () => {
+      writeFile(tmp, "regression-behavior.js", "export const regressionBehavior = true;\n");
+    }]]),
+  });
   commitAll(tmp, "record canonical final-regression frontier");
   return {
     root: tmp,
     mainRoot: tmp,
     executionRoot: tmp,
     specId: SPEC_ID,
-    config: { test: { command: `sh ${FIXTURE_PATH}`, timeout: 5 } },
+    config: { test: { command: { kind: "native", executable: "sh", args: [FIXTURE_PATH] }, timeout: 5 } },
     flowManager,
     flowState: fixture.state(),
   };
@@ -66,14 +82,6 @@ function writeChangedFileReferencingFailureFixture(tmp, message) {
   ].join("\n"));
 }
 
-function readFinalRegressionArtifact(ctx) {
-  const history = JSON.parse(ctx.flowManager.readArtifact({
-    specId: SPEC_ID,
-    logicalKey: "final.regression",
-    consumerNodeId: "report",
-  }).bytes.toString("utf8"));
-  return validateFinalRegressionResult(history.attempts.at(-1).artifact.payload);
-}
 
 function assertFinalRegressionCommandFailure(result, { failureKind }) {
   assert.equal(result.result, "fail");
@@ -122,7 +130,7 @@ describe("flow run final-regression", () => {
 
   it("writes a pass artifact and leaves route selection to Definition", async () => {
     tmp = createTmpDir("final-regression-pass-");
-    const ctx = setupProject(tmp, "printf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
+    const ctx = await setupProject(tmp, "printf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
 
     const result = await executeFinalRegression(ctx);
 
@@ -139,7 +147,7 @@ describe("flow run final-regression", () => {
 
   it("does not fingerprint canonical Version evidence as a project change", async () => {
     tmp = createTmpDir("final-regression-version-evidence-");
-    const ctx = setupProject(tmp, "printf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
+    const ctx = await setupProject(tmp, "printf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
     ctx.flowManager.appendIssueLog({
       specId: SPEC_ID,
       entry: {
@@ -159,13 +167,13 @@ describe("flow run final-regression", () => {
 
   it("uses the authority root final regression timeout over a stale context config", async () => {
     tmp = createTmpDir("final-regression-authority-timeout-");
-    const ctx = setupProject(tmp, "sleep 2\nprintf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
+    const ctx = await setupProject(tmp, "sleep 2\nprintf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - final pass'\n");
     writeFile(tmp, ".sennel/config.json", JSON.stringify({
       lang: "en",
       type: "node-cli",
       docs: { languages: ["en"], defaultLanguage: "en" },
       test: {
-        command: `sh ${FIXTURE_PATH}`,
+        command: { kind: "native", executable: "sh", args: [FIXTURE_PATH] },
         timeout: 1,
         finalRegressionTimeout: 5,
       },
@@ -178,12 +186,15 @@ describe("flow run final-regression", () => {
 
   it("rejects execution before the definition-owned final-regression Attempt", async () => {
     tmp = createTmpDir("final-regression-before-frontier-");
-    const ctx = setupProject(tmp, "printf '%s\\n' 'final pass'\n", { targetStep: "retro" });
+    const ctx = await setupProject(tmp, "printf '%s\\n' 'final pass'\n", { targetStep: "retro" });
 
+    const before = new CanonicalPersistenceSnapshot(ctx.flowManager, SPEC_ID);
     await assert.rejects(
       () => new RunFinalRegressionCommand().execute(ctx),
-      /requires its active Attempt/,
+      (error) => error instanceof CurrentFlowStateConflictError
+        && error.code === "CURRENT_FLOW_STATE_CONFLICT",
     );
+    before.assertUnchanged(ctx.flowManager, SPEC_ID, "wrong final-regression frontier");
     assert.equal(ctx.flowManager.loadReadOnly(SPEC_ID).currentNodeId, "retro");
     assert.equal(ctx.flowManager.readArtifact({
       specId: SPEC_ID,
@@ -195,7 +206,7 @@ describe("flow run final-regression", () => {
 
   it("leaves a failed observation un-routed until the registry applies the Definition plan", async () => {
     tmp = createTmpDir("final-regression-producer-boundary-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeChangedFileReferencingFailureFixture(tmp, "producer only");
 
     const result = await new RunFinalRegressionCommand().execute(ctx);
@@ -215,7 +226,7 @@ describe("flow run final-regression", () => {
 
   it("classifies current-change failure and lets the Definition plan record the failed Attempt", async () => {
     tmp = createTmpDir("final-regression-fail-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeChangedFileReferencingFailureFixture(tmp, "boom");
 
     const result = await executeFinalRegression(ctx);
@@ -271,7 +282,7 @@ describe("flow run final-regression", () => {
 
   it("blocks get-next repair when the changed-file snapshot became stale", async () => {
     tmp = createTmpDir("final-regression-stale-get-next-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeChangedFileReferencingFailureFixture(tmp, "first failure snapshot");
 
     const result = await executeFinalRegression(ctx);
@@ -290,7 +301,7 @@ describe("flow run final-regression", () => {
 
   it("classifies failure with no project change as unattributed_existing_failure", async () => {
     tmp = createTmpDir("final-regression-unattributed-existing-");
-    const ctx = setupProject(tmp, [
+    const ctx = await setupProject(tmp, [
       "printf '%s\\n' 'existing failure' >&2",
       shellPrintChildProcessRecord({
         stderr: "ERR_ASSERTION\ntests/unit/existing.test.js: existing failure\n",
@@ -323,7 +334,7 @@ describe("flow run final-regression", () => {
 
   it("prioritizes a TAP assertion failure over an earlier successful not-found warning", async () => {
     tmp = createTmpDir("final-regression-assertion-after-warning-");
-    const ctx = setupProject(tmp, [
+    const ctx = await setupProject(tmp, [
       "printf '%s\\n' '# [text] WARN: analysis.json not found. Proceeding with empty analysis context.'",
       "printf '%s\\n' '# Subtest: flow state path ownership stays in the shared writer'",
       "printf '%s\\n' 'not ok 274 - flow state path ownership stays in the shared writer'",
@@ -353,7 +364,7 @@ describe("flow run final-regression", () => {
 
   it("attributes all real TAP failures while summarizing the first failure block", async () => {
     tmp = createTmpDir("final-regression-multiple-tap-failures-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeFile(tmp, FIXTURE_PATH, [
       "printf '%s\\n' '# not ok 900 - diagnostic comment only'",
       "printf '%s\\n' '# Subtest: existing assertion'",
@@ -396,7 +407,7 @@ describe("flow run final-regression", () => {
 
   it("fails closed on silent non-zero test runner exits without typed child evidence", async () => {
     tmp = createTmpDir("final-regression-silent-fail-");
-    const ctx = setupProject(tmp, "exit 1\n");
+    const ctx = await setupProject(tmp, "exit 1\n");
 
     const result = await executeFinalRegression(ctx);
 
@@ -407,7 +418,7 @@ describe("flow run final-regression", () => {
 
   it("fails closed as unknown when a non-zero runner reports zero totals without typed child evidence", async () => {
     tmp = createTmpDir("final-regression-zero-detail-fail-");
-    const ctx = setupProject(tmp, [
+    const ctx = await setupProject(tmp, [
       "printf '%s\\n' 'unit: 0'",
       "printf '%s\\n' 'integration: 0'",
       "printf '%s\\n' 'acceptance: 0'",
@@ -430,7 +441,7 @@ describe("flow run final-regression", () => {
     tmp = createTmpDir("final-regression-eperm-");
     const error = new Error("spawn EPERM");
     error.code = "EPERM";
-    const ctx = setupProject(tmp, [
+    const ctx = await setupProject(tmp, [
       shellPrintChildProcessRecord({ status: null, error }),
       "exit 1",
       "",
@@ -472,7 +483,7 @@ describe("flow run final-regression", () => {
 
   it("stops on the second final-regression failure and omits previous failure state", async () => {
     tmp = createTmpDir("final-regression-second-fail-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeChangedFileReferencingFailureFixture(tmp, "still failing");
 
     await executeFinalRegression(ctx);
@@ -492,7 +503,7 @@ describe("flow run final-regression", () => {
 
   it("keeps per-attempt final-regression logs", async () => {
     tmp = createTmpDir("final-regression-attempt-logs-");
-    const ctx = setupProject(tmp, PASSING_FIXTURE_BODY);
+    const ctx = await setupProject(tmp, PASSING_FIXTURE_BODY);
     writeChangedFileReferencingFailureFixture(tmp, "first attempt fails");
 
     await executeFinalRegression(ctx);
@@ -514,7 +525,7 @@ describe("flow run final-regression", () => {
   it("runs the project command only in the explicit execution authority root", async () => {
     tmp = createTmpDir("final-regression-execution-root-");
     const fixtureBody = failingFixtureBody("PROJECT_TEST_RAN");
-    const ctx = setupProject(tmp, fixtureBody);
+    const ctx = await setupProject(tmp, fixtureBody);
     const executionRoot = path.join(tmp, "execution-authority");
     fs.mkdirSync(executionRoot, { recursive: true });
     writeFile(executionRoot, FIXTURE_PATH, "printf '%s\\n' 'TAP version 13' '1..1' 'ok 1 - authority pass'\n");
@@ -530,4 +541,32 @@ describe("flow run final-regression", () => {
     assert.doesNotMatch(raw, /PROJECT_TEST_RAN/);
     assert.match(raw, /authority pass/);
   });
+});
+
+
+describe("final-regression publication with canonical process observations", () => {
+  async function setupAdmittedProject(t) {
+    const root = createTmpDir("final-regression-publication-observations-");
+    t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
+    const ctx = await setupProject(root, PASSING_FIXTURE_BODY);
+    return configureAdmittedFinalRegressionProject(ctx, { lang: "en", type: "node-cli",
+      docs: { languages: ["en"], defaultLanguage: "en" } });
+  }
+
+  it("settles a genuine admitted regression after its managed Git observations and preserves receipts and ACKs", async (t) => {
+    await assertAdmittedFinalRegressionPublication(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses changed project source before publication after a genuine admitted regression", async (t) => {
+    await assertChangedSourcePublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses canonical journal drift after immutable publication acquisition without publishing its candidate", async (t) => {
+    await assertChangedJournalPublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses a supplied stale Attempt before starting any fingerprint Git call", async (t) => {
+    await assertStaleAttemptPublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
 });

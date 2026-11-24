@@ -1,6 +1,11 @@
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
+import { ProcessExecutionEvent, ProcessExecutionEventGroup } from "../../lib/process-execution-values.js";
+import { FlowProcessEvent, PROCESS_EVENT_OPERATION, PROCESS_EVENT_ACTIVITY_TYPES } from "./flow-process-event.js";
+import { ProcessExecutionFinalizationBarrier } from "../../lib/process-execution-finalization.js";
 import { CanonicalPromptResponseAdoption, PromptResponseAdoptionAdmissionValue } from "./prompt-response-adoption.js";
 import { FlowExecutionObservationStore } from "./flow-execution-observation-store.js";
-import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference } from "../../lib/flow-execution-observation.js";
+import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
+import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference, parseFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
 import { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
 import { isPlainObject, requireString } from "./current-flow-value-validation.js";
@@ -36,16 +41,18 @@ import {
   AgentProcessStopEvidence,
   AgentProviderCompletionEvidence,
 } from "../../lib/agent-failure.js";
-import { AtomicFile } from "../../lib/atomic-file.js";
+import { AtomicFile, AtomicFilePublication } from "../../lib/atomic-file.js";
+import { captureRegularFile, RegularFileSnapshot, RegularFileLinkCountError, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { appendRegularFile, RegularFileAppendError, RegularFileAppendBaselineChangedError } from "../../lib/regular-file-io.js";
 import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
 import { GitSnapshot, isGitObjectId } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
-import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { RealDirectoryAuthority, sameFileIdentity } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater,
   FlowArtifactSpecReviewActivityEvidenceDocument } from "../../lib/flow-artifact-contract.js";
-import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
+import { CanonicalSpecReview, SpecRevisionIdentity, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
 import { GateObservationCycleReader } from "./gate-observation-convergence.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION, DraftWorkerRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./draft-worker-recovery.js";
@@ -100,6 +107,7 @@ const RETRY_KINDS = new Set(["semantic", "tooling"]);
 const FAILURE_POLICIES = new Set(["retry", "retry-block", "record", "amend-spec", "block", "step-definition", "test-chain-retry", "test-chain-repair"]);
 const RECORDING_FAILURE_POLICIES = new Set(["retry", "record", "step-definition"]);
 const ATTEMPT_TYPES = new Set([
+  ...PROCESS_EVENT_ACTIVITY_TYPES,
   "flow_created",
   "task_added",
   "attempt_started",
@@ -227,7 +235,7 @@ const FLOW_SUFFIX_INVALIDATION_OPERATIONS = new Set([
 // Metrics and notes are durable observations, not fields on flow.json.  Their
 // append-only home is the same Activity ledger that records every state
 // transition, which preserves a single recovery and ordering mechanism.
-const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note"]);
+const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note", PROCESS_EVENT_OPERATION]);
 // Advisory policy evidence is a first-class ledger fact.  It deliberately
 // stays out of flow.json so a resumed Flow replays the same immutable
 // observation/decision history rather than a mutable side-channel.
@@ -282,6 +290,14 @@ function sha256Bytes(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+function canonicalArtifactFile(location, relativePath, phaseNamespace, directoryAuthority = null) {
+  const target = location.resolve(relativePath);
+  const parent = (directoryAuthority ?? location.repositoryAuthority).descendant(path.dirname(target), {
+    create: true, creationMode: 0o755,
+  });
+  return new AtomicFile(target, { phaseNamespace, directoryAuthority: parent });
+}
+
 /**
  * One durable payload that is committed with its owning Activity and catalog
  * descriptor.  Commands pass this value object to the Version Store instead
@@ -332,13 +348,11 @@ export class CanonicalFlowArtifactWrite {
     });
   }
 
-  write(location) {
+  write(location, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical artifact write requires a FlowVersionLocation");
     }
-    const target = location.resolve(this.artifact.relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    return new AtomicFile(target, { phaseNamespace: "canonical-flow-artifact" }).write(this.bytes);
+    return canonicalArtifactFile(location, this.artifact.relativePath, "canonical-flow-artifact", directoryAuthority).write(this.bytes);
   }
 }
 
@@ -390,13 +404,11 @@ export class CanonicalSourceWorkerUpgradeResult {
     });
   }
 
-  write(location) {
+  write(location, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("source worker upgrade write requires a FlowVersionLocation");
     }
-    const target = location.resolve(this.artifact.relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    return new AtomicFile(target, { phaseNamespace: "source-worker-upgrade-result" }).write(this.bytes);
+    return canonicalArtifactFile(location, this.artifact.relativePath, "source-worker-upgrade-result", directoryAuthority).write(this.bytes);
   }
 }
 
@@ -446,12 +458,14 @@ export class CanonicalFlowArtifactRemoval {
     });
   }
 
-  remove(location) {
+  remove(location, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical artifact removal requires a FlowVersionLocation");
     }
     const target = location.resolve(this.artifact.relativePath);
-    return new AtomicFile(target, { phaseNamespace: "canonical-flow-artifact-removal" }).remove();
+    const parent = (directoryAuthority ?? location.repositoryAuthority).descendant(path.dirname(target), { allowMissing: true });
+    if (parent.directory !== path.dirname(target)) return new AtomicFilePublication({ committed: false, path: target });
+    return new AtomicFile(target, { phaseNamespace: "canonical-flow-artifact-removal", directoryAuthority: parent }).remove();
   }
 }
 
@@ -588,13 +602,11 @@ export class CanonicalFlowReviewEvidenceWrite {
     });
   }
 
-  write(location) {
+  write(location, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical review evidence write requires a FlowVersionLocation");
     }
-    const target = location.resolve(this.artifact.relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    return new AtomicFile(target, { phaseNamespace: "canonical-review-evidence" }).write(this.bytes);
+    return canonicalArtifactFile(location, this.artifact.relativePath, "canonical-review-evidence", directoryAuthority).write(this.bytes);
   }
 }
 
@@ -605,7 +617,7 @@ export class CanonicalFlowReviewEvidenceWrite {
  * checked again by the catalog when the ledger is read.
  */
 export class CanonicalFlowActivityEvidenceWrite {
-  constructor({ artifact, mediaType, bytes } = {}) {
+  constructor({ artifact, mediaType, bytes, processEvidence = null } = {}) {
     if (!(artifact instanceof FlowArtifactActivityEvidence)) {
       throw new CurrentFlowStateInvariantError("canonical activity evidence requires a typed Activity evidence artifact");
     }
@@ -616,7 +628,7 @@ export class CanonicalFlowActivityEvidenceWrite {
     else throw new CurrentFlowStateInvariantError("canonical activity evidence bytes must be a string or Buffer");
     // Parse at the public boundary so malformed evidence never reaches a
     // state journal or a partially published catalog tree.
-    this.document = this.artifact.contract.contentContract.parse(this.bytes);
+    this.document = this.artifact.contract.contentContract.parse(this.bytes, { processEvidence });
     Object.freeze(this);
   }
 
@@ -636,13 +648,11 @@ export class CanonicalFlowActivityEvidenceWrite {
     });
   }
 
-  write(location) {
+  write(location, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical activity evidence write requires a FlowVersionLocation");
     }
-    const target = location.resolve(this.artifact.relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    return new AtomicFile(target, { phaseNamespace: "canonical-flow-activity-evidence" }).write(this.bytes);
+    return canonicalArtifactFile(location, this.artifact.relativePath, "canonical-flow-activity-evidence", directoryAuthority).write(this.bytes);
   }
 }
 
@@ -686,7 +696,7 @@ export class CanonicalFlowRuntimeArtifactWrite {
     ].includes(this.artifact.contract.authoritySlot.kind);
   }
 
-  write(location, nodeId) {
+  write(location, nodeId, directoryAuthority = null) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical runtime artifact write requires a FlowVersionLocation");
     }
@@ -697,8 +707,7 @@ export class CanonicalFlowRuntimeArtifactWrite {
       exists: fs.existsSync(target),
       publicationStep: publication.authoritySlot.publicationStep,
     });
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    new AtomicFile(target, { phaseNamespace: "canonical-flow-runtime-artifact" }).write(this.bytes);
+    canonicalArtifactFile(location, this.artifact.relativePath, "canonical-flow-runtime-artifact", directoryAuthority).write(this.bytes);
     return target;
   }
 }
@@ -764,7 +773,7 @@ export class CanonicalFlowRuntimeArtifactRead {
     this.location.assertAuthority(this.artifact.relativePath, { mustExist: true });
     return new CanonicalFlowRuntimeArtifactObservation({
       artifact: this.artifact,
-      bytes: Buffer.from(fs.readFileSync(target)),
+      bytes: Buffer.from(captureRegularFile(target, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes),
     });
   }
 }
@@ -889,12 +898,16 @@ function freshStateLike(state, definition) {
   });
 }
 
-function applyCanonicalActivity(state, activity, priorActivities = []) {
+function applyCanonicalTransition(state, activity, priorActivities) {
   const node = state.findNode(activity.nodeId);
   if (!node || node.key !== activity.nodeKey) {
     throw new CurrentFlowStateInvariantError("Activity must reference a current-state node by stable id and semantic key");
   }
-  return activity.transition.apply(state, activity, { priorActivities }).withConfirmationOrder(activity.confirmationOrder);
+  return activity.transition.apply(state, activity, { priorActivities });
+}
+
+function applyCanonicalActivity(state, activity, priorActivities = []) {
+  return applyCanonicalTransition(state, activity, priorActivities).withConfirmationOrder(activity.confirmationOrder);
 }
 
 function jsonEqual(left, right) {
@@ -913,15 +926,6 @@ function requireStringList(value, field) {
 
 function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
-}
-
-function sameFileIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
 }
 
 function nodeFromJSON(value) {
@@ -1534,6 +1538,7 @@ export class CurrentFlowContext {
     Object.freeze(this);
   }
 
+  get baseOid() { return this.value?.baseOid ?? null; }
   toJSON() { return this.value === null ? null : { ...this.value }; }
 }
 
@@ -4404,11 +4409,12 @@ function assertNodeLifecycle(node, options = {}) {
 function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSource = () => false,
   allowsUnexecutedRouteTail = () => false) {
   const taskIdByLeafId = new Map();
-  const fullyPendingTaskIds = new Set();
+  const pendingSuffixTaskIds = new Set();
   for (const node of nodes) {
     if (!(node instanceof TaskNode)) continue;
     const taskLeaves = collectNodes(node).filter((candidate) => candidate.steps.length === 0);
-    if (taskLeaves.every((leaf) => leaf.status === "pending")) fullyPendingTaskIds.add(node.id);
+    if (taskLeaves.every((leaf) => TERMINAL_NODE_STATUSES.has(leaf.status)
+      || ["pending", "in_progress"].includes(leaf.status))) pendingSuffixTaskIds.add(node.id);
     for (const leaf of taskLeaves) taskIdByLeafId.set(leaf.id, node.id);
   }
   const finalizationDownstreamRoute = currentPath?.at(-1) === "finalize-merge";
@@ -4417,6 +4423,9 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
   let taskGateRepairPendingSuffix = false;
   let unexecutedRouteTail = false;
   for (const [index, leaf] of leaves.entries()) {
+    const leafTaskId = taskIdByLeafId.get(leaf.id) ?? null;
+    const approvalRecoveryTask = leaf.status === "pending"
+      && leafTaskId !== null && pendingSuffixTaskIds.has(leafTaskId);
     if (TERMINAL_NODE_STATUSES.has(leaf.status)) {
       if (frontier !== null) {
         if (finalizationDownstreamRoute
@@ -4431,7 +4440,7 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
     }
     if (frontier === null) {
       frontier = { index, status: leaf.status };
-      if (leaf.status !== "in_progress") suffixStatus = leaf.status;
+      if (leaf.status !== "in_progress" && !approvalRecoveryTask) suffixStatus = leaf.status;
       continue;
     }
     if (frontier.status === "in_progress" && index === frontier.index) continue;
@@ -4449,14 +4458,12 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
     }
     // A dedicated add_approval_task Activity may insert pending dynamic Tasks
     // into an invalidated definition-owned suffix. Those Tasks remain valid
-    // after approval confirms and while the earlier invalidated leaves recover.
+    // after approval confirms, while earlier leaves recover, and throughout
+    // their own normal terminal/active/pending prefix. An invalidated Task
+    // still uses the strict repair-frontier rules below.
     // Generic add_task cannot create this shape because its guard is unchanged;
     // the Activity journal proves the dedicated admission route.
-    const leafTaskId = taskIdByLeafId.get(leaf.id) ?? null;
     const frontierTaskId = taskIdByLeafId.get(leaves[frontier.index].id) ?? null;
-    const approvalRecoveryTask = leaf.status === "pending"
-      && leafTaskId !== null
-      && fullyPendingTaskIds.has(leafTaskId);
     if (approvalRecoveryTask) continue;
     if (suffixStatus === null) suffixStatus = leaf.status;
     // A sealed Task Gate repair leaves the current Task's unfinished suffix
@@ -4530,6 +4537,21 @@ export class CurrentFlowMigrationCheckpoint {
   }
 }
 
+/** A counter update whose graph is owned solely by one synchronous journal replay. */
+class CurrentFlowReplayConfirmation {
+  constructor(source, confirmationOrder) {
+    if (!(source instanceof CurrentFlowState)) {
+      throw new CurrentFlowStateInvariantError("journal replay confirmation requires a typed state");
+    }
+    this.source = source;
+    this.confirmationOrder = requirePositiveInteger(confirmationOrder, "confirmationOrder", { allowZero: true });
+    if (this.confirmationOrder !== source.confirmationOrder + 1) {
+      throw new CurrentFlowStateInvariantError("journal replay confirmation must immediately follow its state");
+    }
+    Object.freeze(this);
+  }
+}
+
 export class CurrentFlowState {
   #nodes;
   #leaves;
@@ -4537,6 +4559,19 @@ export class CurrentFlowState {
   constructor(value, { definition }) {
     if (!(definition instanceof CurrentFlowDefinition)) {
       throw new CurrentFlowStateInvariantError("CurrentFlowState requires a CurrentFlowDefinition");
+    }
+    if (value instanceof CurrentFlowReplayConfirmation) {
+      const source = value.source;
+      if (definition !== source.definition) {
+        throw new CurrentFlowStateInvariantError("journal replay confirmation must retain its Definition");
+      }
+      Object.assign(this, source);
+      this.confirmationOrder = value.confirmationOrder;
+      this.#nodes = source.#nodes;
+      this.#leaves = source.#leaves;
+      this.#assertCurrent();
+      Object.freeze(this);
+      return;
     }
     if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("flow state must be an object");
     for (const field of FORBIDDEN_TOP_LEVEL_FIELDS) {
@@ -6724,6 +6759,33 @@ export class CurrentFlowState {
     return new CurrentFlowState({ ...this.toJSON(), confirmationOrder }, { definition: this.definition });
   }
 
+  /** Replay privately owned state while retaining exact Attempt finish facts. */
+  replayActivities(activities) {
+    if (!Array.isArray(activities) || activities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("state replay requires typed Activities");
+    }
+    const attemptHistory = new CurrentFlowAttemptHistory();
+    const replay = new CurrentFlowJournalReplay(this, [], {
+      reuseValidatedBase: false,
+      attemptHistory,
+    });
+    for (const activity of activities) replay.apply(activity);
+    return new CurrentFlowReplayResult(replay.materialize(), attemptHistory);
+  }
+
+  /** Privately preview exact process observations without publishing state. */
+  previewProcessEvents(group, priorActivities) {
+    if (!(group instanceof ProcessExecutionEventGroup)) {
+      throw new TypeError("Canonical process publication requires a typed event group");
+    }
+    if (!Array.isArray(priorActivities) || priorActivities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("process preview requires typed prior Activities");
+    }
+    return new CurrentFlowJournalReplay(this, priorActivities, {
+      reuseValidatedBase: false,
+    }).previewProcessEvents(group);
+  }
+
   get cursor() {
     return this.current == null ? null : new CurrentCursor({ path: this.current, attempt: this.attempt });
   }
@@ -7091,8 +7153,7 @@ export class CurrentFlowState {
 
   #replaceRoot(root, current = this.current, attempt = this.attempt, history = this.history) {
     return new CurrentFlowState({
-      ...this.toJSON(),
-      ...root.toJSON(),
+      ...this.#serialize(root),
       current: current == null ? null : current.at(-1),
       attempt: attempt?.toJSON?.() ?? attempt,
       history: history?.toJSON() ?? null,
@@ -7114,6 +7175,10 @@ export class CurrentFlowState {
   }
 
   toJSON() {
+    return this.#serialize(this.root);
+  }
+
+  #serialize(root) {
     return {
       schemaRevision: this.schemaRevision,
       ...this.identity.toJSON(),
@@ -7122,7 +7187,7 @@ export class CurrentFlowState {
       lifecycle: this.lifecycle.toJSON(),
       execution: this.execution.toJSON(),
       policy: this.policy.toJSON(),
-      ...this.root.toJSON(),
+      ...root.toJSON(),
       current: this.current == null ? null : this.current.at(-1),
       attempt: this.attempt?.toJSON() ?? null,
       confirmationOrder: this.confirmationOrder,
@@ -7782,6 +7847,7 @@ export class ActivityTransition {
       }
       if (this.operation === "park_flow") return state.park();
       if (this.operation === "resume_flow") return state.resume();
+      FlowProcessEvent.assertFinalization(state, priorActivities, activity.processFinalizationBarrier);
       return state.finalize();
     }
     if (POLICY_TRANSITION_OPERATIONS.has(this.operation)) {
@@ -7812,6 +7878,7 @@ export class ActivityTransition {
         confirmedAt: activity.timing?.finishedAt ?? null,
       });
     }
+    if (this.operation === PROCESS_EVENT_OPERATION) new FlowProcessEvent(activity.processEvent).assertFor(state, priorActivities);
     if (OBSERVATION_TRANSITION_OPERATIONS.has(this.operation)
       || this.operation === "record_nonblocking"
       || ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS.has(this.operation)
@@ -8195,12 +8262,140 @@ export class ActivityTransition {
   }
 }
 
+const ACTIVITY_TYPE_FOR_OPERATION = Object.freeze({
+  add_task: "task_added",
+  add_approval_task: "task_added",
+  start_attempt: "attempt_started",
+  retry_attempt: "attempt_retried",
+  retry_gate_attempt: "attempt_retried",
+  settle_spec_gate_retry: "attempt_retried",
+  settle_spec_gate_recovered: "attempt_recovered",
+  retry_recovery_attempt: "attempt_recovered",
+  update_attempt: "attempt_updated",
+  [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
+  [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+  [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
+  [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
+  fail_attempt: "attempt_failed",
+  record_failure: "failure_recorded",
+  confirm_attempt: "result_confirmed",
+  [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
+  [DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]: "result_confirmed",
+  [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
+  [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
+  advance_task_review_stage: "result_confirmed",
+  [REQUIREMENT_TEST_INITIALIZATION_OPERATION]: "result_confirmed",
+  [REQUIREMENT_TEST_TRANSITION_OPERATION]: "result_confirmed",
+  rewind: "recovery",
+  rewind_test_evidence: "recovery",
+  repair_implementation: "recovery",
+  triage_implementation_for_repair: "recovery",
+  triage_implementation_no_repair: "recovery",
+  repair_acceptance_review: "recovery",
+  reopen_draft_preimplementation: "recovery",
+  reopen_draft_task_addition: "recovery",
+  reopen_draft_spec_correction: "recovery",
+  plan_gate_repair: "recovery",
+  recover_attempt: "recovery",
+  recover_missing_producer_artifact: "recovery",
+  recover_task_execution_overrun: "recovery",
+  park_flow: "flow_parked",
+  resume_flow: "flow_resumed",
+  finalize_flow: "flow_finalized",
+  set_policy: "policy_updated",
+  activate_nonblocking: "policy_updated",
+  publish_artifacts: "artifacts_published",
+  publish_plugin_artifacts: "artifacts_published",
+  publish_upgrade_result: "artifacts_published",
+  update_spec_record: "spec_record_updated",
+  begin_outbox: "outbox_started",
+  reopen_outbox: "outbox_reopened",
+  complete_outbox: "outbox_completed",
+  fail_outbox: "outbox_failed",
+  record_dispatch_approval: "dispatch_approval_recorded",
+  record_metric: "metric_recorded",
+  record_note: "note_recorded",
+  record_nonblocking: "nonblocking_recorded",
+  continue_nonblocking: "nonblocking_recorded",
+  accept_final_regression_failure: "failure_accepted",
+  defer_failed_review: "failure_accepted",
+  defer_failed_gate: "failure_accepted",
+  skip_finalize_downstream: "finalization_downstream_updated",
+  reset_finalize_downstream: "finalization_downstream_updated",
+  recover_interrupted_finalize_sync: "recovery",
+});
+
 export class FlowActivity {
+  static typeForOperation(operation) {
+    return ACTIVITY_TYPE_FOR_OPERATION[operation];
+  }
+
+  static forState(state, {
+    id,
+    nodeId,
+    attemptId = null,
+    sequence = null,
+    result = null,
+    failure = null,
+    timing = null,
+    provider = null,
+    model = null,
+    effort = null,
+    usage = null,
+    metric = null,
+    note = null,
+    processEvent = null,
+    processFinalizationBarrier = null,
+    policy = null,
+    outbox = null,
+    approval = null,
+    nonblocking = null,
+    references = { evaluations: [], findings: [], repairs: [], artifacts: [] },
+    transition,
+  }) {
+    const parsedTransition = transition instanceof ActivityTransition
+      ? transition
+      : new ActivityTransition({
+        ...transition,
+        policy: transition.policy ?? policy,
+        outbox: transition.outbox ?? outbox,
+        approval: transition.approval ?? approval,
+        nonblocking: transition.nonblocking ?? nonblocking,
+      });
+    const node = state.findNode(nodeId);
+    if (node === null) throw new CurrentFlowStateInvariantError(`Activity node is not part of this Flow: ${nodeId}`);
+    return new FlowActivity({
+      id: requireString(id, "activityId"),
+      nodeId,
+      nodeKey: node.key,
+      attemptId,
+      sequence,
+      confirmationOrder: state.confirmationOrder + 1,
+      type: processEvent === null ? FlowActivity.typeForOperation(parsedTransition.operation) : new FlowProcessEvent(processEvent).activityType,
+      transition: parsedTransition,
+      result,
+      timing,
+      failure,
+      provider,
+      model,
+      effort,
+      usage,
+      references,
+      metric,
+      note,
+      reviewPublication: null,
+      ...(processEvent === null ? {} : { processEvent: processEvent.toJSON() }),
+      ...(processFinalizationBarrier === null ? {} : { processFinalizationBarrier: processFinalizationBarrier.toJSON() }),
+    });
+  }
+
   constructor(value) {
     requireExactFields(value, new Set([
       "id", "nodeId", "nodeKey", "attemptId", "sequence", "confirmationOrder", "type", "transition",
       "result", "timing", "failure", "provider", "model", "effort", "usage", "references", "metric", "note",
       "reviewPublication",
+      ...(PROCESS_EVENT_ACTIVITY_TYPES.includes(value.type) ? ["processEvent"] : []),
+      ...(value.type === "flow_finalized" && Object.hasOwn(value, "processFinalizationBarrier") ? ["processFinalizationBarrier"] : []),
     ]), "activity");
     const {
       id, nodeId, nodeKey, attemptId, sequence, confirmationOrder, type, transition,
@@ -8216,71 +8411,26 @@ export class FlowActivity {
     this.confirmationOrder = requirePositiveInteger(confirmationOrder, "activity.confirmationOrder");
     if (!ATTEMPT_TYPES.has(type)) throw new CurrentFlowStateInvariantError(`activity.type is invalid: ${type}`);
     this.type = type;
+    this.processFinalizationBarrier = Object.hasOwn(value, "processFinalizationBarrier")
+      ? value.processFinalizationBarrier instanceof ProcessExecutionFinalizationBarrier ? value.processFinalizationBarrier
+        : ProcessExecutionFinalizationBarrier.fromStored(value.processFinalizationBarrier)
+      : null;
+    this.processEvent = PROCESS_EVENT_ACTIVITY_TYPES.includes(type)
+      ? value.processEvent instanceof ProcessExecutionEvent ? value.processEvent : ProcessExecutionEvent.fromStored(value.processEvent)
+      : null;
+    if (this.processEvent !== null) {
+      const fact = new FlowProcessEvent(this.processEvent);
+      if (this.id !== fact.activityId || this.nodeId !== fact.nodeId || this.type !== fact.activityType) {
+        throw new CurrentFlowStateInvariantError("Process Activity must preserve its exact event identity, type and origin node");
+      }
+    }
     this.transition = transition instanceof ActivityTransition ? transition : new ActivityTransition(transition);
-    const typeForOperation = {
-      [FLOW_CREATION_TRANSITION_OPERATION]: FLOW_CREATION_ACTIVITY_TYPE,
-      add_task: "task_added",
-      add_approval_task: "task_added",
-      start_attempt: "attempt_started",
-      retry_attempt: "attempt_retried",
-      retry_gate_attempt: "attempt_retried",
-      settle_spec_gate_retry: "attempt_retried",
-      settle_spec_gate_recovered: "attempt_recovered",
-      retry_recovery_attempt: "attempt_recovered",
-      update_attempt: "attempt_updated",
-      [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
-      [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
-      [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
-      [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
-      fail_attempt: "attempt_failed",
-      record_failure: "failure_recorded",
-      confirm_attempt: "result_confirmed",
-      [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
-      [DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]: "result_confirmed",
-      [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
-      [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
-      advance_task_review_stage: "result_confirmed",
-      [REQUIREMENT_TEST_INITIALIZATION_OPERATION]: "result_confirmed",
-      [REQUIREMENT_TEST_TRANSITION_OPERATION]: "result_confirmed",
-      rewind: "recovery",
-      rewind_test_evidence: "recovery",
-      repair_implementation: "recovery",
-      triage_implementation_for_repair: "recovery",
-      triage_implementation_no_repair: "recovery",
-      repair_acceptance_review: "recovery",
-      reopen_draft_preimplementation: "recovery",
-      reopen_draft_task_addition: "recovery",
-      reopen_draft_spec_correction: "recovery",
-      plan_gate_repair: "recovery",
-      recover_attempt: "recovery",
-      recover_missing_producer_artifact: "recovery",
-      recover_task_execution_overrun: "recovery",
-      park_flow: "flow_parked",
-      resume_flow: "flow_resumed",
-      finalize_flow: "flow_finalized",
-      set_policy: "policy_updated",
-      activate_nonblocking: "policy_updated",
-      publish_artifacts: "artifacts_published",
-      publish_plugin_artifacts: "artifacts_published",
-      publish_upgrade_result: "artifacts_published",
-      update_spec_record: "spec_record_updated",
-      begin_outbox: "outbox_started",
-      reopen_outbox: "outbox_reopened",
-      complete_outbox: "outbox_completed",
-      fail_outbox: "outbox_failed",
-      record_dispatch_approval: "dispatch_approval_recorded",
-      record_metric: "metric_recorded",
-      record_note: "note_recorded",
-      record_nonblocking: "nonblocking_recorded",
-      continue_nonblocking: "nonblocking_recorded",
-      accept_final_regression_failure: "failure_accepted",
-      defer_failed_review: "failure_accepted",
-      defer_failed_gate: "failure_accepted",
-      skip_finalize_downstream: "finalization_downstream_updated",
-      reset_finalize_downstream: "finalization_downstream_updated",
-      recover_interrupted_finalize_sync: "recovery",
-    };
-    if (typeForOperation[this.transition.operation] !== this.type) {
+    const processType = value.processEvent == null ? null : new FlowProcessEvent(value.processEvent).activityType;
+    const expectedType = this.transition.operation === FLOW_CREATION_TRANSITION_OPERATION
+      ? FLOW_CREATION_ACTIVITY_TYPE
+      : this.transition.operation === PROCESS_EVENT_OPERATION
+        ? processType : FlowActivity.typeForOperation(this.transition.operation);
+    if (expectedType !== this.type) {
       throw new CurrentFlowStateInvariantError("activity.type must match its deterministic transition operation");
     }
     if (this.transition.nodeId !== this.nodeId) {
@@ -8534,6 +8684,8 @@ export class FlowActivity {
       metric: this.metric?.toJSON() ?? null,
       note: this.note?.toJSON() ?? null,
       reviewPublication: this.reviewPublication?.toJSON() ?? null,
+      ...(this.processEvent === null ? {} : { processEvent: this.processEvent.toJSON() }),
+      ...(this.processFinalizationBarrier === null ? {} : { processFinalizationBarrier: this.processFinalizationBarrier.toJSON() }),
     };
   }
 }
@@ -8661,7 +8813,7 @@ class CanonicalSpecReviewActivityPublication {
     const bytes = Buffer.from(`${JSON.stringify(document.toJSON(), null, 2)}\n`, "utf8");
     return new CanonicalFlowActivityEvidenceWrite({
       artifact: FLOW_ARTIFACT_CONTRACTS.activityEvidence({ nodeId: activity.nodeId, digest: sha256Bytes(bytes) }),
-      mediaType: "application/json", bytes,
+      mediaType: "application/json", bytes, processEvidence: this.review.processEvidence,
     });
   }
 }
@@ -8875,35 +9027,29 @@ function assertJournalAttemptIdentities(entries, { requireContiguous = false } =
   }
 }
 
-class FlowActivityJournalRevision {
-  constructor(stat) {
-    if (
-      !stat.isFile()
-      || stat.nlink !== 1
-      || !Number.isSafeInteger(stat.dev)
-      || !Number.isSafeInteger(stat.ino)
-      || !Number.isSafeInteger(stat.size)
-      || stat.size < 0
-      || !Number.isFinite(stat.mtimeMs)
-      || !Number.isFinite(stat.ctimeMs)
-    ) {
-      throw new CurrentFlowStateInvariantError("Activity journal authority changed while opening");
+function readFlowAuthority(operation, linkCountMessage) {
+  try { return operation(); }
+  catch (error) {
+    if (error instanceof RegularFileLinkCountError) {
+      throw new CurrentFlowStateInvariantError(linkCountMessage, { cause: error });
     }
-    this.dev = stat.dev;
-    this.ino = stat.ino;
-    this.size = stat.size;
-    this.mtimeMs = stat.mtimeMs;
-    this.ctimeMs = stat.ctimeMs;
+    throw error;
+  }
+}
+
+class FlowActivityJournalRevision {
+  constructor(snapshot) {
+    if (!(snapshot instanceof RegularFileSnapshot) || snapshot.identity === null) {
+      throw new CurrentFlowStateInvariantError("Activity journal revision requires a captured regular file");
+    }
+    this.snapshot = snapshot;
     Object.freeze(this);
   }
 
   matches(other) {
     return other instanceof FlowActivityJournalRevision
-      && this.dev === other.dev
-      && this.ino === other.ino
-      && this.size === other.size
-      && this.mtimeMs === other.mtimeMs
-      && this.ctimeMs === other.ctimeMs;
+      && sameFileIdentity(this.snapshot.identity, other.snapshot.identity)
+      && this.snapshot.digest === other.snapshot.digest;
   }
 }
 
@@ -8990,9 +9136,9 @@ class FlowActivityJournalParseCache {
 export class FlowActivityJournal {
   #parseCache = null;
 
-  constructor(filePath) {
+  constructor(filePath, { directoryAuthority = null } = {}) {
     this.filePath = path.resolve(filePath);
-    this.directoryAuthority = new RealDirectoryAuthority(path.dirname(this.filePath));
+    this.directoryAuthority = directoryAuthority ?? new RealDirectoryAuthority(path.dirname(this.filePath));
     Object.freeze(this);
   }
 
@@ -9001,16 +9147,9 @@ export class FlowActivityJournal {
   }
 
   readSnapshot() {
-    const opened = this.#openExisting(fs.constants.O_RDONLY);
-    if (opened === null) return new FlowActivityJournalSnapshot({ entries: [] });
-    let bytes;
-    try {
-      bytes = fs.readFileSync(opened.descriptor);
-    } finally {
-      fs.closeSync(opened.descriptor);
-    }
-    this.#assertVisibleIdentity(opened.identity);
-    const snapshot = this.#parseSnapshot(bytes, opened.revision);
+    const captured = this.#capture();
+    if (captured === null) return new FlowActivityJournalSnapshot({ entries: [] });
+    const snapshot = this.#parseSnapshot(captured.bytes, new FlowActivityJournalRevision(captured));
     this.#parseCache = new FlowActivityJournalParseCache(snapshot);
     return snapshot;
   }
@@ -9089,8 +9228,7 @@ export class FlowActivityJournal {
       if (!jsonEqual(existing.toJSON(), next.toJSON())) {
         throw new CurrentFlowStateConflictError(`activity id ${next.id} was already appended with a different payload`);
       }
-      const opened = this.#openAppend(verifiedSnapshot.revision);
-      fs.closeSync(opened.descriptor);
+      this.#assertCurrent(verifiedSnapshot);
       return { appended: false, activity: existing };
     }
     const expectedOrder = entries.length + 1;
@@ -9098,100 +9236,32 @@ export class FlowActivityJournal {
       throw new CurrentFlowStateConflictError("new Activity confirmationOrder must follow the append-only journal");
     }
     assertJournalAttemptIdentities([...entries, next]);
-    const opened = this.#openAppend(verifiedSnapshot.revision);
     try {
-      fs.writeFileSync(opened.descriptor, `${JSON.stringify(next.toJSON())}\n`, "utf8");
-      fs.fsyncSync(opened.descriptor);
-    } finally {
-      fs.closeSync(opened.descriptor);
+      appendRegularFile(this.filePath, `${JSON.stringify(next.toJSON())}\n`, {
+        directoryAuthority: this.directoryAuthority, maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        expectedSnapshot: verifiedSnapshot.revision?.snapshot ?? null,
+      });
+    } catch (error) {
+      if (error instanceof RegularFileAppendError && error.cause instanceof RegularFileAppendBaselineChangedError) {
+        throw new CurrentFlowStateInvariantError("Activity journal changed between read and append", { cause: error });
+      }
+      throw error;
     }
-    this.#assertVisibleIdentity(opened.identity);
-    if (opened.created) fsyncDirectory(path.dirname(this.filePath));
     return { appended: true, activity: next };
   }
 
-  #openExisting(flags) {
+  #capture() {
     this.directoryAuthority.assertStable();
-    let visible;
-    try {
-      visible = fs.lstatSync(this.filePath);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return null;
-      throw cause;
-    }
-    this.#assertRegularRealFile(visible);
-    const descriptor = fs.openSync(this.filePath, flags | (fs.constants.O_NOFOLLOW || 0));
-    return { descriptor, ...this.#openedFile(descriptor, visible) };
+    return readFlowAuthority(() => captureRegularFile(this.filePath, {
+      label: "Activity journal authority", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+      requireSingleLink: true, directoryAuthority: this.directoryAuthority, allowMissing: true,
+    }), "Activity journal authority must be a regular real file");
   }
-
-  #openAppend(expectedRevision) {
-    const existing = this.#openExisting(fs.constants.O_WRONLY | fs.constants.O_APPEND);
-    if (expectedRevision !== null) {
-      if (existing === null || !expectedRevision.matches(existing.revision)) {
-        if (existing !== null) fs.closeSync(existing.descriptor);
-        throw new CurrentFlowStateInvariantError("Activity journal changed between read and append");
-      }
-      return { ...existing, created: false };
-    }
-    if (existing !== null) {
-      fs.closeSync(existing.descriptor);
-      throw new CurrentFlowStateInvariantError("Activity journal authority appeared between read and append");
-    }
-    this.directoryAuthority.assertStable();
-    const descriptor = fs.openSync(
-      this.filePath,
-      fs.constants.O_WRONLY
-        | fs.constants.O_APPEND
-        | fs.constants.O_CREAT
-        | fs.constants.O_EXCL
-        | (fs.constants.O_NOFOLLOW || 0),
-      0o644,
-    );
-    return { descriptor, ...this.#openedFile(descriptor), created: true };
-  }
-
-  #openedFile(descriptor, expected = null) {
-    try {
-      const opened = fs.fstatSync(descriptor);
-      if (
-        !opened.isFile()
-        || opened.nlink !== 1
-        || (expected !== null && !sameFileIdentity(expected, opened))
-      ) {
-        throw new CurrentFlowStateInvariantError("Activity journal authority changed while opening");
-      }
-      return {
-        identity: { dev: opened.dev, ino: opened.ino },
-        revision: new FlowActivityJournalRevision(opened),
-      };
-    } catch (cause) {
-      fs.closeSync(descriptor);
-      throw cause;
-    }
-  }
-
-  #assertVisibleIdentity(identity) {
-    this.directoryAuthority.assertStable();
-    let visible;
-    try {
-      visible = fs.lstatSync(this.filePath);
-    } catch (cause) {
-      throw new CurrentFlowStateInvariantError("Activity journal authority disappeared", { cause });
-    }
-    this.#assertRegularRealFile(visible);
-    if (!sameFileIdentity(visible, identity)) {
-      throw new CurrentFlowStateInvariantError("Activity journal authority changed during access");
-    }
-  }
-
-  #assertRegularRealFile(stat) {
-    if (
-      !stat.isFile()
-      || stat.isSymbolicLink()
-      || stat.nlink !== 1
-      || fs.realpathSync(this.filePath) !== this.filePath
-    ) {
-      throw new CurrentFlowStateInvariantError("Activity journal authority must be a regular real file");
+  #assertCurrent(snapshot) {
+    const current = this.#capture();
+    if (snapshot.revision === null ? current !== null
+      : current === null || !snapshot.revision.matches(new FlowActivityJournalRevision(current))) {
+      throw new CurrentFlowStateInvariantError("Activity journal changed between read and append");
     }
   }
 }
@@ -9273,6 +9343,101 @@ class CurrentFlowStateValidationCache {
   }
 }
 
+/** Detached preview data; only the canonical Store can publish its Activities. */
+class CurrentFlowProcessPreview {
+  constructor(state, activities) {
+    if (!(state instanceof CurrentFlowState) || !Array.isArray(activities)
+      || activities.some((activity) => !(activity instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("process preview requires typed state and Activities");
+    }
+    this.state = state;
+    this.activities = Object.freeze([...activities]);
+    Object.freeze(this);
+  }
+}
+
+/** The detached result of one completed state replay and its Attempt facts. */
+class CurrentFlowReplayResult {
+  constructor(state, attemptHistory) {
+    if (!(state instanceof CurrentFlowState) || !(attemptHistory instanceof CurrentFlowAttemptHistory)) {
+      throw new CurrentFlowStateInvariantError("state replay result requires typed state and Attempt history");
+    }
+    this.state = state;
+    this.attemptHistory = attemptHistory;
+    Object.freeze(this);
+  }
+}
+
+/** Cold replay owns its transient graph; validated prefixes retain ordinary copies. */
+class CurrentFlowJournalReplay {
+  #state;
+  #priorActivities;
+  #reuseValidatedBase;
+  #attemptHistory;
+
+  constructor(state, priorActivities, { reuseValidatedBase, attemptHistory = null }) {
+    this.#reuseValidatedBase = reuseValidatedBase;
+    this.#attemptHistory = attemptHistory;
+    // A validated prefix already belongs to the existing warm replay path.
+    // Only cold replay privately shares a fully detached graph across observations.
+    this.#state = reuseValidatedBase ? state : this.#detach(state);
+    this.#priorActivities = [...priorActivities];
+  }
+
+  apply(activity) {
+    const before = this.#state;
+    if (!this.#reuseValidatedBase && activity.transition.operation === PROCESS_EVENT_OPERATION) {
+      const unchanged = applyCanonicalTransition(this.#state, activity, this.#priorActivities);
+      if (unchanged !== this.#state) {
+        throw new CurrentFlowStateInvariantError("process observation cannot change the journal replay graph");
+      }
+      this.#advanceConfirmation(activity.confirmationOrder);
+    } else {
+      this.#state = applyCanonicalActivity(this.materialize(), activity, this.#priorActivities);
+    }
+    this.#attemptHistory?.recordTransition(before, this.#state, activity);
+    this.#priorActivities.push(activity);
+  }
+
+  previewProcessEvents(group) {
+    const additions = [];
+    for (const event of group.events) {
+      const fact = new FlowProcessEvent(event);
+      const existing = this.#priorActivities.find((activity) => activity.id === fact.activityId);
+      if (existing) {
+        if (existing.processEvent?.digest !== event.digest) {
+          throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
+        }
+        continue;
+      }
+      fact.assertFor(this.#state, this.#priorActivities);
+      const recordedAt = event.occurredAt;
+      const activity = FlowActivity.forState(this.#state, { id: fact.activityId, nodeId: fact.nodeId,
+        processEvent: event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
+        transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
+          attempt: null, status: null, nonblocking: null } });
+      additions.push(activity); this.#priorActivities.push(activity);
+      this.#advanceConfirmation(activity.confirmationOrder);
+    }
+    return new CurrentFlowProcessPreview(this.materialize(), additions);
+  }
+
+  #advanceConfirmation(confirmationOrder) {
+    this.#state = new CurrentFlowState(
+      new CurrentFlowReplayConfirmation(this.#state, confirmationOrder),
+      { definition: this.#state.definition },
+    );
+  }
+
+  materialize() {
+    return this.#reuseValidatedBase ? this.#state : this.#detach(this.#state);
+  }
+
+  #detach(state) {
+    return new CurrentFlowState(structuredClone(state.toJSON()), { definition: state.definition });
+  }
+}
+
 /**
  * The only persistence API for the new flow.json contract.  The journal is
  * appended before the state CAS.  A crash in that window is resolved by
@@ -9281,7 +9446,7 @@ class CurrentFlowStateValidationCache {
 export class CurrentFlowStateStore {
   #validatedState = null;
 
-  constructor({ directory, definition, faultInjector = () => {}, processIdentitySource, runtimeLockLocation = null } = {}) {
+  constructor({ directory, definition, faultInjector = () => {}, runtimeLockLocation = null, repositoryRoot = null } = {}) {
     this.directory = path.resolve(requireString(directory, "store.directory"));
     if (!(definition instanceof CurrentFlowDefinition)) throw new CurrentFlowStateInvariantError("store requires a CurrentFlowDefinition");
     if (typeof faultInjector !== "function") throw new CurrentFlowStateInvariantError("store.faultInjector must be a function");
@@ -9294,44 +9459,39 @@ export class CurrentFlowStateStore {
     )) {
       throw new CurrentFlowStateInvariantError("current flow state runtime lock must belong to this Version directory");
     }
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o755 });
+    if (runtimeLockLocation === null && repositoryRoot === null) {
+      throw new CurrentFlowStateInvariantError("current flow state store requires an explicit repository root or minted Version lock location");
+    }
     const lockErrorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new CurrentFlowStateConflictError(message);
-      error.code = status === "live" || status === "timeout"
+      error.code = status === "busy" || status === "timeout"
         ? "FLOW_STATE_ATOMIC_BUSY"
         : `CURRENT_FLOW_STATE_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
       if (cause) error.cause = cause;
       return error;
     };
+    this.directoryAuthority = RealDirectoryAuthority.resolve(this.directory, {
+      create: true, creationMode: 0o755, errorFactory: lockErrorFactory,
+      parentAuthority: runtimeLockLocation?.location.repositoryAuthority ?? null,
+    });
     this.definition = definition;
     this.validator = new CurrentFlowStateValidator({ definition });
     this.serializer = new CurrentFlowStateSerializer({ validator: this.validator });
     this.faultInjector = faultInjector;
     this.runtimeLockLocation = runtimeLockLocation;
     this.statePath = path.join(this.directory, "flow.json");
-    this.journal = new FlowActivityJournal(path.join(this.directory, "activities.jsonl"));
-    // Runtime state is deliberately a real, non-authoritative subtree.  Create
-    // it before capturing lock directory identities so nested authorities do
-    // not have a creation race with their parent directory.
+    this.journal = new FlowActivityJournal(path.join(this.directory, "activities.jsonl"), {
+      directoryAuthority: this.directoryAuthority,
+    });
     const runtimeDirectory = runtimeLockLocation?.runtimeDirectory ?? path.join(this.directory, ".runtime");
-    const lockDirectory = runtimeLockLocation?.directory ?? path.join(runtimeDirectory, "locks");
-    const lockFileName = runtimeLockLocation?.fileName ?? "current-flow-state.lock";
-    fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });
-    this.directoryAuthority = new RealDirectoryAuthority(this.directory, { errorFactory: lockErrorFactory });
-    this.runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, {
-      create: true,
-      parentAuthority: this.directoryAuthority,
-      errorFactory: lockErrorFactory,
-    });
-    this.lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, {
-      create: true,
-      parentAuthority: this.runtimeAuthority,
-      errorFactory: lockErrorFactory,
-    });
+    const controlLocation = runtimeLockLocation?.controlLocation
+      ?? new RepositoryLockAuthority(repositoryRoot, { errorFactory: lockErrorFactory }).location({
+        namespace: "flow-version", identity: this.directory, fileName: "current-flow-state.lock",
+        legacyPaths: [path.join(runtimeDirectory, "locks", "current-flow-state.lock")],
+      });
     this.lock = new FileLock({
-      directoryAuthority: this.lockDirectoryAuthority,
-      fileName: lockFileName,
+      location: controlLocation,
       kind: "current-flow-state",
       authority: {
         directory: this.directory,
@@ -9339,10 +9499,21 @@ export class CurrentFlowStateStore {
         statePath: this.statePath,
         activityPath: this.journal.filePath,
       },
-      ...(processIdentitySource && { processIdentitySource }),
       errorFactory: lockErrorFactory,
     });
     Object.freeze(this);
+  }
+
+  /** Reject a non-current state before a Version creates its runtime branch.
+   * This grants no read authority: successful callers must still acquire the
+   * normal catalog/state locks and reload all canonical evidence. */
+  static assertInitialReadFormat({ directory, definition }) {
+    const bytes = CurrentFlowStateStore.#readStoredStateBytes(path.join(directory, "flow.json"));
+    if (bytes === null) return;
+    const serializer = new CurrentFlowStateSerializer({
+      validator: new CurrentFlowStateValidator({ definition }),
+    });
+    CurrentFlowStateStore.#parseStateBytes(bytes, serializer);
   }
 
   create(state) {
@@ -9368,7 +9539,7 @@ export class CurrentFlowStateStore {
       if (appended.appended) {
         this.faultInjector({ phase: "activity-appended", activity: created, state: next });
       }
-      fs.mkdirSync(this.directory, { recursive: true, mode: 0o755 });
+      this.directoryAuthority.assertStable();
       this.#write(materialized, null);
       this.faultInjector({ phase: "state-written", activity: created, state: materialized });
       return materialized;
@@ -9420,7 +9591,7 @@ export class CurrentFlowStateStore {
       ["catalog", "artifact-catalog.json"],
       ...(state.migration.archiveDigests.issueLog ? [["issueLog", "issue-log.json"]] : [])]) {
       let bytes;
-      try { bytes = fs.readFileSync(path.join(archiveRoot, name)); }
+      try { bytes = captureRegularFile(path.join(archiveRoot, name), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes; }
       catch (cause) { throw new CurrentFlowStateConflictError(`canonical-v3 migration archive is missing: ${name}`, { cause }); }
       if (digest(bytes) !== state.migration.archiveDigests[field]) {
         throw new CurrentFlowStateConflictError(`canonical-v3 migration archive digest differs: ${name}`);
@@ -9428,7 +9599,7 @@ export class CurrentFlowStateStore {
     }
     const countPath = path.join(this.directory, "artifacts", "spec-gate-repairs", "migration.json");
     let count;
-    try { count = JSON.parse(fs.readFileSync(countPath, "utf8")); }
+    try { count = JSON.parse(captureRegularFile(countPath, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text()); }
     catch (cause) { throw new CurrentFlowStateConflictError("canonical-v3 Gate repair count evidence is missing", { cause }); }
     if (count?.version !== 1 || count.legacyAppliedCount !== state.migration.legacyAppliedCount
       || count.sourceActivitiesDigest !== state.migration.archiveDigests.activities
@@ -9452,11 +9623,11 @@ export class CurrentFlowStateStore {
       throw new CurrentFlowStateConflictError("canonical-v3 Gate repair cycle evidence is invalid", { cause });
     }
     let catalog;
-    try { catalog = JSON.parse(fs.readFileSync(path.join(this.directory, "artifact-catalog.json"), "utf8")); }
+    try { catalog = JSON.parse(captureRegularFile(path.join(this.directory, "artifact-catalog.json"), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text()); }
     catch (cause) { throw new CurrentFlowStateConflictError("canonical-v3 migration artifact catalog is missing", { cause }); }
     const descriptor = catalog?.artifacts?.find((entry) => entry.relativePath === "artifacts/spec-gate-repairs/migration.json");
     if (descriptor?.logicalKey !== "spec.gate.repair.migration"
-      || descriptor.hash !== digest(fs.readFileSync(countPath)) || descriptor.activityId !== null) {
+      || descriptor.hash !== digest(captureRegularFile(countPath, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes) || descriptor.activityId !== null) {
       throw new CurrentFlowStateConflictError("canonical-v3 Gate repair count catalog binding differs");
     }
   }
@@ -9471,7 +9642,7 @@ export class CurrentFlowStateStore {
     try {
       this.#withLock(() => undefined);
     } catch (error) {
-      if (error?.lockStatus === "live" || error?.lockStatus === "timeout") {
+      if (error?.lockStatus === "busy" || error?.lockStatus === "timeout") {
         const busy = new Error(error.message, { cause: error });
         busy.name = "FlowStateAtomicSaveError";
         busy.code = "FLOW_STATE_ATOMIC_BUSY";
@@ -9539,7 +9710,11 @@ export class CurrentFlowStateStore {
   }
 
   #parse(bytes) {
-    try { return this.serializer.deserialize(JSON.parse(bytes.toString("utf8"))); } catch (error) {
+    return CurrentFlowStateStore.#parseStateBytes(bytes, this.serializer);
+  }
+
+  static #parseStateBytes(bytes, serializer) {
+    try { return serializer.deserialize(JSON.parse(bytes.toString("utf8"))); } catch (error) {
       if (error instanceof CurrentFlowStateInvariantError) throw error;
       throw new CurrentFlowStateInvariantError(`invalid flow.json: ${error.message}`);
     }
@@ -9645,14 +9820,17 @@ export class CurrentFlowStateStore {
     const cachedBase = cacheEligible
       ? this.#validatedState?.replayBaseFor(state, journalSnapshot) ?? null
       : null;
-    let replayed = cachedBase ?? freshStateLike(state, this.definition);
-    const replayStart = replayed.confirmationOrder;
+    let replayed;
     try {
-      const priorActivities = entries.slice(0, replayStart);
+      const base = cachedBase ?? freshStateLike(state, this.definition);
+      const replayStart = base.confirmationOrder;
+      const replay = new CurrentFlowJournalReplay(base, entries.slice(0, replayStart), {
+        reuseValidatedBase: cachedBase !== null,
+      });
       for (let index = replayStart; index < state.confirmationOrder; index += 1) {
-        replayed = this.#applyActivity(replayed, entries[index], priorActivities);
-        priorActivities.push(entries[index]);
+        replay.apply(entries[index]);
       }
+      replayed = replay.materialize();
     } catch (error) {
       throw new CurrentFlowStateConflictError(`Activity journal cannot reproduce flow state: ${error.message}`);
     }
@@ -9692,6 +9870,7 @@ export class CurrentFlowStateStore {
   #write(state, expectedBytes) {
     const content = this.serializer.bytes(state);
     const file = new AtomicFile(this.statePath, {
+      directoryAuthority: this.directoryAuthority,
       phaseNamespace: "current-flow-state",
       faultInjector: this.faultInjector,
       commitGuard: () => {
@@ -9708,18 +9887,14 @@ export class CurrentFlowStateStore {
   }
 
   #readStateBytes() {
-    const bytes = new AtomicFile(this.statePath, { phaseNamespace: "current-flow-state-read" }).read(null);
-    if (bytes === null) return null;
-    const visible = fs.lstatSync(this.statePath);
-    if (
-      !visible.isFile()
-      || visible.isSymbolicLink()
-      || visible.nlink !== 1
-      || fs.realpathSync(this.statePath) !== this.statePath
-    ) {
-      throw new CurrentFlowStateInvariantError("flow state authority must be a single-link regular real file");
-    }
-    return bytes;
+    return CurrentFlowStateStore.#readStoredStateBytes(this.statePath, this.directoryAuthority);
+  }
+
+  static #readStoredStateBytes(statePath, directoryAuthority = null) {
+    return readFlowAuthority(
+      () => new AtomicFile(statePath, { phaseNamespace: "current-flow-state-read", directoryAuthority }).read(null),
+      "flow state authority must be a single-link regular real file",
+    );
   }
 
   #withLock(operation) {
@@ -9743,18 +9918,17 @@ export class CurrentFlowStateAdoptionBoundary {
     return CurrentFlowState.create({ definition: this.definition, ...options });
   }
 
-  openStore({ directory, faultInjector, processIdentitySource } = {}) {
+  openStore({ directory, repositoryRoot, runtimeLockLocation, faultInjector } = {}) {
     return new CurrentFlowStateStore({
-      directory,
+      directory, repositoryRoot, runtimeLockLocation,
       definition: this.definition,
       ...(faultInjector && { faultInjector }),
-      ...(processIdentitySource && { processIdentitySource }),
     });
   }
 
-  openVersionStore({ location, faultInjector, processIdentitySource } = {}) {
+  openVersionStore({ location, faultInjector } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new CurrentFlowStateInvariantError("FlowVersionLocation is required for Version storage");
-    return new CurrentFlowVersionStore({ location, definition: this.definition, ...(faultInjector && { faultInjector }), ...(processIdentitySource && { processIdentitySource }) });
+    return new CurrentFlowVersionStore({ location, definition: this.definition, ...(faultInjector && { faultInjector }) });
   }
 
 }
@@ -9788,27 +9962,44 @@ export class CanonicalTransitionView {
     // from the view. Keep that capability bound to this lock-scoped catalog
     // instead of requiring every admission to know the concrete view type.
     this.readCatalogedArtifact = this.readCatalogedArtifact.bind(this);
+    this.readArtifactSnapshot = this.readArtifactSnapshot.bind(this);
     this.readRuntimeArtifact = this.readRuntimeArtifact.bind(this);
     Object.freeze(this);
   }
 
   /**
    * Dispatch approval observes an action; its own receipt cannot invalidate
-   * that action on restart. Only trailing typed approval observations and
-   * their confirmation counter are excluded. Every other state field,
+   * that action on restart. Trailing typed approval and process observations
+   * and their confirmation counter are excluded. Every other state field,
    * Activity and cataloged input remains part of execution admission.
    */
   dispatchExecutionRevision() {
+    return this.#executionRevision({ excludeDispatchApprovals: true });
+  }
+
+  /** Process bookkeeping cannot invalidate the evidence its Git calls read. */
+  sourceEvidenceRevision({ executionObservations = null } = {}) {
+    if (executionObservations !== null && !(executionObservations instanceof SourceExecutionObservationAppends)) {
+      throw new TypeError("Source evidence revision requires authenticated execution observation appends");
+    }
+    return this.#executionRevision({ excludeDispatchApprovals: false,
+      catalog: executionObservations === null ? this.catalog : executionObservations.retainedCatalog(this.catalog) });
+  }
+
+  #executionRevision({ excludeDispatchApprovals, catalog = this.catalog }) {
     let retainedCount = this.activities.length;
     while (retainedCount > 0) {
       const activity = this.activities[retainedCount - 1];
-      if (!DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
-        || !(activity.transition.approval instanceof ActivityDispatchApproval)) break;
+      const approval = excludeDispatchApprovals && DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
+        && activity.transition.approval instanceof ActivityDispatchApproval;
+      const processObservation = activity.transition.operation === PROCESS_EVENT_OPERATION
+        && activity.processEvent instanceof ProcessExecutionEvent;
+      if (!approval && !processObservation) break;
       retainedCount -= 1;
     }
-    const approvalCount = this.activities.length - retainedCount;
-    const state = this.state.withConfirmationOrder(this.state.confirmationOrder - approvalCount);
-    const artifacts = this.catalog.artifacts
+    const observationCount = this.activities.length - retainedCount;
+    const state = this.state.withConfirmationOrder(this.state.confirmationOrder - observationCount);
+    const artifacts = catalog.artifacts
       .filter((artifact) => !["flow.state", "flow.activities"].includes(artifact.logicalKey))
       .map((artifact) => artifact.toJSON())
       .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
@@ -9816,7 +10007,7 @@ export class CanonicalTransitionView {
       activities: this.activities.slice(0, retainedCount).map((activity) => activity.toJSON()), artifacts })));
   }
 
-  readCatalogedArtifact(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
+  readArtifactSnapshot(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
     if (descriptor === null || typeof descriptor !== "object" || typeof descriptor.relativePath !== "string") {
       throw new CurrentFlowStateInvariantError("canonical transition view requires an artifact descriptor");
     }
@@ -9824,7 +10015,12 @@ export class CanonicalTransitionView {
     if (current.hash !== descriptor.hash || current.activityId !== descriptor.activityId) {
       throw new CurrentFlowStateInvariantError("canonical transition view artifact descriptor changed");
     }
-    return current.readBytes(this.location, { maxBytes, onRead });
+    return this.catalog.readArtifact(this.location, current.relativePath, { maxBytes, onRead });
+  }
+
+
+  readCatalogedArtifact(descriptor, options = {}) {
+    return this.readArtifactSnapshot(descriptor, options).bytes;
   }
 
   readRuntimeArtifact({ logicalKey } = {}) {
@@ -9844,7 +10040,7 @@ export class CanonicalTransitionView {
 /** Version-1-only persistence facade. It has no legacy-layout lookup. */
 export class CurrentFlowVersionStore {
   #stateStore = null;
-  constructor({ location, definition, faultInjector, processIdentitySource, allowStaging = false } = {}) {
+  constructor({ location, definition, faultInjector, allowStaging = false } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new CurrentFlowStateInvariantError("Current Flow Version store requires a FlowVersionLocation");
     location.requireScope("canonical");
     if (location.isStaging && allowStaging !== true) {
@@ -9857,10 +10053,10 @@ export class CurrentFlowVersionStore {
     this.location = location;
     this.definition = definition;
     this.faultInjector = faultInjector;
-    this.processIdentitySource = processIdentitySource;
     this.allowStaging = allowStaging === true;
     this.catalogStore = new FlowArtifactCatalogStore({
       location,
+      assertInitialReadFormat: () => this.#assertInitialReadFormat(),
       ...(faultInjector && { faultInjector }),
     });
     Object.freeze(this);
@@ -9916,29 +10112,29 @@ export class CurrentFlowVersionStore {
     this.location.assertAuthority();
     if (fs.existsSync(this.location.directory)) throw new CurrentFlowStateConflictError("Current Flow Version root must be absent before creation");
     const parentDirectory = path.dirname(this.location.directory);
-    fs.mkdirSync(parentDirectory, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(parentDirectory, { create: true, creationMode: 0o755 });
     const staging = this.location.stagingSibling(crypto.randomBytes(12).toString("hex"));
     let published = false;
+    let stagingAuthority = null;
     try {
       const stagingStore = new CurrentFlowVersionStore({
         location: staging,
         definition: this.definition,
         ...(this.faultInjector && { faultInjector: this.faultInjector }),
-        ...(this.processIdentitySource && { processIdentitySource: this.processIdentitySource }),
         allowStaging: true,
       });
-      stagingStore.#createMaterialized(canonical, canonicalSpec, issueSnapshot);
+      stagingAuthority = stagingStore.#createMaterialized(canonical, canonicalSpec, issueSnapshot);
       if (fs.existsSync(this.location.directory)) {
         throw new CurrentFlowStateConflictError("Current Flow Version root appeared during atomic creation");
       }
-      fs.renameSync(staging.directory, this.location.directory);
-      fsyncDirectory(parentDirectory);
+      try { stagingAuthority.moveTo(this.location.directory); }
+      catch (error) { if (error.committedToVisibleName === true) published = true; throw error; }
       published = true;
       return this.load();
     } catch (error) {
       if (published) throw error;
       try {
-        fs.rmSync(staging.directory, { recursive: true, force: true });
+        stagingAuthority?.remove({ recursive: true, force: true });
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "Current Flow Version staging cleanup failed", { cause: error });
       }
@@ -9952,29 +10148,25 @@ export class CurrentFlowVersionStore {
     if (issueSnapshot !== null && typeof issueSnapshot !== "string") {
       throw new CurrentFlowStateInvariantError("linked Issue snapshot must be a string or null");
     }
-    let ownsVersionRoot = false;
+    let versionAuthority = null;
     try {
-      fs.mkdirSync(path.dirname(this.location.directory), { recursive: true, mode: 0o755 });
-      fs.mkdirSync(this.location.directory, { recursive: false, mode: 0o755 });
-      ownsVersionRoot = true;
-      fs.mkdirSync(this.location.resolve("steps"), { recursive: true, mode: 0o755 });
-      fs.mkdirSync(this.location.resolve("artifacts/tests"), { recursive: true, mode: 0o755 });
-      fs.writeFileSync(this.location.specFile, specRecord.canonicalText, { flag: "wx", mode: 0o600 });
+      const parentAuthority = this.location.repositoryAuthority.descendant(path.dirname(this.location.directory), { create: true, creationMode: 0o755 });
+      versionAuthority = RealDirectoryAuthority.createExclusive(this.location.directory, { parentAuthority, creationMode: 0o755 });
+      versionAuthority.descendant(this.location.resolve("steps"), { create: true, creationMode: 0o755 });
+      versionAuthority.descendant(this.location.resolve("artifacts/tests"), { create: true, creationMode: 0o755 });
+      new AtomicFile(this.location.specFile, { directoryAuthority: versionAuthority }).write(specRecord.canonicalText, { exclusive: true });
       const initialRevision = 1;
       const revisionParameters = { revision: new FlowSpecRevision(initialRevision).pathSegment };
       const specBytes = Buffer.from(specRecord.canonicalText, "utf8");
       const snapshotFile = this.location.artifact("spec.snapshot", revisionParameters);
-      fs.mkdirSync(path.dirname(snapshotFile), { recursive: true, mode: 0o755 });
-      fs.writeFileSync(snapshotFile, specBytes, { flag: "wx", mode: 0o600 });
-      fs.writeFileSync(this.location.activitiesFile, "", { flag: "wx", mode: 0o600 });
+      const snapshotAuthority = versionAuthority.descendant(path.dirname(snapshotFile), { create: true, creationMode: 0o755 });
+      new AtomicFile(snapshotFile, { directoryAuthority: snapshotAuthority }).write(specBytes, { exclusive: true });
+      new AtomicFile(this.location.activitiesFile, { directoryAuthority: versionAuthority }).write("", { exclusive: true });
       if (issueSnapshot !== null) {
-        fs.writeFileSync(
-          this.location.issueSnapshotFile,
-          issueSnapshot.endsWith("\n") ? issueSnapshot : `${issueSnapshot}\n`,
-          { flag: "wx", mode: 0o600 },
-        );
+        new AtomicFile(this.location.issueSnapshotFile, { directoryAuthority: versionAuthority }).write(issueSnapshot.endsWith("\n") ? issueSnapshot : `${issueSnapshot}\n`, { exclusive: true });
       }
-      const created = this.#store().create(canonical);
+      versionAuthority.assertStable();
+      this.#store().create(canonical);
       const creationActivityId = FlowActivityId.from(flowCreatedActivityId(canonical.identity));
       const artifacts = [
         descriptorFor(this.location, "flow.state", "application/json", creationActivityId),
@@ -9984,12 +10176,13 @@ export class CurrentFlowVersionStore {
       ];
       if (issueSnapshot !== null) artifacts.push(descriptorFor(this.location, "issue.snapshot", "text/markdown", creationActivityId));
       this.catalogStore.initialize(new FlowArtifactCatalog({ artifacts }));
-      return created;
+      versionAuthority.assertStable();
+      return versionAuthority;
     } catch (error) {
       this.#stateStore = null;
-      if (!ownsVersionRoot) throw error;
+      if (versionAuthority === null) throw error;
       try {
-        fs.rmSync(this.location.directory, { recursive: true, force: true });
+        versionAuthority.remove({ recursive: true, force: true });
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "Current Flow Version creation authority corrupted during cleanup", { cause: error });
       }
@@ -10001,17 +10194,23 @@ export class CurrentFlowVersionStore {
       relativePaths: [resolvedArtifact("flow.state").relativePath],
       read: (catalog) => {
         this.#assertSpecRevisionAuthority(catalog);
+        this.#assertExecutionSourceContracts(catalog);
         return this.#assertPersistedIdentity(this.#store().load());
       },
     });
   }
-  loadSnapshot() {
+  loadSnapshot({ required = false } = {}) {
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
       read: (catalog) => {
         this.#assertSpecRevisionAuthority(catalog);
+        this.#assertExecutionSourceContracts(catalog);
         const snapshot = this.#store().loadSnapshot();
-        if (snapshot === null) return null;
+        if (snapshot === null) {
+          // Required snapshot reads keep load's existing missing-state failure.
+          if (required) this.#assertPersistedIdentity(null);
+          return null;
+        }
         this.#assertPersistedIdentity(snapshot.state);
         return snapshot;
       },
@@ -10098,6 +10297,10 @@ export class CurrentFlowVersionStore {
       read: (catalog) => read(catalog, this.#store().loadSnapshot()),
     });
   }
+  #readSpecReviewBytes(catalog, bytes, identity = null) {
+    const processEvidence = catalog.processStopEncoding(this.location, "spec.review", [bytes]);
+    return CanonicalSpecReview.fromBytes(bytes, { processEvidence, identity });
+  }
   #readSpecReviewRevision(catalog, revision) {
     const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
     const reviewPath = resolvedArtifact("spec.review", parameters).relativePath;
@@ -10108,9 +10311,9 @@ export class CurrentFlowVersionStore {
     if (descriptor.logicalKey !== "spec.review" || snapshotDescriptor?.logicalKey !== "spec.snapshot") {
       throw new CurrentFlowStateInvariantError("canonical Spec review has no matching snapshot authority");
     }
-    const bytes = fs.readFileSync(this.location.resolve(reviewPath));
-    const snapshotBytes = fs.readFileSync(this.location.resolve(snapshotPath));
-    const review = new CanonicalSpecReview(JSON.parse(bytes.toString("utf8")));
+    const bytes = captureRegularFile(this.location.resolve(reviewPath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
+    const snapshotBytes = captureRegularFile(this.location.resolve(snapshotPath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
+    const review = this.#readSpecReviewBytes(catalog, bytes);
     if (descriptor.hash !== sha256Bytes(bytes) || descriptor.size !== bytes.length
       || review.digest !== descriptor.hash
       || snapshotDescriptor.hash !== sha256Bytes(snapshotBytes) || snapshotDescriptor.size !== snapshotBytes.length
@@ -10128,12 +10331,12 @@ export class CurrentFlowVersionStore {
       read: (catalog) => {
         const authority = this.#assertSpecRevisionAuthority(catalog);
         if (authority.reviewDescriptor !== null) {
-          const bytes = fs.readFileSync(this.location.resolve(authority.reviewDescriptor.relativePath));
+          const bytes = captureRegularFile(this.location.resolve(authority.reviewDescriptor.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
           return Object.freeze({
             revision: authority.revision,
             descriptor: authority.reviewDescriptor,
             bytes,
-            review: new CanonicalSpecReview(JSON.parse(bytes.toString("utf8"))),
+            review: this.#readSpecReviewBytes(catalog, bytes),
             persisted: true,
           });
         }
@@ -10179,7 +10382,10 @@ export class CurrentFlowVersionStore {
     }
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
-      read: (catalog) => read(this.#canonicalTransitionView(catalog)),
+      read: (catalog) => {
+        this.#assertSpecRevisionAuthority(catalog);
+        return read(this.#canonicalTransitionView(catalog));
+      },
     });
   }
 
@@ -10194,7 +10400,7 @@ export class CurrentFlowVersionStore {
     const expected = expectedAttempt === null ? null : CurrentAttemptIdentity.from(expectedAttempt);
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
-      read: () => {
+      read: (_catalog, runtimeAuthority) => {
         const state = this.#assertPersistedIdentity(this.#store().load());
         if (state.findNode(target) === null) {
           throw new CurrentFlowStateInvariantError(`canonical runtime artifact node is absent: ${target}`);
@@ -10206,7 +10412,11 @@ export class CurrentFlowVersionStore {
         if (expected !== null && !expected.matches(state)) {
           throw new CurrentFlowStateConflictError("canonical runtime artifact Attempt changed before write");
         }
-        return runtimeArtifact.write(this.location, target);
+        const directoryAuthority = RealDirectoryAuthority.closestAncestor(
+          this.location.resolve(runtimeArtifact.artifact.relativePath),
+          [this.catalogStore.file.directoryAuthority, runtimeAuthority],
+        );
+        return runtimeArtifact.write(this.location, target, directoryAuthority);
       },
     });
   }
@@ -10230,6 +10440,14 @@ export class CurrentFlowVersionStore {
       throw new CurrentFlowStateInvariantError("review publication Activity facts are derived only by the canonical Version Store");
     }
     const completionActivity = input?.completionActivity == null ? null : FlowActivity.canonical(input.completionActivity);
+    const followingProcessActivities = (input?.followingProcessActivities ?? []).map((entry) => FlowActivity.canonical(entry));
+    if (followingProcessActivities.length > 0 && (completionActivity !== null
+      || [activity, ...followingProcessActivities].some((entry, index) => entry.transition.operation !== PROCESS_EVENT_OPERATION
+        || entry.confirmationOrder !== activity.confirmationOrder + index
+        || entry.processEvent.executionId !== activity.processEvent.executionId
+        || !entry.processEvent.binding.matches(activity.processEvent.binding)))) {
+      throw new CurrentFlowStateInvariantError("Process event transaction requires ordered Activities for one execution and binding");
+    }
     const completesFlow = activity.result?.draftSettlementReceipt?.settlementKind === "completion";
     if (completesFlow !== (completionActivity !== null)
       || (completionActivity !== null && (activity.transition.operation !== "confirm_attempt"
@@ -10290,7 +10508,7 @@ export class CurrentFlowVersionStore {
     const reviewRecord = this.#reviewPublicationRecord(activity, artifactWrites, specRevisionPlan);
     const reviewPublication = reviewRecord?.fact ?? null;
     if (reviewPublication !== null) activity = activity.withReviewPublication(reviewPublication);
-    const activityId = FlowActivityId.from(completionActivity?.id ?? activity.id);
+    const activityId = FlowActivityId.from(completionActivity?.id ?? followingProcessActivities.at(-1)?.id ?? activity.id);
     const allArtifactWrites = Object.freeze([...artifactWrites, ...specRevisionWrites,
       ...(reviewRecord === null ? [] : [reviewRecord.evidenceWrite(activity,
         activity.timing?.finishedAt ?? activity.result?.confirmedAt ?? new Date().toISOString())])]);
@@ -10395,6 +10613,10 @@ export class CurrentFlowVersionStore {
           activity,
           assertCurrentState: (state) => this.#assertPersistedIdentity(state),
         });
+        for (const next of followingProcessActivities) {
+          result = this.#store().apply({ activity: next,
+            assertCurrentState: (state) => this.#assertPersistedIdentity(state) });
+        }
         if (completionActivity !== null) {
           result = this.#store().apply({ activity: completionActivity,
             assertCurrentState: (state) => this.#assertPersistedIdentity(state) });
@@ -10403,8 +10625,8 @@ export class CurrentFlowVersionStore {
           this.#writeSpecRecord(taskSpec);
         }
         if (replacementSpec !== null) this.#writeSpecRecord(replacementSpec);
-        for (const artifact of allArtifactWrites) artifact.write(this.location);
-        for (const artifact of artifactRemovals) artifact.remove(this.location);
+        for (const artifact of allArtifactWrites) artifact.write(this.location, this.catalogStore.file.directoryAuthority);
+        for (const artifact of artifactRemovals) artifact.remove(this.location, this.catalogStore.file.directoryAuthority);
         return result;
       },
       removals,
@@ -10440,10 +10662,23 @@ export class CurrentFlowVersionStore {
     return state;
   }
   #canonicalTransitionView(catalog) {
+    this.#assertExecutionSourceContracts(catalog);
     const snapshot = this.#store().loadSnapshot();
     if (snapshot === null) throw new CurrentFlowStateConflictError("current Flow state does not exist");
     this.#assertPersistedIdentity(snapshot.state);
     return new CanonicalTransitionView({ location: this.location, snapshot, catalog });
+  }
+  /** A genuine saved Prompt producer has a registered immutable source. Reject
+   * an earlier source contract before a read or transaction can append facts. */
+  #assertExecutionSourceContracts(catalog) {
+    for (const descriptor of catalog.artifacts) if (descriptor.logicalKey === "execution.source.manifest") {
+      parseFlowExecutionObservationArtifact(descriptor, descriptor.readBytes(this.location));
+    }
+  }
+  #assertInitialReadFormat() {
+    CurrentFlowStateStore.assertInitialReadFormat({ directory: this.location.directory, definition: this.definition });
+    const bytes = this.catalogStore.file.readBytes(null);
+    if (bytes !== null) this.#assertExecutionSourceContracts(FlowArtifactCatalog.fromSerialized(JSON.parse(bytes.toString("utf8"))));
   }
   #nextTaskSpec(activity, supplied) {
     const task = activity.transition.task;
@@ -10574,32 +10809,34 @@ export class CurrentFlowVersionStore {
       || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
       throw new CurrentFlowStateInvariantError("spec.review artifacts require one confirmed canonical Spec review stage");
     }
-    const authority = this.catalogStore.read({
+    return this.catalogStore.read({
       relativePaths: [resolvedArtifact("spec.record").relativePath],
-      read: (catalog) => this.#assertSpecRevisionAuthority(catalog),
+      read: (catalog) => {
+        const authority = this.#assertSpecRevisionAuthority(catalog);
+        const write = reviews[0];
+        const expectedPath = resolvedArtifact("spec.review", authority.parameters).relativePath;
+        if (write.artifact.relativePath !== expectedPath) {
+          throw new CurrentFlowStateInvariantError("spec.review artifacts must target the verified current Spec revision");
+        }
+        let review;
+        try {
+          review = this.#readSpecReviewBytes(catalog, write.bytes);
+        } catch (cause) {
+          throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
+        }
+        if (review.digest !== sha256Bytes(write.bytes)
+          || review.identity.specId !== this.location.specId.toString()
+          || review.identity.revision.value !== authority.revision
+          || review.identity.digest !== sha256Bytes(authority.snapshotBytes)
+          || review.identity.byteLength !== authority.snapshotBytes.length) {
+          throw new CurrentFlowStateInvariantError("spec.review artifact does not bind the verified current Spec revision");
+        }
+        const audit = review.audit.at(-1) ?? null;
+        if (audit === null || audit.stage !== expectedStage) {
+          throw new CurrentFlowStateInvariantError("spec.review artifact must append the owning canonical review stage audit");
+        }
+      },
     });
-    const write = reviews[0];
-    const expectedPath = resolvedArtifact("spec.review", authority.parameters).relativePath;
-    if (write.artifact.relativePath !== expectedPath) {
-      throw new CurrentFlowStateInvariantError("spec.review artifacts must target the verified current Spec revision");
-    }
-    let review;
-    try {
-      review = new CanonicalSpecReview(JSON.parse(write.bytes.toString("utf8")));
-    } catch (cause) {
-      throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
-    }
-    if (review.digest !== sha256Bytes(write.bytes)
-      || review.identity.specId !== this.location.specId.toString()
-      || review.identity.revision.value !== authority.revision
-      || review.identity.digest !== sha256Bytes(authority.snapshotBytes)
-      || review.identity.byteLength !== authority.snapshotBytes.length) {
-      throw new CurrentFlowStateInvariantError("spec.review artifact does not bind the verified current Spec revision");
-    }
-    const audit = review.audit.at(-1) ?? null;
-    if (audit === null || audit.stage !== expectedStage) {
-      throw new CurrentFlowStateInvariantError("spec.review artifact must append the owning canonical review stage audit");
-    }
   }
   #artifactBaselines(value) {
     if (value === undefined) return Object.freeze([]);
@@ -10666,40 +10903,45 @@ export class CurrentFlowVersionStore {
     if (reviewWrites.length !== 1) {
       throw new CurrentFlowStateInvariantError("canonical review publication requires exactly one requested spec.review artifact");
     }
-    const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
-    if (expectedStage === null
-      || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
-      throw new CurrentFlowStateInvariantError("spec.review artifacts may be published only by confirmed canonical Spec review stages");
-    }
-    const reviewWrite = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")
-      ?? reviewWrites[0];
-    if (reviewWrite === null) {
-      throw new CurrentFlowStateInvariantError("canonical review publication has no destination revision artifact");
-    }
-    let review;
-    try {
-      review = new CanonicalSpecReview(JSON.parse(reviewWrite.bytes.toString("utf8")));
-    } catch (cause) {
-      throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
-    }
-    const audit = review.audit.at(-1) ?? null;
-    if (audit === null || audit.stage !== expectedStage) {
-      throw new CurrentFlowStateInvariantError("canonical review publication must append an audit entry for its confirmed stage");
-    }
-    const fact = new ActivityReviewPublication({
-      generation: review.generation,
-      identity: review.identity.toJSON(),
-      reviewDigest: review.digest,
-      relation: audit.relation,
-      stage: audit.stage,
-      outcome: audit.outcome,
+    return this.catalogStore.read({
+      relativePaths: [resolvedArtifact("spec.record").relativePath],
+      read: (catalog) => {
+        const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
+        if (expectedStage === null
+          || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
+          throw new CurrentFlowStateInvariantError("spec.review artifacts may be published only by confirmed canonical Spec review stages");
+        }
+        const reviewWrite = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")
+          ?? reviewWrites[0];
+        if (reviewWrite === null) {
+          throw new CurrentFlowStateInvariantError("canonical review publication has no destination revision artifact");
+        }
+        let review;
+        try {
+          review = this.#readSpecReviewBytes(catalog, reviewWrite.bytes);
+        } catch (cause) {
+          throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
+        }
+        const audit = review.audit.at(-1) ?? null;
+        if (audit === null || audit.stage !== expectedStage) {
+          throw new CurrentFlowStateInvariantError("canonical review publication must append an audit entry for its confirmed stage");
+        }
+        const fact = new ActivityReviewPublication({
+          generation: review.generation,
+          identity: review.identity.toJSON(),
+          reviewDigest: review.digest,
+          relation: audit.relation,
+          stage: audit.stage,
+          outcome: audit.outcome,
+        });
+        fact.assertReview(review, {
+          specId: this.location.specId.toString(),
+          revision: review.identity.revision.value,
+          bytes: reviewWrite.bytes,
+        });
+        return new CanonicalSpecReviewActivityPublication({ write: reviewWrite, review, fact });
+      },
     });
-    fact.assertReview(review, {
-      specId: this.location.specId.toString(),
-      revision: review.identity.revision.value,
-      bytes: reviewWrite.bytes,
-    });
-    return new CanonicalSpecReviewActivityPublication({ write: reviewWrite, review, fact });
   }
   #assertReviewPublicationFact({ activity, reviewRecord, artifactWrites, catalog }) {
     if (!(activity instanceof FlowActivity) || !(reviewRecord instanceof CanonicalSpecReviewActivityPublication)) {
@@ -10721,7 +10963,7 @@ export class CurrentFlowVersionStore {
     }
     let review;
     try {
-      review = new CanonicalSpecReview(JSON.parse(destination.bytes.toString("utf8")));
+      review = this.#readSpecReviewBytes(catalog, destination.bytes);
     } catch (cause) {
       throw new CurrentFlowStateInvariantError(`canonical review destination bytes are invalid: ${cause.message}`);
     }
@@ -10743,7 +10985,7 @@ export class CurrentFlowVersionStore {
   #readSpecRecord() {
     try {
       return new CurrentFlowSpecRecord(
-        JSON.parse(fs.readFileSync(this.location.specFile, "utf8")),
+        JSON.parse(captureRegularFile(this.location.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text()),
         { specId: this.location.specId.toString() },
       );
     } catch (error) {
@@ -10800,12 +11042,12 @@ export class CurrentFlowVersionStore {
     const reviewDescriptor = reviews.get(parameters.revision) ?? null;
     if (snapshotDescriptor === undefined) throw new CurrentFlowStateInvariantError("current canonical Spec revision snapshot is absent from the catalog");
     const snapshot = this.location.resolve(snapshotDescriptor.relativePath);
-    const rootBytes = fs.readFileSync(this.location.specFile);
+    const rootBytes = captureRegularFile(this.location.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     const rootDescriptor = catalog.resolve("spec.json");
     if (rootDescriptor.logicalKey !== "spec.record" || rootDescriptor.hash !== sha256Bytes(rootBytes) || rootDescriptor.size !== rootBytes.length) {
       throw new CurrentFlowStateInvariantError("root canonical spec.json descriptor does not match its authority bytes");
     }
-    const snapshotBytes = fs.readFileSync(snapshot);
+    const snapshotBytes = captureRegularFile(snapshot, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     if (!rootBytes.equals(snapshotBytes)) {
       throw new CurrentFlowStateInvariantError("root canonical spec.json does not match its current immutable revision snapshot");
     }
@@ -10815,10 +11057,11 @@ export class CurrentFlowVersionStore {
     if (reviewDescriptor !== null) {
       const review = this.location.resolve(reviewDescriptor.relativePath);
       let document;
-      try { document = new CanonicalSpecReview(JSON.parse(fs.readFileSync(review, "utf8"))); } catch (cause) {
+      try { document = this.#readSpecReviewBytes(catalog, captureRegularFile(review, {
+        label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes); } catch (cause) {
         throw new CurrentFlowStateInvariantError(`current canonical review is invalid: ${cause.message}`);
       }
-      const reviewBytes = fs.readFileSync(review);
+      const reviewBytes = captureRegularFile(review, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
       if (reviewDescriptor.hash !== sha256Bytes(reviewBytes) || reviewDescriptor.size !== reviewBytes.length
         || document.digest !== reviewDescriptor.hash
         || document.identity.specId !== this.location.specId.toString()
@@ -10833,49 +11076,47 @@ export class CurrentFlowVersionStore {
     });
   }
   #specRevisionWrites(next, activity, requestedArtifactWrites = []) {
-    const currentBytes = fs.readFileSync(this.location.specFile);
+    const currentBytes = captureRegularFile(this.location.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     const nextBytes = Buffer.from(next.canonicalText, "utf8");
-    const current = this.catalogStore.read({
+    return this.catalogStore.read({
       relativePaths: [resolvedArtifact("spec.record").relativePath],
       read: (catalog) => {
         // Identity is the outer authority boundary.  Check it before reading
         // revision members so a foreign, internally coherent Version cannot
         // be reported as a local revision defect.
         this.#assertPersistedIdentity(this.#store().load());
-        return this.#assertSpecRevisionAuthority(catalog);
+        const current = this.#assertSpecRevisionAuthority(catalog);
+        if (currentBytes.equals(nextBytes)) return Object.freeze({ authority: current, writes: Object.freeze([]) });
+        const revision = current.revision + 1;
+        const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
+        if (!current.snapshotBytes.equals(currentBytes)) {
+          throw new CurrentFlowStateInvariantError("root canonical spec.json does not match its current immutable revision snapshot");
+        }
+        const sourceReviewWrite = requestedArtifactWrites.find((write) => (
+          write.artifact.logicalKey === "spec.review"
+          && write.artifact.relativePath === resolvedArtifact("spec.review", current.parameters).relativePath
+        )) ?? null;
+        const review = sourceReviewWrite === null ? null
+          : this.#readSpecReviewBytes(catalog, sourceReviewWrite.bytes).withIdentity(SpecRevisionIdentity.fromBytes({
+            specId: this.location.specId.toString(), revision, bytes: nextBytes,
+          }));
+        const writes = [new CanonicalFlowArtifactWrite({ logicalKey: "spec.snapshot", parameters, mediaType: "application/json", bytes: nextBytes })];
+        if (review !== null) {
+          writes.push(new CanonicalFlowArtifactWrite({
+            logicalKey: "spec.review", parameters, mediaType: "application/json",
+            bytes: Buffer.from(`${JSON.stringify(review.toJSON(), null, 2)}\n`, "utf8"),
+          }));
+        }
+        return Object.freeze({ authority: current, writes: Object.freeze(writes) });
       },
     });
-    if (currentBytes.equals(nextBytes)) return Object.freeze({ authority: current, writes: Object.freeze([]) });
-    const revision = current.revision + 1;
-    const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
-    if (!current.snapshotBytes.equals(currentBytes)) {
-      throw new CurrentFlowStateInvariantError("root canonical spec.json does not match its current immutable revision snapshot");
-    }
-    const sourceReviewWrite = requestedArtifactWrites.find((write) => (
-      write.artifact.logicalKey === "spec.review"
-      && write.artifact.relativePath === resolvedArtifact("spec.review", current.parameters).relativePath
-    )) ?? null;
-    const review = sourceReviewWrite === null ? null : new CanonicalSpecReview({
-          ...new CanonicalSpecReview(JSON.parse(sourceReviewWrite.bytes.toString("utf8"))).toJSON(),
-          identity: {
-            specId: this.location.specId.toString(), revision,
-            digest: sha256Bytes(nextBytes), byteLength: nextBytes.length,
-          },
-        });
-    const writes = [new CanonicalFlowArtifactWrite({ logicalKey: "spec.snapshot", parameters, mediaType: "application/json", bytes: nextBytes })];
-    if (review !== null) {
-      writes.push(new CanonicalFlowArtifactWrite({
-        logicalKey: "spec.review", parameters, mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(review.toJSON(), null, 2)}\n`, "utf8"),
-      }));
-    }
-    return Object.freeze({ authority: current, writes: Object.freeze(writes) });
   }
   #writeSpecRecord(specRecord) {
     if (!(specRecord instanceof CurrentFlowSpecRecord)) {
       throw new CurrentFlowStateInvariantError("canonical spec.json writer requires CurrentFlowSpecRecord");
     }
-    new AtomicFile(this.location.specFile, { phaseNamespace: "current-flow-spec" })
+    canonicalArtifactFile(this.location, resolvedArtifact("spec.record").relativePath,
+      "current-flow-spec", this.catalogStore.file.directoryAuthority)
       .write(Buffer.from(specRecord.canonicalText, "utf8"));
   }
   #materializeTaskWorkspace(task) {
@@ -10887,8 +11128,9 @@ export class CurrentFlowVersionStore {
     // creates empty result/file-map authorities that a later producer could
     // mistake for evidence.
     const taskLocation = this.location.taskArtifactLocation(task.id);
+    const taskAuthority = this.catalogStore.file.directoryAuthority.descendant(taskLocation.directory, { create: true, creationMode: 0o755 });
     for (const directory of [taskLocation.implDirectory, taskLocation.reviewDirectory, taskLocation.triageDirectory, taskLocation.repairDirectory, taskLocation.gateDirectory]) {
-      fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
+      taskAuthority.descendant(directory, { create: true, creationMode: 0o755 });
     }
   }
   #store() {
@@ -10899,7 +11141,6 @@ export class CurrentFlowVersionStore {
         definition: this.definition,
         runtimeLockLocation: this.location.runtimeLock("runtime.lock.current-flow-state"),
         ...(this.faultInjector && { faultInjector: this.faultInjector }),
-        ...(this.processIdentitySource && { processIdentitySource: this.processIdentitySource }),
       });
     }
     return this.#stateStore;

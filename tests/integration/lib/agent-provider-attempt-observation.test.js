@@ -1,6 +1,5 @@
 import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { it } from "node:test";
@@ -8,8 +7,11 @@ import { Agent } from "../../../src/lib/agent.js";
 import { AgentProviderAttemptAdmission, AgentProviderAttemptContext, AgentProviderAttemptObserver,
   AgentProviderAttemptRecord } from "../../../src/lib/agent-provider-attempt.js";
 import { PromptBatchExecutor, PromptBatchPlan } from "../../../src/lib/prompt-batching.js";
-import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
+import { NodeAgentProviderSequence } from "../../support/infrastructure/node-agent-provider-sequence.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 class Observer extends AgentProviderAttemptObserver {
   records = [];
@@ -20,30 +22,15 @@ class Observer extends AgentProviderAttemptObserver {
 
 function fixture(t, outputs, options = {}) {
   const root = createTestDirectory("agent-attempt-observation-");
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const profile = { command: "claude-fixture", args: ["{{PROMPT}}"], jsonOutputFlag: "--json", ...options.profile };
-  const config = { agent: { default: "fixture/local", providers: { "fixture/local": profile } } };
-  let starts = 0;
+  t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
+  const provider = new NodeAgentProviderSequence(root, outputs, { profile: options.profile });
+  const config = { agent: { default: "fixture/local", providers: { "fixture/local": provider.profile } } };
   const agent = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
-    registry: new ProviderRegistry(config.agent.providers),
+    registry: provider.registry("fixture/local"),
     logger: options.logger ?? new Logger({ enabled: false, logDir: root }),
-    supervision: { ...options.supervision, spawn() {
-      starts += 1;
-      const output = outputs[starts - 1];
-      if (output.error) throw output.error;
-      const child = new EventEmitter();
-      child.pid = 999999;
-      child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
-      options.onChild?.(child);
-      queueMicrotask(() => {
-        if (output.stdout) child.stdout.emit("data", output.stdout);
-        if (!output.pending) child.emit("close", output.code ?? 0, null);
-      });
-      return child;
-    } },
+    supervision: options.supervision,
   });
-  return { agent, starts: () => starts };
+  return { root, agent, starts: () => provider.starts() };
 }
 
 function output(text, usage, code = 0) {
@@ -68,15 +55,27 @@ it("observes each transport retry, empty reply, and failure with provider-normal
   assert.deepEqual(observer.records.map((entry) => entry.usage.cache_creation_tokens), [null, null, null]);
   assert.equal(new Set(observer.records.map((entry) => entry.attemptId)).size, 3);
   assert.equal(new Set(observer.records.map((entry) => entry.logicalInvocationId)).size, 1);
-  assert.ok(observer.records.every((entry) => entry.commandId === "docs-test" && entry.inputCharacters === 5));
+  assert.ok(observer.records.every((entry) => entry.commandId === "docs-test" && entry.inputCharacters === agent.projectInvocation("input").promptCharacterCount));
 });
 
 it("keeps unavailable failed usage distinct from a provider that never started", async (t) => {
-  const spawnError = Object.assign(new Error("not found"), { code: "ENOENT" });
-  const { agent, starts } = fixture(t, [{ stdout: "truncated JSON", code: 2 }, { error: spawnError }]);
+  const { root, agent, starts } = fixture(t, [{ stdout: "truncated JSON", code: 2 }]);
+  const executionWorkDir = path.join(root, "provider-cwd");
+  fs.mkdirSync(executionWorkDir);
+  class RemoveRetryDirectory extends AgentProviderAttemptAdmission {
+    beforeProviderAttempt(context) {
+      if (context.attemptIndex === 1) fs.rmdirSync(executionWorkDir);
+    }
+  }
   const observer = new Observer();
-  await assert.rejects(agent.call("input", { providerAttemptObserver: observer, retryCount: 1, retryDelayMs: 1 }));
-  assert.equal(starts(), 2);
+  await assert.rejects(agent.call("input", { executionWorkDir, providerAttemptObserver: observer,
+    providerAttemptAdmission: new RemoveRetryDirectory(), retryCount: 1, retryDelayMs: 1 }));
+  assert.equal(starts(), 1);
+  const history = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root });
+  const calls = history.inventory.executions.flatMap((entry) => entry.calls);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].receipt.observation.kind, "exited");
+  assert.equal(calls[1].receipt.observation.kind, "spawn-failed");
   assert.deepEqual(observer.records.map((entry) => [entry.status, entry.providerStarted, entry.usage]),
     [["failed", true, null], ["failed", false, null]]);
 });
@@ -128,7 +127,7 @@ it("refused transport retry does not start or observe another attempt and does n
   const contexts = [];
   const denied = new Error("retry requires confirmation");
   const executor = new PromptBatchExecutor({ executionAdmission: {
-    async admit(prepared) { assert.equal(prepared.inputCharacters, 5); },
+    async admit(prepared) { assert.equal(prepared.inputCharacters, agent.projectInvocation("input").promptCharacterCount); },
     async beforeProviderAttempt(context) {
       assert.ok(context instanceof AgentProviderAttemptContext);
       contexts.push(context);
@@ -155,7 +154,7 @@ it("explicit admission refusal prevents dispatch and observation", async (t) => 
   const observer = new Observer();
   const denied = new Error("execution denied");
   class Admission extends AgentProviderAttemptAdmission {
-    async beforeProviderAttempt(context) { assert.equal(context.inputCharacters, 5); throw denied; }
+    async beforeProviderAttempt(context) { assert.equal(context.inputCharacters, agent.projectInvocation("input").promptCharacterCount); throw denied; }
   }
   await assert.rejects(agent.call("input", { providerAttemptObserver: observer,
     providerAttemptAdmission: new Admission(), retryCount: 2 }), (error) => error === denied);
@@ -175,21 +174,26 @@ it("an already aborted call does not start or observe a provider", async (t) => 
   assert.equal(observer.records.length, 0);
 });
 
-it("aborts an in-flight provider through existing supervision and retains obtained usage without retry", async (t) => {
+it("aborts an in-flight provider through registered execution and retains obtained usage without retry", async (t) => {
   const controller = new AbortController();
   const reason = new Error("run interrupted");
-  const signals = [];
+  let receipt;
   const observer = new Observer();
-  const { agent, starts } = fixture(t, [{ ...output("partial", { input_tokens: 7 }), pending: true }], {
-    supervision: { platform: "win32", graceMs: 1, async runTaskkill() { return { completed: true }; } },
-    onChild(child) { child.kill = (signal) => {
-      signals.push(signal);
-      queueMicrotask(() => child.emit("close", null, signal));
-    }; },
+  const { root, agent, starts } = fixture(t, [{ ...output("partial", { input_tokens: 7 }), pending: true }], {
+    supervision: { graceMs: 1 },
   });
   await assert.rejects(agent.call("input", { abortSignal: controller.signal, providerAttemptObserver: observer,
-    onStdout() { controller.abort(reason); }, retryCount: 2, retryDelayMs: 1 }), (error) => error === reason);
-  assert.deepEqual(signals, ["SIGTERM"]);
+    onStdout() { controller.abort(reason); }, onProcessExecutionStop(value) { receipt = value; },
+    retryCount: 2, retryDelayMs: 1 }), (error) => error === reason);
+  assert.ok(receipt instanceof ProcessExecutionStopReceipt);
+  const readback = new ProcessExecutionStopReceipt(JSON.parse(JSON.stringify(receipt)));
+  const history = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root });
+  const call = history.inventory.executions.flatMap((entry) => entry.calls).find((entry) => entry.callId === receipt.callId);
+  assert.ok(["SIGTERM", "SIGKILL"].includes(call.outcome.finalAction));
+  assert.equal(readback.observation.signal, call.outcome.finalAction);
+  const saved = new ProcessExecutionStopReceipt(call.receipt);
+  assert.deepEqual(saved.toJSON(), readback.toJSON());
+  assert.equal(saved.observation.signal, call.outcome.finalAction);
   assert.equal(starts(), 1);
   assert.equal(observer.records.length, 1);
   assert.equal(observer.records[0].status, "failed");

@@ -1,0 +1,1779 @@
+[
+  {
+    "name": "native-metadata",
+    "sourceFile": "src/metadata.mjs",
+    "seed": "import fs from \"node:fs\";\nexport class FilePermissionHint {\n  constructor(mode) {\n    if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) throw new TypeError(\"file permission hint must be a permission mask\");\n    this.mode = mode;\n    Object.freeze(this);\n  }\n\n  static fromStat(stat) { return new FilePermissionHint(Number(stat.mode) & 0o7777); }\n  applyToDescriptor(descriptor) { /* @site native */ fs.fchmodSync(descriptor, this.mode); }\n  matches(other) {\n    if (!(other instanceof FilePermissionHint)) return false;\n    // Node's Windows chmod/stat expose writability, without POSIX distinctions.\n    return process.platform === \"win32\"\n      ? (this.mode & 0o200) === (other.mode & 0o200)\n      : this.mode === other.mode;\n  }\n\n  matchesAfterWrite(other) {\n    if (process.platform === \"win32\") return this.matches(other);\n    // Like native copyFile, apply before writing: the kernel may clear setid.\n    return other instanceof FilePermissionHint\n      && (this.mode & 0o1777) === (other.mode & 0o1777)\n      && (other.mode & 0o6000 & ~this.mode) === 0;\n  }\n}\nconst fd = fs.openSync(\"ordinary-file\", \"w\");\nconst hint = new FilePermissionHint(0o600);\n/* @site target */ hint.applyToDescriptor(fd);\nfs.closeSync(fd);\n",
+    "cases": [
+      {
+        "name": "base:genuine-apply-without-postwrite-capture",
+        "edits": [],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:class-renamed",
+        "edits": [
+          [39, 40, "Nat"],
+          [41, 42, "v"],
+          [43, 51, "C"],
+          [52, 53, "py"],
+          [304, 305, "Nat"],
+          [306, 307, "v"],
+          [308, 316, "C"],
+          [317, 318, "py"],
+          [493, 494, "Nat"],
+          [495, 496, "v"],
+          [497, 505, "C"],
+          [506, 507, "py"],
+          [943, 944, "Nat"],
+          [945, 946, "v"],
+          [947, 955, "C"],
+          [956, 957, "py"],
+          [1138, 1139, "Nat"],
+          [1140, 1141, "v"],
+          [1142, 1150, "C"],
+          [1151, 1152, "py"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:field-renamed",
+        "edits": [
+          [225, 228, "ask"],
+          [439, 442, "ask"],
+          [664, 667, "ask"],
+          [689, 692, "ask"],
+          [716, 719, "ask"],
+          [731, 734, "ask"],
+          [978, 981, "ask"],
+          [1004, 1007, "ask"],
+          [1035, 1038, "ask"],
+          [1057, 1060, "ask"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:methods-renamed",
+        "edits": [
+          [276, 277, "captu"],
+          [278, 283, "eHin"],
+          [361, 364, "Nativ"],
+          [365, 373, ""],
+          [449, 450, "n"],
+          [452, 454, "iv"],
+          [455, 456, "Equal"],
+          [743, 744, "n"],
+          [746, 748, "iv"],
+          [749, 750, ""],
+          [820, 821, "n"],
+          [823, 825, "iv"],
+          [826, 827, "Equal"],
+          [1194, 1197, "Nativ"],
+          [1198, 1206, ""]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:filesystem-import-alias",
+        "edits": [
+          [7, 9, "io"],
+          [407, 409, "io"],
+          [1086, 1088, "io"],
+          [1212, 1214, "io"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:function-argument-fd",
+        "edits": [
+          [1075, 1076, "exp"],
+          [1077, 1079, "r"],
+          [1082, 1095, "u"],
+          [1097, 1099, "tion applyToProvidedDescript"],
+          [1101, 1101, "(f"],
+          [1102, 1114, ")"],
+          [1115, 1120, "{"],
+          [1212, 1229, "}"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "base:fake-structural-receiver",
+        "edits": [
+          [1184, 1185, "const borrowed = FilePermissionH"],
+          [1188, 1188, ".prototype"],
+          [1206, 1206, "; borrowed.call"],
+          [1207, 1207, "{ mode: 0o600 }, "]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 29,
+          "column": 85,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:absent-method-receiver",
+        "edits": [
+          [1184, 1184, "const borrowed = "],
+          [1206, 1206, "; borrowed"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 10,
+          "column": 85,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:prototype-created-receiver",
+        "edits": [
+          [1121, 1121, "/* @site changed */ "],
+          [1134, 1135, "Obj"],
+          [1136, 1138, "ct.create("],
+          [1156, 1158, ".pr"],
+          [1159, 1162, "totype"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 34,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:prototype-method-mutation",
+        "edits": [
+          [1174, 1174, "changed */ FilePermissionHint.prototype.applyToDescriptor = foreign;\n/* @site "]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "column": 20,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:native-callee-mutation",
+        "edits": [
+          [1174, 1174, "changed */ fs.fchmodSync = foreign;\n/* @site "]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 29,
+          "file": "src/metadata.mjs",
+          "column": 35,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:raw-mode-authority",
+        "edits": [
+          [1212, 1212, "/* @site changed */ if ((hint.mode & 0o777) === 0o700) authorized();\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 26,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": true
+      },
+      {
+        "name": "base:stat-uid-authority-control",
+        "edits": [
+          [1212, 1212, "/* @site changed */ if (fs.fstatSync(fd).uid === owner) authorized();\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 25,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:opaque-method-escape",
+        "edits": [
+          [1212, 1212, "/* @site changed */ opaque(hint.applyToDescriptor);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 21,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:opaque-receiver-escape",
+        "edits": [
+          [1174, 1174, "changed */ opaque(hint);\n/* @site "]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 29,
+          "file": "src/metadata.mjs",
+          "column": 21,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "base:fake-shadow-class",
+        "edits": [
+          [1121, 1121, "/* @site changed */ "],
+          [1137, 1137, " (class"],
+          [1156, 1156, " { constructor(mode) { this.mode = mode; } applyToDescriptor(fd) { fs.fchmodSync(fd, this.mode); } })"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 130,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": true
+      },
+      {
+        "name": "annex:actual-comparison-predicates",
+        "edits": [
+          [1212, 1212, "const observed=new FilePermissionHint(0o600);\n/* @site annex */ opaque(hint.matches(observed)); opaque(hint.matchesAfterWrite(observed));\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "annex:comparison-boolean-ordinary-data",
+        "edits": [
+          [1212, 1212, "const observed=new FilePermissionHint(0o600);\n/* @site annex */ const same=hint.matches(observed); if(same) ordinary('copy'); opaque(same);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "annex:actual-stat-capture",
+        "edits": [
+          [1212, 1212, "/* @site annex */ const observed=FilePermissionHint.fromStat(fs.fstatSync(fd)); observed.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "annex:unknown-capture-input",
+        "edits": [
+          [1212, 1212, "/* @site annex */ FilePermissionHint.fromStat(untrusted);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 19,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:unknown-comparison-input",
+        "edits": [
+          [1212, 1212, "/* @site annex */ hint.matches(untrusted);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 19,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:rawmode-alias-authority",
+        "edits": [
+          [1212, 1212, "const raw=hint.mode;\n/* @site annex */ if((raw&0o777)===0o700) authorized();\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 31,
+          "file": "src/metadata.mjs",
+          "column": 23,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": true
+      },
+      {
+        "name": "annex:unrelated-raw-fchmod-sink",
+        "edits": [
+          [1212, 1212, "/* @site annex */ fs.fchmodSync(fd,0o700);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 19,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": true
+      },
+      {
+        "name": "annex:native-Number-alias-mutation",
+        "edits": [
+          [1165, 1165, "const N=Number;\n/* @site annex */ N.isInteger=foreign;\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 30,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:native-Object-freeze-mutation",
+        "edits": [
+          [1174, 1174, "annex */ Object.freeze=foreign;\n/* @site "]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 29,
+          "file": "src/metadata.mjs",
+          "column": 32,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:mode-getter-io",
+        "edits": [
+          [1212, 1212, "Object.defineProperty(hint,'mode',{get(){ /* @site annex */ return fs.readFileSync('/proc/self/stat'); }});\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS01",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 68,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:prototype-getter-io",
+        "edits": [
+          [1212, 1212, "Object.defineProperty(FilePermissionHint.prototype,'applyToDescriptor',{get(){ /* @site annex */ return fs.readFileSync('/proc/self/stat'); }});\nhint.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS01",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 105,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:capture-getter-io",
+        "edits": [
+          [1212, 1212, "/* @site annex */ FilePermissionHint.fromStat({get mode(){return fs.readFileSync('/proc/self/stat');}});\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS01",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 66,
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:method-opaque-escape",
+        "edits": [
+          [1212, 1212, "/* @site annex */ opaque(hint.matches);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 19,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:class-prototype-opaque-escape",
+        "edits": [
+          [1212, 1212, "/* @site annex */ opaque(FilePermissionHint.prototype);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 19,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:late-native-callee-mutation",
+        "edits": [
+          [1212, 1212, "/* @site annex */ fs.fchmodSync=foreign;\nhint.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 32,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:object-prototype-field-setter",
+        "edits": [
+          [1212, 1212, "/* @site annex */ Object.defineProperty(Object.prototype,'mode',{set(value){}});\nhint.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS01",
+          "line": 30,
+          "column": 19,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:global-native-number-change",
+        "edits": [
+          [1212, 1212, "/* @site annex */ globalThis.Number=foreign;\nhint.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "file": "src/metadata.mjs",
+          "column": 36,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "annex:native-prototype-setter-is-not-own-scalar",
+        "edits": [
+          [224, 225, "__pr"],
+          [226, 228, "to__"],
+          [438, 439, "__pr"],
+          [440, 442, "to__"],
+          [663, 664, "__pr"],
+          [665, 667, "to__"],
+          [688, 689, "__pr"],
+          [690, 692, "to__"],
+          [715, 716, "__pr"],
+          [717, 719, "to__"],
+          [730, 731, "__pr"],
+          [732, 734, "to__"],
+          [977, 978, "__pr"],
+          [979, 981, "to__"],
+          [1003, 1004, "__pr"],
+          [1005, 1007, "to__"],
+          [1034, 1035, "__pr"],
+          [1036, 1038, "to__"],
+          [1056, 1057, "__pr"],
+          [1058, 1060, "to__"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 10,
+          "column": 54,
+          "file": "src/metadata.mjs",
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:negative",
+        "edits": [
+          [1157, 1162, "-1"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:nan",
+        "edits": [
+          [1157, 1162, "NaN"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:too-large",
+        "edits": [
+          [1159, 1160, "100"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:fraction",
+        "edits": [
+          [1157, 1162, "1.5"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:bigint-literal",
+        "edits": [
+          [1157, 1162, "1n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:bigint-call",
+        "edits": [
+          [1157, 1162, "BigInt(1)"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:symbol-call",
+        "edits": [
+          [1157, 1158, "Symb"],
+          [1159, 1162, "l('mode')"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:object",
+        "edits": [
+          [1157, 1162, "{}"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:object-valueof",
+        "edits": [
+          [1157, 1157, "{valueOf(){return "],
+          [1162, 1162, ";}}"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:boolean",
+        "edits": [
+          [1157, 1162, "true"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:string",
+        "edits": [
+          [1157, 1159, "'"],
+          [1162, 1162, "'"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:null",
+        "edits": [
+          [1157, 1162, "null"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:undefined",
+        "edits": [
+          [1157, 1162, "undefined"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 28,
+          "file": "src/metadata.mjs",
+          "column": 14,
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "constructor:valid-zero",
+        "edits": [
+          [1158, 1162, ""]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "constructor:valid-upper",
+        "edits": [
+          [1159, 1162, "7777"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "constructor:valid-arithmetic",
+        "edits": [
+          [1162, 1162, "+0"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:runtime-parameter",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1158, "value);}\nc"],
+          [1159, 1162, "nst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:runtime-alias",
+        "edits": [
+          [1121, 1121, "function make(value){"],
+          [1127, 1128, "al"],
+          [1129, 1129, "as=value;retur"],
+          [1130, 1133, ""],
+          [1157, 1158, "alias);}\nc"],
+          [1159, 1162, "nst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:runtime-default",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value=0o600){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1158, "value);}\nc"],
+          [1159, 1162, "nst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:known-default",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value=0o600){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1158, "value);}\nc"],
+          [1159, 1162, "nst hint=make("]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:valid-conditional",
+        "edits": [
+          [1131, 1132, ""],
+          [1133, 1134, ""],
+          [1157, 1157, "flag?"],
+          [1160, 1160, "00:0o7"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:valid-runtime-conditional",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1157, "flag?value:"],
+          [1162, 1162, ");}\nconst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:runtime-nullish",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1157, "value??"],
+          [1162, 1162, ");}\nconst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:runtime-logical",
+        "edits": [
+          [1121, 1121, "fun"],
+          [1122, 1122, "ti"],
+          [1124, 1125, " make(value){re"],
+          [1126, 1129, "ur"],
+          [1130, 1133, ""],
+          [1157, 1157, "value||"],
+          [1162, 1162, ");}\nconst hint=make(supplied"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "conditional:validated-native-mask-forward",
+        "edits": [
+          [1212, 1212, "const copy=new FilePermissionHint(hint.mode);copy.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-fraction",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:1.5});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-nan",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:NaN});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-infinity",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:Infinity});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-bigint",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:BigInt(1)});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-string",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:'600'});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "capture:capture-symbol",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:Symbol('mode')});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "column": 34,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "capture:capture-valueof-object",
+        "edits": [
+          [1212, 1212, "/* @site extra */ const captured=FilePermissionHint.fromStat({mode:{valueOf(){return 0o600;}}});captured.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 30,
+          "column": 34,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "stat:pristine-stat",
+        "edits": [
+          [1212, 1212, "const stat=fs.fstatSync(fd);\n\n/* @site statCapture */ const observed=FilePermissionHint.fromStat(stat);observed.applyToDescriptor(fd);\n"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "stat:mode-valueof-object",
+        "edits": [
+          [1212, 1212, "const stat=fs.fstatSync(fd);\nstat.mode={valueOf(){return 0o600;}};\n/* @site statCapture */ const observed=FilePermissionHint.fromStat(stat);observed.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 32,
+          "column": 40,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "stat:mode-alias-write",
+        "edits": [
+          [1212, 1212, "const stat=fs.fstatSync(fd);\nconst alias=stat;alias.mode={valueOf(){return 0o600;}};\n/* @site statCapture */ const observed=FilePermissionHint.fromStat(stat);observed.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 32,
+          "column": 40,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "stat:mode-getter",
+        "edits": [
+          [1212, 1212, "const stat=fs.fstatSync(fd);\nObject.defineProperty(stat,'mode',{get(){return 0o600;}});\n/* @site statCapture */ const observed=FilePermissionHint.fromStat(stat);observed.applyToDescriptor(fd);\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 32,
+          "column": 40,
+          "file": "src/metadata.mjs",
+          "classification": "incomplete"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "closed-own-field:field-shadows-applyToDescriptor",
+        "edits": [
+          [224, 225, "applyT"],
+          [226, 227, "D"],
+          [228, 228, "scriptor"],
+          [438, 439, "applyT"],
+          [440, 441, "D"],
+          [442, 442, "scriptor"],
+          [663, 664, "applyT"],
+          [665, 666, "D"],
+          [667, 667, "scriptor"],
+          [688, 689, "applyT"],
+          [690, 691, "D"],
+          [692, 692, "scriptor"],
+          [715, 716, "applyT"],
+          [717, 718, "D"],
+          [719, 719, "scriptor"],
+          [730, 731, "applyT"],
+          [732, 733, "D"],
+          [734, 734, "scriptor"],
+          [977, 978, "applyT"],
+          [979, 980, "D"],
+          [981, 981, "scriptor"],
+          [1003, 1004, "applyT"],
+          [1005, 1006, "D"],
+          [1007, 1007, "scriptor"],
+          [1034, 1035, "applyT"],
+          [1036, 1037, "D"],
+          [1038, 1038, "scriptor"],
+          [1056, 1057, "applyT"],
+          [1058, 1059, "D"],
+          [1060, 1060, "scriptor"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 10,
+          "column": 54,
+          "file": "src/metadata.mjs",
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "closed-own-field:field-shadows-matches",
+        "edits": [
+          [225, 227, "atch"],
+          [228, 228, "s"],
+          [439, 441, "atch"],
+          [442, 442, "s"],
+          [664, 666, "atch"],
+          [667, 667, "s"],
+          [689, 691, "atch"],
+          [692, 692, "s"],
+          [716, 718, "atch"],
+          [719, 719, "s"],
+          [731, 733, "atch"],
+          [734, 734, "s"],
+          [978, 980, "atch"],
+          [981, 981, "s"],
+          [1004, 1006, "atch"],
+          [1007, 1007, "s"],
+          [1035, 1037, "atch"],
+          [1038, 1038, "s"],
+          [1057, 1059, "atch"],
+          [1060, 1060, "s"],
+          [1212, 1212, "opaque(hint.matchesAfterWrite(hint));\n"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 10,
+          "column": 54,
+          "file": "src/metadata.mjs",
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      },
+      {
+        "name": "closed-own-field:field-shadows-matchesAfterWrite",
+        "edits": [
+          [225, 227, "atchesAfterWrit"],
+          [439, 441, "atchesAfterWrit"],
+          [664, 666, "atchesAfterWrit"],
+          [689, 691, "atchesAfterWrit"],
+          [716, 718, "atchesAfterWrit"],
+          [731, 733, "atchesAfterWrit"],
+          [978, 980, "atchesAfterWrit"],
+          [1004, 1006, "atchesAfterWrit"],
+          [1035, 1037, "atchesAfterWrit"],
+          [1057, 1059, "atchesAfterWrit"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS03",
+          "line": 10,
+          "column": 54,
+          "file": "src/metadata.mjs",
+          "classification": "violation"
+        },
+        "normalEdits": [],
+        "normalKind": "original native metadata seed",
+        "complete": false
+      }
+    ]
+  },
+  {
+    "name": "stat-allocation",
+    "sourceFile": "src/stat-context.js",
+    "seed": "import fs from 'node:fs';function make(input){return new WeakMap();}const input=fs.statSync('ordinary');const map=make(input);const key={};map.set(key,fs.readFileSync);opaque(map.get(key));",
+    "cases": [
+      {
+        "name": "stat-input-returned-map",
+        "edits": [],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 169,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-key-actual-object",
+        "edits": [
+          [25, 68, ""],
+          [74, 79, "key"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 113,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 68, ""],
+          [74, 79, "key"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-input-map-ordinary",
+        "edits": [
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "stat-key-ordinary-payload",
+        "edits": [
+          [25, 68, ""],
+          [74, 79, "key"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "stat-key-alias-sensitive",
+        "edits": [
+          [25, 68, ""],
+          [74, 79, "key"],
+          [110, 111, ""],
+          [112, 113, "lias"],
+          [114, 116, ""],
+          [118, 125, "y"],
+          [132, 132, "map=new Wea"],
+          [133, 138, "Map()"],
+          [183, 186, "alias"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 129,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 68, ""],
+          [74, 79, "key"],
+          [110, 111, ""],
+          [112, 113, "lias"],
+          [114, 116, ""],
+          [118, 125, "y"],
+          [132, 132, "map=new Wea"],
+          [133, 138, "Map()"],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"],
+          [183, 186, "alias"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "different-stat-key-allocations",
+        "edits": [
+          [25, 68, ""],
+          [74, 74, "key=fs.statSync('ord"],
+          [76, 78, "ary');cons"],
+          [79, 79, " other"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""],
+          [183, 184, "oth"],
+          [185, 186, "r"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "nested-stat-input-returned-map",
+        "edits": [
+          [68, 68, "function outer(input){return make(input);}"],
+          [114, 117, "out"],
+          [118, 118, "r"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 212,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [68, 68, "function outer(input){return make(input);}"],
+          [114, 117, "out"],
+          [118, 118, "r"],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "distinct-stat-input-map-allocations",
+        "edits": [
+          [68, 68, "function outer(input){return make(input);}"],
+          [74, 74, "f"],
+          [75, 78, "rs"],
+          [110, 111, "second=fs.st"],
+          [112, 118, "tSync"],
+          [119, 119, "'ord"],
+          [121, 122, "ary');const a=o"],
+          [124, 124, "er(first);const b=outer(second"],
+          [139, 140, ""],
+          [141, 142, ""],
+          [175, 178, "b"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "ordinary-object-input-control",
+        "edits": [
+          [80, 103, "{}"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 148,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [80, 103, "{}"],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "native-error-input-control",
+        "edits": [
+          [80, 88, "new T"],
+          [89, 91, "peError"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 171,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [80, 88, "new T"],
+          [89, 91, "peError"],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "builtin-key-ordinary-control",
+        "edits": [
+          [25, 28, ""],
+          [29, 31, ""],
+          [33, 33, "st"],
+          [36, 41, ""],
+          [42, 53, "="],
+          [67, 139, ""],
+          [147, 151, ""],
+          [166, 166, ",'ordinary'"],
+          [183, 184, "fs.r"],
+          [185, 185, "adFileS"],
+          [186, 186, "nc"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "builtin-key-sensitive-control",
+        "edits": [
+          [25, 28, ""],
+          [29, 31, ""],
+          [33, 33, "st"],
+          [36, 41, ""],
+          [42, 53, "="],
+          [67, 139, ""],
+          [147, 148, "fs.r"],
+          [149, 149, "adFileS"],
+          [150, 150, "nc"],
+          [183, 184, "fs.r"],
+          [185, 185, "adFileS"],
+          [186, 186, "nc"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 91,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 28, ""],
+          [29, 31, ""],
+          [33, 33, "st"],
+          [36, 41, ""],
+          [42, 53, "="],
+          [67, 139, ""],
+          [147, 151, ""],
+          [166, 166, ",'ordinary'"],
+          [183, 184, "fs.r"],
+          [185, 185, "adFileS"],
+          [186, 186, "nc"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "callable-key-ordinary-control",
+        "edits": [
+          [34, 34, "key(){}const "],
+          [36, 41, ""],
+          [42, 53, "="],
+          [67, 139, ""],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "positive": true,
+        "expected": null,
+        "complete": true
+      },
+      {
+        "name": "callable-key-sensitive-control",
+        "edits": [
+          [34, 34, "key(){}const "],
+          [36, 41, ""],
+          [42, 53, "="],
+          [66, 138, ""]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 95,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [34, 34, "key(){}const "],
+          [36, 41, ""],
+          [42, 53, "="],
+          [67, 139, ""],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-input-returned-object",
+        "edits": [
+          [53, 66, "{}"],
+          [110, 113, "object"],
+          [126, 126, "obje"],
+          [127, 130, ""],
+          [131, 139, "."],
+          [140, 144, ""],
+          [146, 151, "hod="],
+          [166, 167, ""],
+          [175, 175, "object."],
+          [176, 180, ""],
+          [182, 187, "hod"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS01",
+          "line": 1,
+          "column": 149,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [53, 66, "{}"],
+          [110, 113, "object"],
+          [126, 126, "obje"],
+          [127, 130, ""],
+          [131, 139, "."],
+          [140, 144, ""],
+          [146, 149, "hod='ordinar"],
+          [150, 167, "'"],
+          [175, 175, "object."],
+          [176, 180, ""],
+          [182, 187, "hod"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-input-returned-array",
+        "edits": [
+          [53, 66, "[]"],
+          [110, 111, ""],
+          [112, 113, "rray"],
+          [126, 134, "arra"],
+          [135, 135, "[0]"],
+          [136, 151, ""],
+          [166, 167, ""],
+          [175, 176, ""],
+          [177, 185, "rra"],
+          [186, 187, "[0]"]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 143,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "unsupportedEdits": [
+          [53, 66, "[]"],
+          [110, 111, ""],
+          [112, 113, "rray"],
+          [126, 127, "array[0]='"],
+          [128, 128, "rdi"],
+          [129, 134, "ar"],
+          [135, 167, "'"],
+          [175, 176, ""],
+          [177, 185, "rra"],
+          [186, 187, "[0]"]
+        ],
+        "unsupportedExpected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 145,
+          "message": "array members changed before native access",
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [53, 66, "[]"],
+          [110, 111, ""],
+          [112, 113, "rray"],
+          [126, 168, ""],
+          [175, 176, ""],
+          [177, 185, "rra"],
+          [186, 187, "[0]"]
+        ],
+        "normalKind": "separate normal input with array mutation removed",
+        "complete": false
+      },
+      {
+        "name": "stat-returned-from-constructor-key",
+        "edits": [
+          [25, 26, "class Key{constr"],
+          [27, 28, ""],
+          [30, 31, ""],
+          [32, 38, "r"],
+          [53, 53, "i"],
+          [54, 63, ""],
+          [64, 66, "ut"],
+          [67, 67, "}"],
+          [74, 75, "key="],
+          [76, 80, "ew Key("],
+          [103, 103, ")"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 166,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 26, "class Key{constr"],
+          [27, 28, ""],
+          [30, 31, ""],
+          [32, 38, "r"],
+          [53, 53, "i"],
+          [54, 63, ""],
+          [64, 66, "ut"],
+          [67, 67, "}"],
+          [74, 75, "key="],
+          [76, 80, "ew Key("],
+          [103, 103, ")"],
+          [114, 115, "new We"],
+          [117, 118, "Map"],
+          [119, 124, ""],
+          [125, 138, ""],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-method-input-returned-map",
+        "edits": [
+          [25, 28, "class Fa"],
+          [30, 31, ""],
+          [32, 34, "ry{"],
+          [68, 68, "}const factory=new Factory();"],
+          [114, 114, "factory."]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 211,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 28, "class Fa"],
+          [30, 31, ""],
+          [32, 34, "ry{"],
+          [68, 68, "}const factory=new Factory();"],
+          [114, 114, "factory."],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      },
+      {
+        "name": "stat-constructor-input-returned-map",
+        "edits": [
+          [25, 28, "class Fa"],
+          [30, 31, "ory{c"],
+          [33, 38, "structor"],
+          [44, 44, "){this.input=input;}make("],
+          [67, 67, "}"],
+          [110, 111, "f"],
+          [112, 113, "ctory"],
+          [114, 115, "new F"],
+          [116, 118, "ctory"],
+          [124, 124, ");const map=factory.make("]
+        ],
+        "positive": false,
+        "expected": {
+          "rule": "OS02",
+          "line": 1,
+          "column": 243,
+          "file": "src/stat-context.js",
+          "classification": "incomplete"
+        },
+        "normalEdits": [
+          [25, 28, "class Fa"],
+          [30, 31, "ory{c"],
+          [33, 38, "structor"],
+          [44, 44, "){this.input=input;}make("],
+          [67, 67, "}"],
+          [110, 111, "f"],
+          [112, 113, "ctory"],
+          [114, 115, "new F"],
+          [116, 118, "ctory"],
+          [124, 124, ");const map=factory.make("],
+          [151, 154, "'o"],
+          [155, 156, "din"],
+          [157, 163, "r"],
+          [164, 166, "'"]
+        ],
+        "normalKind": "payload-only restoration",
+        "complete": false
+      }
+    ]
+  }
+]

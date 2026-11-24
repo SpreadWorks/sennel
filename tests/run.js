@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, statSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath, pathToFileURL } from "node:url";
 await import("../src/sennel.js");
@@ -18,10 +17,11 @@ const { TestSuiteManifest } = await import("./runner/manifest.js");
 const { TestSuiteExecutionPolicy } = await import("./runner/suite-execution-policy.js");
 const { TEST_SUITE_NAMES } = await import("./runner/suite-definitions.js");
 const {
-  MINIMUM_TEST_TMPFS_BYTES,
   TestTemporaryRoot,
 } = await import("./test-temporary-root.js");
-const { isTmpfsDirectory } = await import("../src/lib/filesystem-type.js");
+const { ProcessExecutionControlFailure } = await import("../src/lib/process-execution-values.js");
+const { executeManagedProcess } = await import("../src/lib/managed-process.js");
+const { NativeExecutableInvocation } = await import("../src/lib/command-invocation.js");
 const { standaloneTestEnvironment } = await import("../src/lib/process.js");
 const {
   ChildProcessExecutionRecordCodec,
@@ -31,6 +31,11 @@ const {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const CHILD_PROCESS_RECORD_CODEC = new ChildProcessExecutionRecordCodec();
+
+function writeOutput(fd, text) {
+  const stream = fd === 1 ? process.stdout : process.stderr;
+  stream.write(text);
+}
 
 class SuiteOutput {
   constructor(fd, write) {
@@ -104,9 +109,10 @@ function formatExecutionSummary(counts, incompleteCategories) {
 }
 
 export async function executeFiles(files, {
-  spawnProcess = spawn,
-  write = writeSync,
+  executeProcess = executeManagedProcess,
+  write = writeOutput,
   root = ROOT,
+  executionRoot = root,
   jobs = null,
 } = {}) {
   const groups = groupTestFilesByCategory(files.map((file) => resolve(root, file)));
@@ -118,22 +124,21 @@ export async function executeFiles(files, {
   const suites = [...TEST_SUITE_NAMES, "other"].filter((category) => groups[category].length > 0);
   const runSuite = async (category) => {
     const concurrency = category === "other" ? (jobs ?? 1) : policy.concurrencyFor(category);
-    const command = ["node", "--test", "--test-concurrency", String(concurrency), "--import", pathToFileURL(join(ROOT, "src/sennel.js")).href, ...groups[category]];
-    const result = await new Promise((resolve) => {
-      const child = spawnProcess(command[0], command.slice(1), {
-        cwd: root,
-        env: standaloneTestEnvironment(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const stdout = new SuiteOutput(1, write);
-      const stderr = new SuiteOutput(2, write);
-      let error;
-      child.stdout.on("data", (chunk) => stdout.append(chunk));
-      child.stderr.on("data", (chunk) => stderr.append(chunk));
-      child.on("error", (failure) => { error = failure; });
-      child.on("close", (status, signal) => resolve({ status, signal, error,
-        stdout: stdout.finish(), stderr: stderr.finish() }));
-    });
+    const command = [process.execPath, "--test", "--test-concurrency", String(concurrency), "--import", pathToFileURL(join(ROOT, "tests/runner/fixture-bootstrap.js")).href, ...groups[category]];
+    const stdout = new SuiteOutput(1, write);
+    const stderr = new SuiteOutput(2, write);
+    const invocation = new NativeExecutableInvocation({ executable: command[0], args: command.slice(1),
+      cwd: root, env: standaloneTestEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
+    let result;
+    try {
+      const completed = await executeProcess(invocation, [], { repositoryRoot: executionRoot, timeoutMs: 3600000, maxBuffer: 256 * 1024 * 1024,
+        onStdoutBytes: (chunk) => stdout.append(chunk), onStderrBytes: (chunk) => stderr.append(chunk) });
+      result = { status: completed.code, signal: completed.signal, stdout: stdout.finish(), stderr: stderr.finish() };
+    } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) throw error;
+      result = { status: typeof error.code === "number" ? error.code : null, signal: error.signal ?? null,
+        error, stdout: stdout.finish(), stderr: stderr.finish() };
+    }
     const execution = processResultFromSpawnSync(command, result);
     write(2, `${CHILD_PROCESS_RECORD_CODEC.encode(execution)}\n`);
     if (execution.completed) {
@@ -154,27 +159,39 @@ export async function executeFiles(files, {
   return firstNumericFailure ?? (sawFailure ? 1 : 0);
 }
 
+export async function executeFilesInTemporaryRoot(files, {
+  temporaryRoot = TestTemporaryRoot.select({ repositoryRoot: ROOT }),
+  write = writeOutput,
+  ...options
+} = {}) {
+  write(2, `[sennel] test temporary storage: repository ${temporaryRoot.path} (cleanup requires confirmed execution completion)\n`);
+  return temporaryRoot.use(async () => {
+    temporaryRoot.beginExecution();
+    try {
+      const result = await executeFiles(files, { ...options, write, executionRoot: temporaryRoot.path });
+      temporaryRoot.completeExecution();
+      return result;
+    } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) {
+        temporaryRoot.retainOnUnconfirmedExecution();
+        write(2, `[sennel] execution completion unconfirmed; retained test temporary storage: ${temporaryRoot.path}\n`);
+      }
+      throw error;
+    }
+  });
+}
+
 export async function main(args = process.argv.slice(2)) {
   const runner = new TestRunner({
     presetNames: getPresetNames(),
     resolveFiles,
     executeFiles: async (files, selection) => {
-      const temporaryRoot = TestTemporaryRoot.select({ repositoryRoot: ROOT });
-      const storage = isTmpfsDirectory(temporaryRoot.path) ? "tmpfs" : "repository fallback";
-      if (storage === "repository fallback") {
-        writeSync(
-          2,
-          `[sennel] test temporary storage: ${storage} ${temporaryRoot.path} (/dev/shm unavailable or below ${MINIMUM_TEST_TMPFS_BYTES / (1024n * 1024n)} MiB free; removed after run)\n`,
-        );
-      } else {
-        writeSync(2, `[sennel] test temporary storage: ${storage} ${temporaryRoot.path} (removed after run)\n`);
-      }
-      return temporaryRoot.use(() => executeFiles(files, { jobs: selection.jobs }));
+      return executeFilesInTemporaryRoot(files, { jobs: selection.jobs });
     },
   });
   const result = await runner.run(args);
-  if (result.stdout) writeSync(1, result.stdout);
-  if (result.stderr) writeSync(2, result.stderr);
+  if (result.stdout) writeOutput(1, result.stdout);
+  if (result.stderr) writeOutput(2, result.stderr);
   return result.exitCode;
 }
 

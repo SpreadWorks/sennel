@@ -203,7 +203,7 @@ export class CanonicalMetricsFlow {
         const resolved = this.readArtifact("spec.review", { parameters: { revision: match[1] } });
         let review;
         try {
-          review = new CanonicalSpecReview(JSON.parse(resolved.bytes.toString("utf8")));
+          review = CanonicalSpecReview.fromBytes(resolved.bytes, { processEvidence: resolved.processEvidence });
         } catch (error) {
           throw new Error(`canonical spec.review is invalid: ${error.message}`);
         }

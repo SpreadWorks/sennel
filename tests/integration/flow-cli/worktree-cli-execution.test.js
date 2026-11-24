@@ -5,15 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { runGit } from "../../../src/lib/git-helpers.js";
+import { resolveWorktreeLocalCli } from "../../../src/lib/worktree-cli-execution.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const roots = [];
-
-function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim();
-}
 
 function createGitWorktree({ packageName, copySource = false }) {
   const root = createTestDirectory("sennel-worktree-cli-execution.test-");
@@ -30,13 +28,11 @@ function createGitWorktree({ packageName, copySource = false }) {
     type: "base",
     docs: { languages: ["en"], defaultLanguage: "en" },
   }, null, 2));
-  git(root, ["init", "-b", "main"]);
-  git(root, ["config", "user.email", "test@example.com"]);
-  git(root, ["config", "user.name", "Test User"]);
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", "fixture"]);
+  initGitRepo(root);
+  commitAll(root, "worktree CLI fixture");
   const worktreePath = path.join(root, "worktree");
-  git(root, ["worktree", "add", worktreePath, "-b", "feature"]);
+  const added = runGit(["worktree", "add", worktreePath, "-b", "feature"], { cwd: root });
+  assert.equal(added.ok, true, added.stderr);
   return { root, worktreePath };
 }
 
@@ -55,7 +51,7 @@ function invokeGlobalCli(root, worktreePath, argv = ["flow", "get", "status"]) {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeQuiescentRuntimeFixture({ mainRoot: root, executionRoot: path.join(root, "worktree") });
 });
 
 describe("global CLI execution from a managed worktree", () => {
@@ -77,6 +73,24 @@ describe("global CLI execution from a managed worktree", () => {
     assert.equal(JSON.parse(result.stdout).ok, true);
   });
 
+  it("executes captured local entry bytes after that entry deletes itself and replaces its disk loader", () => {
+    const { root, worktreePath } = createFixture();
+    const localEntry = path.join(worktreePath, "src", "sennel.js");
+    const source = fs.readFileSync(localEntry, "utf8");
+    fs.writeFileSync(localEntry, source.replace("const rawArgs = process.argv.slice(2);", `
+      process.stderr.write('[captured-local-entry]\\n');
+      unlinkSync(new URL(import.meta.url));
+      writeFileSync(new URL('./lib/runtime-loader.js', import.meta.url), 'throw new Error("mutable local loader executed");');
+      const rawArgs = process.argv.slice(2);
+    `));
+    const result = invokeGlobalCli(root, worktreePath);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stderr, /\[captured-local-entry\]/);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(fs.existsSync(localEntry), false);
+    assert.match(fs.readFileSync(path.join(worktreePath, "src", "lib", "runtime-loader.js"), "utf8"), /mutable local loader executed/);
+  });
+
   it("fails closed when the worktree-local CLI source is absent", () => {
     const { root, worktreePath } = createFixture();
     const worktreeCli = path.join(worktreePath, "src", "sennel.js");
@@ -84,10 +98,59 @@ describe("global CLI execution from a managed worktree", () => {
 
     const result = invokeGlobalCli(root, worktreePath);
 
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, new RegExp(`Execution target: ${path.join(root, "src", "sennel.js")}`));
-    assert.match(result.stderr, new RegExp(`Expected worktree source: ${worktreeCli}`));
-    assert.match(result.stderr, /Recovery: restore the worktree source, then run: node /);
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout.trim().split("\n").length, 1);
+    const failure = JSON.parse(result.stdout);
+    assert.equal(failure.ok, false);
+    assert.deepEqual(failure.errors.map((error) => error.code), ["FLOW_BOOTSTRAP_FAILED"]);
+    assert.equal(failure.guidance.cause.kind, "bootstrap");
+    assert.equal(failure.guidance.cause.code, "FLOW_RUNTIME_HANDOFF_FAILED");
+    assert.equal(failure.guidance.nextAction.kind, "external_work");
+    assert.equal(Object.hasOwn(failure, "directive"), false);
+  });
+
+  it("migrates an explicit non-Git project nested in a same-package worktree", () => {
+    const { root, worktreePath } = createFixture();
+    const project = path.join(worktreePath, "nested-project");
+    fs.mkdirSync(path.join(project, ".senti"), { recursive: true });
+    const config = JSON.stringify({
+      lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" },
+    }) + "\n";
+    const evidence = Buffer.from([0, 255, 13, 10]);
+    fs.writeFileSync(path.join(project, ".senti", "config.json"), config);
+    fs.writeFileSync(path.join(project, ".senti", "evidence.bin"), evidence);
+    const parentConfig = fs.readFileSync(path.join(worktreePath, ".sennel", "config.json"));
+    const result = spawnSync(process.execPath, [path.join(root, "src", "sennel.js"), "migrate", "layout", "--to", "1"], {
+      cwd: project,
+      encoding: "utf8",
+      env: { ...process.env, SENNEL_WORK_ROOT: project, SENNEL_SOURCE_ROOT: project },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(path.join(project, ".senti")), false, "apply must migrate the selected project");
+    assert.equal(fs.readFileSync(path.join(project, ".sennel", "config.json"), "utf8"), config);
+    assert.deepEqual(fs.readFileSync(path.join(project, ".sennel", "evidence.bin")), evidence);
+    assert.deepEqual(fs.readFileSync(path.join(worktreePath, ".sennel", "config.json")), parentConfig);
+  });
+
+  it("keeps a supplied project boundary when no project environment is inherited", () => {
+    const { root, worktreePath } = createFixture();
+    const project = path.join(worktreePath, "explicit-project-without-environment");
+    fs.mkdirSync(project);
+    const previous = process.env.SENNEL_WORK_ROOT;
+    delete process.env.SENNEL_WORK_ROOT;
+    try {
+      const selected = resolveWorktreeLocalCli({
+        executionPath: path.join(root, "src", "sennel.js"), cwd: project,
+        repositoryRoot: project,
+      });
+      assert.equal(selected, null, "source discovery must retain the supplied project boundary");
+    } finally {
+      if (previous === undefined) delete process.env.SENNEL_WORK_ROOT;
+      else process.env.SENNEL_WORK_ROOT = previous;
+    }
   });
 
   it("preserves global package execution in an unrelated worktree", () => {

@@ -6,6 +6,7 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { readCatalogedSourceArtifact } from "./flow-findings.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskReviewAccounting } from "./task-review-accounting.js";
+import { readFlowReviewAccounting } from "./flow-review-accounting.js";
 import {
   flowReviewRouteForPhase,
   reviewPhaseForFlowStepId,
@@ -288,17 +289,19 @@ export class ReviewTransitionFacts {
     if (!route) throw new Error("review transition phase is invalid");
     const nodeId = scope === "task" ? taskReviewNodeId(flowState) : route.reviewStepId;
     const taskBudget = scope === "task" ? taskReviewBudget(flowState, flowManager) : null;
+    const current = typedState ?? flowManager.canonicalState(flowState.specId);
+    const attemptCount = scope === "flow" && phase === "impl"
+      ? readFlowReviewAccounting({ flowManager, state: current }).attemptCount : taskBudget?.attempts ?? null;
     if (nodeId === null || flowState?.currentNodeId !== nodeId) {
       return new ReviewTransitionFacts({
         scope,
         phase,
-        attemptCount: taskBudget?.attempts ?? null,
+        attemptCount,
         taskRound: taskBudget?.round ?? null,
       });
     }
     const sourceArtifact = scope === "task" ? "task.review" : route.logicalKey;
     const source = readCatalogedSourceArtifact({ flowManager, flowState, nodeId, sourceArtifact });
-    const current = typedState ?? flowManager.canonicalState(flowState.specId);
     const artifact = currentAttemptArtifact({ flowManager, source, logicalKey: sourceArtifact, typedState: current });
     return new ReviewTransitionFacts({
       scope,
@@ -307,7 +310,7 @@ export class ReviewTransitionFacts {
       toolingOutcome: artifact?.toolingOutcome ?? null,
       artifact,
       sourceArtifact,
-      attemptCount: taskBudget?.attempts ?? null,
+      attemptCount,
       taskRound: taskBudget?.round ?? null,
     });
   }

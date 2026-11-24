@@ -10,7 +10,7 @@ import { settleArtifactWorkerRecoveryResult } from "../definition.js";
 import { DraftWorkerRecoveryCheckpoint } from "./draft-worker-recovery-checkpoint.js";
 import { LegacyArtifactPromptConsumptionPublication } from "./canonical-prompt-execution.js";
 import { FlowProcessExecutionBinding } from "./flow-process-execution-binding.js";
-import { FlowProcessStopEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
+import { FlowProcessRecoveryEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
 
 function refuse(message) { throw new FlowExecutionContractRefusal(message); }
 
@@ -140,7 +140,7 @@ export class ArtifactWorkerRecoveryPublication {
     this.physicalEvidence.assertBinding(FlowProcessExecutionBinding.forEpisode(source));
     const sourcePhysical = this.physicalEvidence.forBinding(FlowProcessExecutionBinding.forContract(source));
     if (sourcePhysical.calls.length === 0 && sourcePhysical.nonExecution === null) refuse("Artifact recovery has no source execution stop or non-execution proof");
-    for (const call of sourcePhysical.calls) new FlowProcessStopEvidence(call.receipt)
+    for (const call of sourcePhysical.calls) new FlowProcessRecoveryEvidence(call)
       .assertContract(source, workerProcessStopIdentity(this.sourceRequest)).assertCheckout(this.physicalEvidence.checkoutIdentity);
     if (this.physicalEvidence.digest !== evidence.physicalEvidenceDigest) refuse("Artifact recovery physical evidence changed");
     target.assertCurrent(view.state);

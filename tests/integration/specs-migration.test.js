@@ -6,12 +6,14 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
-import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
+import { SeedCleanupScope, SeedWorkRoot } from "../support/builders/seed-work-root.js";
 import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../support/assertions/canonical-persistence.js";
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
 import { FlowArtifactCatalog, FlowVersionAuthorityScope, FlowVersionLocation } from "../../src/lib/flow-version.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../src/lib/flow-artifact-contract.js";
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
+import { captureRegularFile } from "../../src/lib/regular-file-snapshot.js";
 import { CanonicalGateObservationCycle } from "../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { GateEvidenceIdentity, GateObservationCycleReader, GateObservationOccurrence } from "../../src/flow/lib/gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
@@ -35,6 +37,7 @@ import { resolveMigrationSpecRoot } from "../../src/lib/migration-spec-root.js";
 
 const CLI = path.resolve("src/sennel.js");
 const roots = [];
+const seedCloneScope = new SeedCleanupScope(afterEach);
 
 function project() {
   const root = createTmpDir("sennel-specs-migration-");
@@ -662,7 +665,7 @@ describe("migrate specs --to 3", () => {
     const migrated = runTo(root, 3);
     assert.equal(migrated.status, 0, migrated.stderr);
     const loaded = versionStore(root, id).load();
-    assert.equal(loaded.schemaRevision, 4);
+    assert.equal(loaded.schemaRevision, CURRENT_FLOW_SCHEMA_REVISION);
     assert.equal(loaded.findNode("spec-gate-repair").status, "pending");
     assert.equal(loaded.migration.legacyAppliedCount, 0);
     assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3/flow.json")), source[0]);
@@ -1306,7 +1309,9 @@ describe("migrate specs --to 2", () => {
   it("keeps specs and layout revisions independent when specs run first", () => {
     const root = createTmpDir("sennel-specs-before-layout-");
     roots.push(root);
-    writeJson(root, ".senti/config.json", { flow: { specDir: "specs" } });
+    writeJson(root, ".senti/config.json", {
+      lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" }, flow: { specDir: "specs" },
+    });
     const id = seedLegacy(root, "515-independent-revisions");
 
     const specs = run(root);
@@ -1901,14 +1906,16 @@ describe("migrate specs --to 2", () => {
     const version = path.join(root, base, "001");
     const report = JSON.parse(fs.readFileSync(path.join(version, "flow-migration-report.json"), "utf8"));
     const catalog = JSON.parse(fs.readFileSync(path.join(version, "artifact-catalog.json"), "utf8"));
-    for (const [relativePath, bytes, mode, reason] of residues) {
+    for (const [relativePath, bytes, , reason] of residues) {
       const destination = `.runtime/migration/legacy-files/${relativePath}`;
       assert.equal(fs.readFileSync(path.join(version, destination), "utf8"), bytes, relativePath);
-      assert.equal(fs.statSync(path.join(version, destination)).mode & 0o777, mode, relativePath);
+      assert.equal(fs.statSync(path.join(version, destination)).isFile(), true, relativePath);
       assert.equal(report.relocatedTransient.some((entry) => (
         entry.source === relativePath && entry.destination === destination && entry.reason === reason
       )), true, relativePath);
       const sourceFile = report.sourceFiles.find((entry) => entry.path === relativePath);
+      assert.equal(sourceFile.kind, "file");
+      assert.equal(Object.hasOwn(sourceFile, "mode"), false);
       assert.equal(sourceFile.hash, crypto.createHash("sha256").update(Buffer.from(bytes, "utf8")).digest("hex"), relativePath);
       assert.equal(catalog.artifacts.some((entry) => entry.relativePath === destination), false, relativePath);
       assert.throws(() => FLOW_ARTIFACT_CONTRACTS.classify(destination), /not uniquely classified/, relativePath);
@@ -2439,7 +2446,7 @@ describe("migrate specs --to 2", () => {
     }).load();
   });
 
-  it("rechecks source bytes and modes immediately before the swap", () => {
+  it("rechecks source bytes immediately before the swap", () => {
     const root = project();
     const id = seedLegacy(root, "515-source-race");
     const { specRoot, candidate } = plannedCandidate(root, id);
@@ -2458,6 +2465,107 @@ describe("migrate specs --to 2", () => {
     assert.equal(fs.existsSync(path.join(root, "specs", id, "001")), false);
     assert.equal(fs.existsSync(path.join(root, ".tmp", "sennel-migrate-specs")), false);
     assert.equal(fs.readdirSync(path.join(root, "specs", id)).some((name) => name.startsWith(".001.migrate-") && name.endsWith(".tmp")), false);
+  });
+
+  it("keeps permission hints outside managed source identity and preserves bytes through migration", () => {
+    const root = project();
+    const id = seedLegacy(root, "515-portable-permissions");
+    writeFile(root, `specs/${id}/operator-notes.log`, "operator evidence\n");
+    const { specRoot, candidate } = plannedCandidate(root, id);
+    const source = path.join(root, "specs", id, "operator-notes.log");
+    const bytes = fs.readFileSync(source);
+    fs.chmodSync(source, 0o700);
+    candidate.source.assertUnchanged();
+    new SpecsMigrationTransaction({ root, specRoot, specId: id, targetRevision: 2 }).apply(candidate);
+    const location = new FlowVersionLocation({ repositoryRoot: root, authorityScope: FlowVersionAuthorityScope.canonical(),
+      specRoot: "specs", specId: id, version: 1 });
+    const catalog = FlowArtifactCatalog.fromSerialized(JSON.parse(fs.readFileSync(location.catalogFile, "utf8")));
+    const report = JSON.parse(fs.readFileSync(location.resolve("flow-migration-report.json"), "utf8"));
+    const mapping = report.preserved.find((entry) => entry.source === "operator-notes.log");
+    assert.ok(fs.readFileSync(location.resolve(mapping.destination)).equals(bytes));
+    catalog.verify(location);
+    new CurrentFlowVersionStore({ location, definition: buildCurrentFlowDefinition() }).load();
+  });
+
+  it("preserves ancillary executable script behavior without putting permission hints in provenance", () => {
+    const root = project();
+    const id = seedLegacy(root, "515-ancillary-script");
+    const relativePath = "scripts/verify.mjs";
+    writeFile(root, `specs/${id}/${relativePath}`, `#!${process.execPath}\nprocess.stdout.write("ancillary-script-ok");\n`);
+    const source = path.join(root, "specs", id, relativePath);
+    fs.chmodSync(source, 0o755);
+    const runScript = (target) => spawnSync(process.platform === "win32" ? process.execPath : target,
+      process.platform === "win32" ? [target] : [], { encoding: "utf8" });
+    const original = runScript(source);
+    assert.equal(original.status, 0, original.error?.message ?? original.stderr);
+    const hint = captureRegularFile(source, { label: "script source", maxBytes: 4096 }).permissionHint;
+    const { specRoot, candidate } = plannedCandidate(root, id);
+    new SpecsMigrationTransaction({ root, specRoot, specId: id, targetRevision: 2 }).apply(candidate);
+    const location = new FlowVersionLocation({ repositoryRoot: root, authorityScope: FlowVersionAuthorityScope.canonical(),
+      specRoot: "specs", specId: id, version: 1 });
+    const report = JSON.parse(fs.readFileSync(location.resolve("flow-migration-report.json"), "utf8"));
+    const mapping = report.preserved.find((entry) => entry.source === relativePath);
+    const destination = location.resolve(mapping.destination);
+    assert.equal(Object.hasOwn(report.sourceFiles.find((entry) => entry.path === relativePath), "mode"), false);
+    const result = runScript(destination);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal(result.stdout, "ancillary-script-ok");
+    assert.equal(hint.matchesAfterWrite(captureRegularFile(destination, { label: "script copy", maxBytes: 4096 }).permissionHint), true);
+  });
+
+  it("rejects a replaced source file generation even when its bytes are identical", () => {
+    const root = project();
+    const id = seedLegacy(root, "515-file-generation");
+    const { specRoot, candidate } = plannedCandidate(root, id);
+    const source = path.join(root, "specs", id, "review.md");
+    const replacement = `${source}.replacement`;
+    fs.writeFileSync(replacement, fs.readFileSync(source));
+    fs.renameSync(replacement, source);
+    assert.throws(() => new SpecsMigrationTransaction({ root, specRoot, specId: id }).apply(candidate),
+      (error) => error.code === "SOURCE_CHANGED");
+    assert.equal(fs.existsSync(path.join(root, "specs", id, "001")), false);
+    assert.equal(fs.existsSync(path.join(root, ".tmp", "sennel-migrate-specs")), false);
+  });
+
+  it("refuses the authentic previous journal codec while retaining every evidence byte", () => {
+    const root = project();
+    const fixture = path.resolve("tests/fixtures/specs-journal-v1");
+    const bytes = fs.readFileSync(path.join(fixture, "journal.json"));
+    const provenance = JSON.parse(fs.readFileSync(path.join(fixture, "provenance.json"), "utf8"));
+    assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"), provenance.journalSha256);
+    const journal = JSON.parse(bytes.toString("utf8"));
+    const specRoot = resolveMigrationSpecRoot(root).root;
+    const journalPath = path.join(root, ".tmp", "sennel-migrate-specs", "previous-producer.json");
+    writeFile(root, path.relative(root, journalPath), bytes);
+    const config = fs.readFileSync(path.join(root, ".sennel", "config.json"));
+    assert.throws(() => SpecsMigrationTransaction.fromJournal({ root, specRoot, journal, journalPath }),
+      /specs migration journal is invalid/);
+    assert.deepEqual(fs.readFileSync(journalPath), bytes);
+    assert.deepEqual(fs.readFileSync(path.join(root, ".sennel", "config.json")), config);
+    assert.equal(fs.existsSync(path.join(root, ".tmp", "runtime")), false);
+  });
+
+  it("refuses a foreign empty backup generation before renaming the original source", () => {
+    const root = project();
+    const id = seedLegacy(root, "515-foreign-backup");
+    const { specRoot, candidate } = plannedCandidate(root, id);
+    const source = path.join(root, "specs", id, "flow.json");
+    const original = fs.readFileSync(source);
+    let foreign = null;
+    let foreignIdentity = null;
+    const transaction = new SpecsMigrationTransaction({ root, specRoot, specId: id,
+      faultInjector({ phase, transaction: current }) {
+        if (phase !== "journal-written") return;
+        const journal = JSON.parse(fs.readFileSync(current.journalPath, "utf8"));
+        foreign = path.join(root, "specs", journal.backupName);
+        fs.mkdirSync(foreign);
+        foreignIdentity = fs.lstatSync(foreign, { bigint: true }).ino;
+      },
+    });
+    assert.throws(() => transaction.apply(candidate), /destination already exists/);
+    assert.deepEqual(fs.readFileSync(source), original);
+    assert.equal(fs.lstatSync(foreign, { bigint: true }).ino, foreignIdentity);
+    assert.equal(fs.existsSync(transaction.journalPath), true);
   });
 
   it("validates a materialized canonical Version before source rename and rolls back an owned invalid post-stage target", () => {
@@ -2624,7 +2732,7 @@ describe("migrate specs --to 2", () => {
 
 function frozenV1Project() {
   const work = new SeedWorkRoot(path.resolve("tests/fixtures/legacy-activity-v1/project"), { prefix: "sennel-legacy-activity-" });
-  roots.push(work.root);
+  seedCloneScope.after(() => work.cleanup());
   return { root: work.root, id: "001-legacy-activity" };
 }
 
@@ -2760,6 +2868,55 @@ describe("historical Activity source contract", () => {
     }
   });
 
+  it("refuses a placed spec root replacement during recovery readback without deleting foreign evidence", (t) => {
+    const { root, id } = frozenV1Project();
+    const specRoot = resolveMigrationSpecRoot(root).root;
+    const source = path.join(root, "specs", id);
+    const transaction = new CanonicalRevisionRootTransaction({ root, specRoot, specId: id,
+      definition: buildCurrentFlowDefinition(), faultInjector: ({ phase }) => {
+        if (phase === "stage-placed") throw new Error("interrupted placed revision root");
+      } });
+    assert.throws(() => transaction.apply(), /interrupted placed revision root/);
+    const journalBytes = fs.readFileSync(transaction.journalPath);
+    const journal = JSON.parse(journalBytes);
+    const backup = path.join(path.dirname(source), journal.backupName);
+    const backupBefore = physicalSnapshot(backup);
+    const retained = path.join(root, "retained-placed-root");
+    const foreign = path.join(root, "external-root");
+    fs.mkdirSync(foreign);
+    const evidence = Buffer.from("external writer evidence\n");
+    fs.writeFileSync(path.join(foreign, "external.bin"), evidence);
+    const foreignIdentity = fs.lstatSync(foreign, { bigint: true });
+    const original = fs.readdirSync;
+    let replaced = false;
+    const observe = t.mock.method(fs, "readdirSync", function (directory, ...options) {
+      if (!replaced && typeof directory === "string" && path.resolve(directory) === source
+        && new Error().stack.includes("at assertTreeGeneration ")) {
+        replaced = true;
+        fs.renameSync(source, retained);
+        fs.renameSync(foreign, source);
+      }
+      return Reflect.apply(original, this, [directory, ...options]);
+    });
+    let failure;
+    try {
+      CanonicalRevisionRootTransaction.recoverFromJournal({ root, specRoot, journal,
+        journalPath: transaction.journalPath, dryRun: false });
+    } catch (error) { failure = error; }
+    finally { observe.mock.restore(); }
+    assert.equal(replaced, true, "the external replacement occurs during the real recovery readback");
+    assert.equal(fs.existsSync(path.join(source, "external.bin")), true,
+      "recovery must not delete the external directory after its earlier identity check");
+    assert.deepEqual(fs.readFileSync(path.join(source, "external.bin")), evidence);
+    const actual = fs.lstatSync(source, { bigint: true });
+    assert.equal(actual.dev, foreignIdentity.dev);
+    assert.equal(actual.ino, foreignIdentity.ino);
+    assert.ok(failure, "a changed placed root must refuse recovery");
+    assert.equal(physicalSnapshot(backup), backupBefore);
+    assert.deepEqual(fs.readFileSync(transaction.journalPath), journalBytes);
+    assert.equal(fs.existsSync(retained), true, "the originally owned placed root is retained too");
+  });
+
   it("refuses publication when a foreign identity appears after the migration journal is written", () => {
     const { root, id } = frozenV1Project();
     const source = path.join(root, "specs", id);
@@ -2778,4 +2935,30 @@ describe("historical Activity source contract", () => {
     assert.throws(() => migrateSelected(root, id, 2), { code: "RUN_ID_COLLISION" });
     assert.equal(physicalSnapshot(source), before);
   });
+});
+
+
+it("detaches a migrated replay baseline across confirmation-only state copies", () => {
+  const root = project();
+  const { id, version } = seedFrozenThreeCycleV3(root);
+  const originals = ["flow.json", "activities.jsonl", "artifact-catalog.json"]
+    .map(name => fs.readFileSync(path.join(version, name)));
+  const migrated = runTo(root, 3);
+  assert.equal(migrated.status, 0, migrated.stderr);
+  const source = versionStore(root, id).load();
+  const sourceBytes = JSON.stringify(source.toJSON());
+  const updated = source.withConfirmationOrder(source.confirmationOrder + 1);
+  const expected = new CurrentFlowState({ ...source.toJSON(), confirmationOrder: source.confirmationOrder + 1 },
+    { definition: source.definition });
+  assert.equal(JSON.stringify(updated.toJSON()), JSON.stringify(expected.toJSON()));
+  // The migration baseline owns detached JSON; changing this copy must not
+  // mutate the other state or the authoritative archived producer evidence.
+  const originalId = source.migration.baseline.steps[0].id;
+  updated.migration.baseline.steps[0].id = "detached-copy-only";
+  assert.equal(source.migration.baseline.steps[0].id, originalId);
+  assert.equal(JSON.stringify(source.toJSON()), sourceBytes);
+  assert.equal(JSON.stringify(versionStore(root, id).load().toJSON()), sourceBytes);
+  for (const [index, name] of ["flow.json", "activities.jsonl", "artifact-catalog.json"].entries()) {
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3", name)), originals[index]);
+  }
 });

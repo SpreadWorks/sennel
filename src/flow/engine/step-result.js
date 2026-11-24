@@ -8,7 +8,7 @@ import { ImplementationSourceEvidence } from "../lib/source-effect-values.js";
 import { TaskStageResultEvidence } from "../lib/task-stage-result-values.js";
 import { TaskHostFilterAuthority } from "../lib/task-review-host-filter-values.js";
 import { TestChainResultEvidence } from "../lib/test-chain-values.js";
-import { ImplReviewResultEvidence } from "../lib/impl-review-values.js";
+import { ImplReviewResultEvidence, ImplReviewDeferral, ImplReviewExhaustion } from "../lib/impl-review-values.js";
 import { ImplementationGateResultEvidence } from "../lib/gate-observation-values.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -866,6 +866,10 @@ export const ImplReviewExecutionRequiredResult = operandResultClass("ImplReviewE
 export const ImplReviewPassedResult = operandResultClass("ImplReviewPassedResult", { stepId: "impl-review", kind: "impl-review-passed", type: "completed", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
 export const ImplReviewAdvisoryResult = operandResultClass("ImplReviewAdvisoryResult", { stepId: "impl-review", kind: "impl-review-advisory", type: "completed", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
 export const ImplReviewRejectedResult = operandResultClass("ImplReviewRejectedResult", { stepId: "impl-review", kind: "impl-review-rejected", type: "branch-required", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplReviewDeferredResult = operandResultClass("ImplReviewDeferredResult", { stepId: "impl-review", kind: "impl-review-deferred", type: "completed", implementation: true }, { evidence: ImplReviewResultEvidence, deferral: ImplReviewDeferral }, null,
+  (_definition, values) => values.deferral.assertEvidence(values.evidence));
+export const ImplReviewExhaustedResult = operandResultClass("ImplReviewExhaustedResult", { stepId: "impl-review", kind: "impl-review-exhausted", type: "user-input-required", implementation: true }, { evidence: ImplReviewResultEvidence, exhaustion: ImplReviewExhaustion }, null,
+  (_definition, values) => values.exhaustion.assertEvidence(values.evidence));
 export const ImplReviewToolingResult = operandResultClass("ImplReviewToolingResult", { stepId: "impl-review", kind: "impl-review-tooling", type: "user-input-required", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
 export const ImplTriageWorkerRequiredResult = resultClass("ImplTriageWorkerRequiredResult", { stepId: "impl-triage", kind: "impl-triage-worker-required", type: "loop-required", implementation: true });
 export const ImplTriageRepairRequiredResult = operandResultClass("ImplTriageRepairRequiredResult", { stepId: "impl-triage", kind: "impl-triage-repair-required", type: "branch-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);

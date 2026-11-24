@@ -13,8 +13,9 @@ import {
 } from "./current-flow-state.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
-import { settleTaskStepResult, DraftStepSettlementReceipt } from "../definition.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import { settleTaskStepResult } from "../definition.js";
+import { CanonicalReviewExecutionLedger } from "./canonical-review-execution-ledger.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskExecutionBudget } from "./task-execution-policy.js";
@@ -49,7 +50,8 @@ export function canonicalTaskReviewHistory({ flowManager, state, taskId, history
     }).bytes;
   history ??= CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "task.review", bytes });
   const envelopes = FLOW_ARTIFACT_CONTRACTS.require("task.review").contentContract.parse(bytes);
-  const activities = flowManager.activityLedger(state.specId);
+  const executions = new CanonicalReviewExecutionLedger(flowManager.activityLedger(state.specId));
+  const activities = executions.activities;
   const publication = activities.find((activity) => activity.id === descriptor.activityId) ?? null;
   const identity = new TaskStepIdentity({ taskId, role: "review" });
   const current = history.current;
@@ -65,32 +67,24 @@ export function canonicalTaskReviewHistory({ flowManager, state, taskId, history
   const budgets = flowManager.taskMutationLineages({ specId: state.specId, taskId })
     .filter((lineage) => lineage.role === "implementation").map((lineage) => lineage.budget);
   const completed = [];
-  let prefix = new FlowArtifactAttemptHistory();
   for (let index = 0; index < history.attempts.length; index += 1) {
     const entry = history.attempts[index];
-    prefix = prefix.append(envelopes.attempts[index]);
     const terminal = activities.filter((activity) => activity.nodeId === identity.nodeId
       && activity.sequence === entry.attempt && activity.result?.draftSettlementReceipt?.settlementKind === "target-connection");
     if (terminal.length === 0) continue;
     if (terminal.length !== 1) throw new Error("Task Review semantic history has duplicate terminal producers");
-    const activity = new FlowActivity(terminal[0]);
+    const activity = FlowActivity.canonical(terminal[0]);
     const result = activity.result.stepResult;
     const facts = result.evidence?.facts;
     const settlement = settleTaskStepResult(identity.definitionId, result);
-    const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
+    executions.assertTerminal({ activity, target: entry.payload.canonicalTarget,
       binding: { runId: state.runId, specId: state.specId, stepId: identity.definitionId,
         attempt: { id: activity.attemptId, sequence: activity.sequence } }, result, settlement });
     const budget = budgets.find((candidate) => candidate.round === facts?.taskRound);
     if (budget === undefined) throw new Error("Task Review semantic history has no matching implementation round budget");
     const next = budgets.find((candidate) => candidate.round === budget.round + 1);
     const ordinal = completed.filter((candidate) => candidate.attempt > budget.reviewAttemptSequenceAtStart).length + 1;
-    const artifactDigest = createHash("sha256").update(`${JSON.stringify(prefix.toJSON(), null, 2)}\n`).digest("hex");
-    const lifecycle = receipt.executionLifecycle?.toJSON();
-    const claim = activities.findLast((candidate) => candidate.nodeId === identity.nodeId
-      && candidate.attemptId === activity.attemptId && candidate.sequence === entry.attempt
-      && candidate.confirmationOrder < activity.confirmationOrder
-      && candidate.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed"
-      && isDeepStrictEqual(candidate.result.draftSettlementReceipt.executionLifecycle.binding, lifecycle?.binding));
+    const artifactDigest = createHash("sha256").update(envelopes.prefixThrough(entry.attempt).toBytes()).digest("hex");
     if (!["complete_task_review_stage", "advance_task_review_stage"].includes(activity.transition.operation)
       || result.stepId !== identity.definitionId || facts?.binding.stage !== "review" || facts.unavailable !== null
       || activity.result.outcome !== "passed" || facts.binding.runId !== state.runId || facts.binding.specId !== state.specId
@@ -104,10 +98,7 @@ export function canonicalTaskReviewHistory({ flowManager, state, taskId, history
       || next !== undefined && entry.attempt > next.reviewAttemptSequenceAtStart
       || facts.reviewResultCount !== ordinal
       || !isDeepStrictEqual(activity.transition.taskReviewStagePlan?.facts.toJSON(), facts.toJSON())
-      || !isDeepStrictEqual(settlement.application?.transition.facts.toJSON(), facts.toJSON())
-      || lifecycle?.phase !== "terminal" || lifecycle.binding.kind !== "review" || claim === undefined
-      || !isDeepStrictEqual(lifecycle.claim, claim.result.draftSettlementReceipt.executionLifecycle.claim)
-      || !isDeepStrictEqual(lifecycle.binding.target, entry.payload.canonicalTarget)) {
+      || !isDeepStrictEqual(settlement.application?.transition.facts.toJSON(), facts.toJSON())) {
       throw new Error("Task Review semantic history lacks its exact completed Result, source, budget and execution receipt");
     }
     if (entry.attempt === current.attempt && descriptor.activityId !== activity.id) {

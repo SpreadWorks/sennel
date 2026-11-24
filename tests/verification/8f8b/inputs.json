@@ -1,0 +1,170 @@
+{
+  "baseCommit": "2ca911cb6b19c4e7108d66479f45e2b4a5f9cd54",
+  "current": {
+    "board": "8f8b",
+    "branch": "codex/8f8b",
+    "baseBranch": "main",
+    "baseCommit": "2ca911cb6b19c4e7108d66479f45e2b4a5f9cd54",
+    "node": "v22.22.0",
+    "worktree": "/home/nakano/workspace/sennel/.sennel/worktree/8f8b",
+    "productFileCount": 939,
+    "productBaselineDigest": "2b8668ffb7531b76945e92da5f70f1fff1a3f225c9aada15e03fad6831384f4d",
+    "productMismatches": [],
+    "tests": [
+      {
+        "path": "tests/unit/flow-engine-step-result.test.js",
+        "beforeSha256": "46026b33f65ab2f4315131d8f8dc5e07b23ac49c010b6a8bf3bff3ffe77ec913",
+        "afterSha256": "87be2fb473c121d63659dcdbb44140605257f506ca7e6b6b43ac6511c131899c"
+      },
+      {
+        "path": "tests/unit/structured-step-result-contract.test.js",
+        "beforeSha256": "3596b2f2f96082d96381cc37cfdce79a326f61c2b7c2741572923cb5995c7db5",
+        "afterSha256": "55d018eb4bd59898366ba219fd101776508e29da1384dbd4b3a8487903a956c3"
+      },
+      {
+        "path": "tests/unit/artifact-worker-execution-continuation.test.js",
+        "beforeSha256": "3d575cbdf30db3bdba8e4894dfbd29e0635d5a7670b10a6f03c8807725a699b7",
+        "afterSha256": "3d575cbdf30db3bdba8e4894dfbd29e0635d5a7670b10a6f03c8807725a699b7"
+      },
+      {
+        "path": "tests/unit/draft-worker-recovery-checkpoint.test.js",
+        "beforeSha256": "49eb6c7cded1171f242df717b519bf323f0707f417ed3693091b7ca8d2eef991",
+        "afterSha256": "49eb6c7cded1171f242df717b519bf323f0707f417ed3693091b7ca8d2eef991"
+      },
+      {
+        "path": "tests/integration/051-skill-namespace.test.js",
+        "beforeSha256": "748bda8e6d6849c83acf16b93462fae3d19e031fb6feb0ff5a0c1c3f52308d5a",
+        "afterSha256": "be1ec9330726220eec31cb4f551141ee07dd610ea5d01f900238183f62cc152c"
+      },
+      {
+        "path": "tests/integration/lib/skills-include.test.js",
+        "beforeSha256": "ec6a1827509e276c7a4e948e192883d3570dc3df4e1aca25fda229bab1874a28",
+        "afterSha256": "ec6a1827509e276c7a4e948e192883d3570dc3df4e1aca25fda229bab1874a28"
+      },
+      {
+        "path": "tests/integration/flow-cli/commands/artifact-summary-input-limit.test.js",
+        "beforeSha256": "39d59e90228fb67f683b4920061215af3d404871142ef205502313e16e056950",
+        "afterSha256": "9db031bd0d800c711f070ad316702c01bf68bc5575f1bc0cc58b3f054c7f4690"
+      },
+      {
+        "path": "tests/integration/flow/artifact-worker-recovery-service-boundary.test.js",
+        "beforeSha256": "575faa0ff96cbc1b032198ec029974112b489355354d5d3f62262ae539995ad0",
+        "afterSha256": "575faa0ff96cbc1b032198ec029974112b489355354d5d3f62262ae539995ad0"
+      },
+      {
+        "path": "tests/integration/flow-cli/acceptance-durable-execution.test.js",
+        "beforeSha256": "1bb295267b9cc2413a39bf193dea34ef9467a96d1ffd8c99b45ecf7313e27d0f",
+        "afterSha256": "275fab07dcd18c5a7cc1464db7a7bbb3b07df70d9d4a71df263d874d1a1bccfb"
+      },
+      {
+        "path": "tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+        "beforeSha256": "9f21c4aa35652e8026c756801035492a75270476fc8e5ee1eadce95c31a5d19f",
+        "afterSha256": "f22a955dbf87a38601b3148e63a9f6c8b3fc60d74a576e9e4dfb186c859c7688"
+      },
+      {
+        "path": "tests/integration/flow-cli/draft-dispatch-authority.test.js",
+        "beforeSha256": "1d8dd7c455de5b71d54f656178834a9c8f541c5912f1388fac6f63f21dff73d3",
+        "afterSha256": "a2db1e7e24ae16e2613a1785442714ac3864cdbfb6f3e452dc3b13df7ec482d3"
+      },
+      {
+        "path": "tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+        "beforeSha256": "b97ef25f7ac9a87337ffef343d992bf9bbc7c5f9bf8043324e8c06555ed00d40",
+        "afterSha256": "5fd2ea3d0a7cecdbdfa20b849f8121c49b12907161a5846efbc9c293157e5078"
+      },
+      {
+        "path": "tests/integration/flow/artifact-worker-recovery.test.js",
+        "beforeSha256": "5347fdae5c12b24636ff7dc31d696fa5c17685a697119927f234f1f8e43e388a",
+        "afterSha256": "5347fdae5c12b24636ff7dc31d696fa5c17685a697119927f234f1f8e43e388a"
+      }
+    ],
+    "inventory": {
+      "count": 740,
+      "baselineSha256": "26c546f7e55dcebfa34c95f7df5b24244c8955d9eedfbba81b916c776c3bf7fa",
+      "selectedAfterSha256": "ac4885bab55bdb42fd9dddfcdf34cff66ccf74a5068f1e6b8682c5d7acbdd0ca"
+    },
+    "productFinalDigest": "2b8668ffb7531b76945e92da5f70f1fff1a3f225c9aada15e03fad6831384f4d"
+  },
+  "draftIntermediate": {
+    "board": "8f8b",
+    "branch": "codex/8f8b",
+    "baseBranch": "main",
+    "baseCommit": "2ca911cb6b19c4e7108d66479f45e2b4a5f9cd54",
+    "node": "v22.22.0",
+    "worktree": "/home/nakano/workspace/sennel/.sennel/worktree/8f8b",
+    "productFileCount": 939,
+    "productBaselineDigest": "2b8668ffb7531b76945e92da5f70f1fff1a3f225c9aada15e03fad6831384f4d",
+    "productMismatches": [],
+    "tests": [
+      {
+        "path": "tests/unit/flow-engine-step-result.test.js",
+        "beforeSha256": "46026b33f65ab2f4315131d8f8dc5e07b23ac49c010b6a8bf3bff3ffe77ec913",
+        "afterSha256": "87be2fb473c121d63659dcdbb44140605257f506ca7e6b6b43ac6511c131899c"
+      },
+      {
+        "path": "tests/unit/structured-step-result-contract.test.js",
+        "beforeSha256": "3596b2f2f96082d96381cc37cfdce79a326f61c2b7c2741572923cb5995c7db5",
+        "afterSha256": "55d018eb4bd59898366ba219fd101776508e29da1384dbd4b3a8487903a956c3"
+      },
+      {
+        "path": "tests/unit/artifact-worker-execution-continuation.test.js",
+        "beforeSha256": "3d575cbdf30db3bdba8e4894dfbd29e0635d5a7670b10a6f03c8807725a699b7",
+        "afterSha256": "3d575cbdf30db3bdba8e4894dfbd29e0635d5a7670b10a6f03c8807725a699b7"
+      },
+      {
+        "path": "tests/unit/draft-worker-recovery-checkpoint.test.js",
+        "beforeSha256": "49eb6c7cded1171f242df717b519bf323f0707f417ed3693091b7ca8d2eef991",
+        "afterSha256": "49eb6c7cded1171f242df717b519bf323f0707f417ed3693091b7ca8d2eef991"
+      },
+      {
+        "path": "tests/integration/051-skill-namespace.test.js",
+        "beforeSha256": "748bda8e6d6849c83acf16b93462fae3d19e031fb6feb0ff5a0c1c3f52308d5a",
+        "afterSha256": "be1ec9330726220eec31cb4f551141ee07dd610ea5d01f900238183f62cc152c"
+      },
+      {
+        "path": "tests/integration/lib/skills-include.test.js",
+        "beforeSha256": "ec6a1827509e276c7a4e948e192883d3570dc3df4e1aca25fda229bab1874a28",
+        "afterSha256": "ec6a1827509e276c7a4e948e192883d3570dc3df4e1aca25fda229bab1874a28"
+      },
+      {
+        "path": "tests/integration/flow-cli/commands/artifact-summary-input-limit.test.js",
+        "beforeSha256": "39d59e90228fb67f683b4920061215af3d404871142ef205502313e16e056950",
+        "afterSha256": "9db031bd0d800c711f070ad316702c01bf68bc5575f1bc0cc58b3f054c7f4690"
+      },
+      {
+        "path": "tests/integration/flow/artifact-worker-recovery-service-boundary.test.js",
+        "beforeSha256": "575faa0ff96cbc1b032198ec029974112b489355354d5d3f62262ae539995ad0",
+        "afterSha256": "575faa0ff96cbc1b032198ec029974112b489355354d5d3f62262ae539995ad0"
+      },
+      {
+        "path": "tests/integration/flow-cli/acceptance-durable-execution.test.js",
+        "beforeSha256": "1bb295267b9cc2413a39bf193dea34ef9467a96d1ffd8c99b45ecf7313e27d0f",
+        "afterSha256": "275fab07dcd18c5a7cc1464db7a7bbb3b07df70d9d4a71df263d874d1a1bccfb"
+      },
+      {
+        "path": "tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+        "beforeSha256": "9f21c4aa35652e8026c756801035492a75270476fc8e5ee1eadce95c31a5d19f",
+        "afterSha256": "f22a955dbf87a38601b3148e63a9f6c8b3fc60d74a576e9e4dfb186c859c7688"
+      },
+      {
+        "path": "tests/integration/flow-cli/draft-dispatch-authority.test.js",
+        "beforeSha256": "1d8dd7c455de5b71d54f656178834a9c8f541c5912f1388fac6f63f21dff73d3",
+        "afterSha256": "e7cb34b72da3c60455a75634f27cdf14024830166f74827127cd91ab6e64c956"
+      },
+      {
+        "path": "tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+        "beforeSha256": "b97ef25f7ac9a87337ffef343d992bf9bbc7c5f9bf8043324e8c06555ed00d40",
+        "afterSha256": "94b11e30ce12580bb32fc80d0d2208e4a57c874f5255a023c604b10fbeb58612"
+      },
+      {
+        "path": "tests/integration/flow/artifact-worker-recovery.test.js",
+        "beforeSha256": "5347fdae5c12b24636ff7dc31d696fa5c17685a697119927f234f1f8e43e388a",
+        "afterSha256": "5347fdae5c12b24636ff7dc31d696fa5c17685a697119927f234f1f8e43e388a"
+      }
+    ],
+    "inventory": {
+      "count": 740,
+      "baselineSha256": "26c546f7e55dcebfa34c95f7df5b24244c8955d9eedfbba81b916c776c3bf7fa",
+      "selectedAfterSha256": "ac4885bab55bdb42fd9dddfcdf34cff66ccf74a5068f1e6b8682c5d7acbdd0ca"
+    }
+  }
+}

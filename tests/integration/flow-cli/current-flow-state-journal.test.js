@@ -120,13 +120,13 @@ describe("Current Flow state filesystem lifecycle", () => {
     const definition = buildCurrentFlowDefinition();
     const directory = path.join(tmp, "specs", "900-current-state");
     let state = CurrentFlowState.create({ definition, execution: { mode: "branch" } });
-    const store = new CurrentFlowStateStore({ directory, definition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition });
     state = store.create(state);
     let order = 2;
 
     const apply = (entry) => {
-      state = new CurrentFlowStateStore({ directory, definition }).apply({ activity: entry });
-      state = new CurrentFlowStateStore({ directory, definition }).load();
+      state = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).apply({ activity: entry });
+      state = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).load();
       order += 1;
     };
     const completeDescriptor = (label, { status = "done", activityResult = null, gateTaskLifecycle = null } = {}) => {
@@ -225,7 +225,7 @@ describe("Current Flow state filesystem lifecycle", () => {
     const orderBeforeForbiddenSkip = order;
     const journalLengthBeforeForbiddenSkip = store.journal.read().length;
     assert.throws(
-      () => new CurrentFlowStateStore({ directory, definition }).apply({ activity: activity({
+      () => new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).apply({ activity: activity({
         id: "prepare-spec-forbidden-skip",
         state,
         currentPath: prepareSpecPath,
@@ -239,7 +239,7 @@ describe("Current Flow state filesystem lifecycle", () => {
     );
     assert.equal(order, orderBeforeForbiddenSkip);
     assert.equal(store.journal.read().length, journalLengthBeforeForbiddenSkip);
-    assert.equal(new CurrentFlowStateStore({ directory, definition }).load().current.at(-1), "prepare-spec");
+    assert.equal(new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).load().current.at(-1), "prepare-spec");
     apply(activity({
       id: "prepare-spec-confirm",
       state,
@@ -342,7 +342,7 @@ describe("Current Flow state filesystem lifecycle", () => {
     assert.equal(state.nextAction().operation, "recover");
     assert.equal(state.nextAction().nodeId, "task-a-triage");
     assert.throws(
-      () => new CurrentFlowStateStore({ directory, definition }).apply({ activity: activity({
+      () => new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).apply({ activity: activity({
         id: "illegal-gate-start",
         state,
         currentPath: gatePath,
@@ -555,7 +555,7 @@ describe("Current Flow state filesystem lifecycle", () => {
     tmp = createTmpDir("current-flow-terminal-failure-e2e-");
     const definition = buildCurrentFlowDefinition();
     const directory = path.join(tmp, "specs", "901-terminal-failure");
-    const store = new CurrentFlowStateStore({ directory, definition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition });
     let initial = CurrentFlowState.create({ definition, execution: { mode: "worktree" } });
     initial = store.create(initial);
     const currentPath = initial.nextAction().path;
@@ -589,7 +589,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       },
     }) });
 
-    const reloaded = new CurrentFlowStateStore({ directory, definition }).load();
+    const reloaded = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).load();
     assert.equal(reloaded.nextAction().operation, "blocked");
     assert.equal(reloaded.nextAction().failureDisposition.outcome, "failed");
     assert.equal(reloaded.nextAction().failureDisposition.remaining, 0);
@@ -615,13 +615,13 @@ describe("Current Flow state filesystem lifecycle", () => {
     tmp = createTmpDir("current-flow-amend-spec-e2e-");
     const definition = buildCurrentFlowDefinition();
     const directory = path.join(tmp, "specs", "902-amend-spec");
-    const store = new CurrentFlowStateStore({ directory, definition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition });
     let state = CurrentFlowState.create({ definition, execution: { mode: "worktree" } });
     state = store.create(state);
     let order = 2;
     const apply = (entry) => {
-      state = new CurrentFlowStateStore({ directory, definition }).apply({ activity: entry });
-      state = new CurrentFlowStateStore({ directory, definition }).load();
+      state = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).apply({ activity: entry });
+      state = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).load();
       order += 1;
     };
     let index = 0;
@@ -703,7 +703,7 @@ describe("Current Flow state filesystem lifecycle", () => {
     tmp = createTmpDir("current-flow-crash-e2e-");
     const definition = buildCurrentFlowDefinition();
     const directory = path.join(tmp, "specs", "903-crash-replay");
-    const store = new CurrentFlowStateStore({ directory, definition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition });
     let initial = CurrentFlowState.create({ definition });
     initial = store.create(initial);
     const currentPath = initial.nextAction().path;
@@ -715,7 +715,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       order: 2,
       operation: "start_attempt",
     });
-    const journalCrash = new CurrentFlowStateStore({
+    const journalCrash = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory,
       definition,
       faultInjector({ phase }) {
@@ -723,8 +723,8 @@ describe("Current Flow state filesystem lifecycle", () => {
       },
     });
     assert.throws(() => journalCrash.apply({ activity: startedActivity }), /journal durable/);
-    assert.equal(new CurrentFlowStateStore({ directory, definition }).load().confirmationOrder, 1);
-    const started = new CurrentFlowStateStore({ directory, definition }).apply({ activity: startedActivity });
+    assert.equal(new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).load().confirmationOrder, 1);
+    const started = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition }).apply({ activity: startedActivity });
     const confirmedActivity = activity({
       id: "crash-confirm",
       state: started,
@@ -734,7 +734,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       status: "done",
       activityResult: result("crash-confirmed"),
     });
-    const stateCrash = new CurrentFlowStateStore({
+    const stateCrash = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory,
       definition,
       faultInjector({ phase }) {
@@ -742,7 +742,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       },
     });
     assert.throws(() => stateCrash.apply({ activity: confirmedActivity }), /state durable/);
-    const reloaded = new CurrentFlowStateStore({ directory, definition });
+    const reloaded = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition });
     assert.equal(reloaded.load().confirmationOrder, 3);
     assert.equal(reloaded.apply({ activity: confirmedActivity }).confirmationOrder, 3);
     assert.deepEqual(reloaded.journal.read().map((entry) => entry.type), ["flow_created", "attempt_started", "result_confirmed"]);

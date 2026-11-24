@@ -1,4 +1,5 @@
 import { testTemporaryRoot } from "../../test-environment.js";
+import { hasUnconfirmedExecution } from "../../support/builders/test-temporary-root.js";
 /**
  * tests/acceptance/lib/pipeline.js
  *
@@ -9,7 +10,6 @@ import { testTemporaryRoot } from "../../test-environment.js";
 
 import fs from "fs";
 import path from "path";
-import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
 import { validate, loadJsonFile } from "../../../src/lib/config.js";
 import { Agent } from "../../../src/lib/agent.js";
@@ -47,20 +47,25 @@ export function copyFixtureInto(fixtureDir, dest, configOverrides) {
  *
  * @param {string} fixtureDir - Absolute path to fixture
  * @param {Object} [configOverrides] - Fields to merge into config.json
- * @returns {string} Absolute path to tmp dir
+ * @returns {SeedWorkRoot} Caller-owned fixture root
  */
 export function copyFixture(fixtureDir, configOverrides) {
   const workRoot = new SeedWorkRoot(fixtureDir, { prefix: "sennel-acceptance-" });
-  if (configOverrides) {
-    const configPath = path.join(workRoot.root, ".sennel", "config.json");
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    Object.assign(config, configOverrides);
-    if (configOverrides.agent === null) delete config.agent;
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  try {
+    if (configOverrides) {
+      const configPath = path.join(workRoot.root, ".sennel", "config.json");
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      Object.assign(config, configOverrides);
+      if (configOverrides.agent === null) delete config.agent;
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    }
+    fs.mkdirSync(path.join(workRoot.root, ".sennel", "output"), { recursive: true });
+    fs.mkdirSync(path.join(workRoot.root, "docs"), { recursive: true });
+    return workRoot;
+  } catch (error) {
+    workRoot.cleanup();
+    throw error;
   }
-  fs.mkdirSync(path.join(workRoot.root, ".sennel", "output"), { recursive: true });
-  fs.mkdirSync(path.join(workRoot.root, "docs"), { recursive: true });
-  return workRoot.root;
 }
 
 /**
@@ -154,6 +159,7 @@ export async function runPipeline(tmp, { agent = null } = {}) {
       }));
     } catch (e) {
       steps.push(e.stepResult);
+      if (hasUnconfirmedExecution(e)) throw e;
       console.error(`[acceptance] enrich warning: continuing without enrichment`);
     }
   } else {
@@ -172,6 +178,7 @@ export async function runPipeline(tmp, { agent = null } = {}) {
       }));
     } catch (e) {
       steps.push(e.stepResult);
+      if (hasUnconfirmedExecution(e)) throw e;
       if (e.stepResult.status !== "agent-error") throw e;
       console.error(`[acceptance] text warning: agent-infra error, continuing`);
     }
@@ -196,5 +203,3 @@ function copyDirSync(src, dest) {
     }
   }
 }
-
-export { removeTmpDir };

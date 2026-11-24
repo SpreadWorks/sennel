@@ -20,19 +20,37 @@ that Node runs at most one test file at a time inside the current suite;
 does not run the unit, integration, E2E, acceptance, or agent suite processes
 in parallel. Those suite processes run in that order.
 
-Before executing a selected suite, the runner checks `/dev/shm`. When it is a
-writable Linux tmpfs with at least 1 GiB available, the runner creates a unique
-`sennel-test-*` root there and exports it as `TMPDIR` to every suite process.
-Otherwise it creates the same scoped root under the system temporary directory.
-The selected storage and exact root are printed before execution. The complete
-root is removed after a pass, a test failure, or SIGHUP/SIGINT/SIGTERM, so an
-individual fixture cleanup omission does not accumulate across runner calls.
-SIGKILL and host power loss cannot run process cleanup; tmpfs contents disappear
-when the tmpfs is unmounted or the host restarts.
+Before executing a selected suite, the runner creates a unique `sennel-test-*`
+root under the selected canonical project's `.tmp/tests/`. Child suite processes
+borrow that explicitly selected root through `SENNEL_TEST_TEMP_ROOT`; fixture
+builders receive its path directly. The runner scopes `TMPDIR`, `TMP`, and `TEMP`
+to the same path so Node's platform-specific temporary-directory lookup is
+consistent, and restores the caller's environment after the run. A temporary
+path's spelling or filesystem type never grants ownership.
 
-## Reorganisation measurements
+The runner prints the selected root before execution. Its owner removes it after
+normal completion or a test failure; borrowers never remove another process's
+root. Signal and exit handlers provide best-effort cleanup. Forced termination,
+OS crashes, and power loss may leave owned scratch behind; these paths have no
+tmpfs or restart-cleanup guarantee. Fixtures must still clean up their own roots.
 
-| Measurement | Before | Current recorded observation |
+The physical cross-volume acceptance test additionally requires
+`SENNEL_TEST_SECOND_VOLUME_ROOT` to name a writable directory on another actual
+volume. Set it in the test process environment and run
+`node --import ./src/sennel.js --test tests/integration/lib/portable-volume.test.js`.
+The test mints and removes its own child there and rejects a same-volume fixture.
+Without that explicit prerequisite it reports a skip, which is not cross-volume
+or cross-platform acceptance evidence. Execute the same tests on real Linux,
+macOS and Windows with Node18.19.0 and supported current; lexical drive/UNC tests
+and OS mocks do not fill an unexecuted matrix cell.
+
+`tests/integration/lib/portable-rename-denial.test.js` exercises an actual denied
+rename and failed stage cleanup with a non-root POSIX process. Windows requires
+an actual ACL denial fixture; a skip there is not Windows acceptance evidence.
+
+## Historical reorganisation measurements
+
+| Measurement | Before | Historical recorded observation |
 | --- | ---: | ---: |
 | Product test roots | `unit`, `e2e`, `ci`, `agent` | `unit`, `integration`, `e2e`, `acceptance`, `agent` |
 | Deterministic command | `node tests/run.js` | `npm test` (agent excluded) |
@@ -51,7 +69,7 @@ stored in `.tmp/full-j{1,2}-r1-final.{log,time}`,
 The optimized full-run evidence is
 `.tmp/final-full-optimized-default.{log,time}`. Its `TMPDIR` was an in-memory
 filesystem because the host root filesystem had only 79 MB free. It therefore
-proves the current result and absolute wall time in that environment, but it
+records that historical result and absolute wall time in that environment, but it
 is not a like-for-like storage benchmark against the earlier 4,014.966 s
 disk-backed run.
 The 331.8 s / 198.9 s values copied into the planning issue had no associated
@@ -64,7 +82,11 @@ run also failed 18 tests under resource pressure (process-owned lock writes and
 rather than treating 4 as a performance target. The JSON manifest remains the
 authoritative exact membership record.
 
-## Flow runtime hot-path measurement
+## Historical Flow runtime hot-path measurement
+
+This section records the earlier reorganisation and optimization revision.
+Its implementation observations and test counts are historical evidence;
+current filesystem guarantees and validation results require current checks.
 
 The reorganisation itself was checked against the base branch with the same
 four canonical Flow runtime cases: base was 44.394 s and the reorganised branch

@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
+import { PromptBatchExecutionIncompleteFailure } from "../../../src/lib/prompt-batching.js";
+import { readArtifactWorkerRequestSnapshotFromView } from "../../../src/flow/lib/artifact-worker-execution-recovery.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { Container, container as runtimeContainer } from "../../../src/lib/container.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
@@ -44,6 +47,7 @@ import { draftWorkerStepRegistration } from "../../../src/flow/engine/compositio
 import { specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
 import {
+  FLOW_DISPATCH_INVOCATION_ID_ENV,
   FlowDispatchInvocation,
   FlowDispatchSession,
   FlowDispatchTarget,
@@ -105,12 +109,14 @@ import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
 import { adaptJsonSchemaForProvider } from "../../../src/lib/provider-schema.js";
 import {
+  WORKER_ARTIFACT_HANDOFF_REQUEST_ENV,
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactMutationAuthoritySnapshot,
   WorkerArtifactWorkerInstructions,
   WorkerArtifactHandoffRequest,
   SourceMutationManifest,
+  SourceMutationBaseline,
   SourceHandoffSettlement,
   SourceRepairEffect,
   SourceTriageEffect,
@@ -170,6 +176,15 @@ import {
 
 const ACTION_DIGEST = "a".repeat(64);
 const SOURCE_REQUEST_LIFECYCLES = new WeakMap();
+
+function capturedMutationManifest(t, attempt, paths) {
+  const root = createTmpDir("source-mutation-binding-");
+  t.after(() => removeTmpDir(root));
+  for (const relativePath of paths) fs.writeFileSync(path.join(root, relativePath), "before");
+  const baseline = SourceMutationBaseline.capture({ root, attempt });
+  for (const relativePath of paths) fs.writeFileSync(path.join(root, relativePath), "after");
+  return SourceMutationManifest.capture({ baseline });
+}
 
 function handoffAgentOptions({ executionRoot }) {
   return {
@@ -925,6 +940,19 @@ function specRepairTextEditPayload(request, {
   };
 }
 
+function assertClaimedHandoffRetained(value, request, before) {
+  const manager = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+    inWorktree: value.executionRoot !== value.mainRoot, specId: value.specId });
+  before.assertUnchanged(manager, value.specId, "cleanup-only recovery of claimed execution");
+  request.executionContract.assertMatches(manager.readStoredExecutionContract({
+    binding: request.executionBinding(), generation: request.executionContract.generation,
+  }));
+  const snapshot = manager.readCanonicalTransitionView({ specId: value.specId,
+    read: (view) => readArtifactWorkerRequestSnapshotFromView(view, { executionContract: request.executionContract }) });
+  assert.equal(snapshot.id, request.requestSnapshot().id);
+  assert.equal(fs.existsSync(request.directory), true);
+}
+
 function specRepairSnapshot(value) {
   const state = value.flowManager.load(value.specId);
   const spec = value.flowManager.readArtifact({
@@ -982,6 +1010,24 @@ describe("worker artifact handoff", () => {
       assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-review");
     } finally {
       removeTmpDir(value.root);
+    }
+  });
+
+  it("projects readonly Git metadata policy into source and artifact worker environments", () => {
+    for (const stepId of ["draft", "implement"]) {
+      const value = fixture(stepId, { worktree: false, specRecord: validSpec() });
+      try {
+        const request = WorkerArtifactHandoffRequest.create({ mainRoot: value.mainRoot, executionRoot: value.executionRoot,
+          state: value.flowManager.loadReadOnly(value.specId), invocation: value.invocation, flowManager: value.flowManager });
+        const environment = request.executionEnvironment();
+        assert.equal(request.policy.kind, stepId === "implement" ? "source" : "artifact");
+        assert.equal(environment.GIT_OPTIONAL_LOCKS, "0");
+        assert.equal(environment.GIT_CEILING_DIRECTORIES, path.dirname(value.executionRoot));
+        assert.equal(environment.SENNEL_FLOW_HANDOFF_REQUEST, request.requestPath);
+        assert.equal(environment.GIT_CONFIG_PARAMETERS, "'diff.autoRefreshIndex=false'");
+        assert.deepEqual(Object.keys(environment).sort(), ["GIT_CEILING_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_OPTIONAL_LOCKS", "SENNEL_FLOW_HANDOFF_REQUEST"],
+          "the worker receives a small metadata policy overlay");
+      } finally { removeTmpDir(value.mainRoot); }
     }
   });
 
@@ -1227,16 +1273,21 @@ describe("worker artifact handoff", () => {
   });
 
   for (const tamperedFile of ["request", "action"]) {
-    it(`rejects a tampered ${tamperedFile} file before the dispatcher starts its worker`, async () => {
+    it(`rejects a tampered ${tamperedFile} file before the dispatcher starts its worker`, async (t) => {
       const value = fixture("draft");
       try {
         let calls = 0;
         const coordinator = new WorkerArtifactHandoffCoordinator();
         const createRequest = coordinator.createRequest.bind(coordinator);
+        let filePath = null;
+        const rename = fs.renameSync;
+        t.mock.method(fs, "renameSync", (source, destination) => {
+          rename(source, destination);
+          if (destination === filePath) fs.writeFileSync(filePath, JSON.stringify({ tampered: true }));
+        });
         coordinator.createRequest = (input) => {
           const request = createRequest(input);
-          const filePath = tamperedFile === "request" ? request.requestPath : request.actionRequestPath;
-          fs.writeFileSync(filePath, JSON.stringify({ tampered: true }));
+          filePath = tamperedFile === "request" ? request.requestPath : request.actionRequestPath;
           return request;
         };
         const dispatcher = new RunDispatchCommand({
@@ -1331,8 +1382,8 @@ describe("worker artifact handoff", () => {
       request.payloadPath("draft.json"),
       json(draftDocument("sealed without ambient Flow context")),
     );
-    const previousRequestPath = process.env.SENNEL_FLOW_HANDOFF_REQUEST;
-    const previousInvocationId = process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
+    const previousRequestPath = process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+    const previousInvocationId = process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
     const output = [];
     let contextBuilds = 0;
     let exitCode = null;
@@ -1346,9 +1397,9 @@ describe("worker artifact handoff", () => {
       loadReadOnly() { throw new Error("seal-handoff must not read Flow state"); },
       artifactCatalog() { throw new Error("seal-handoff must not read the artifact catalog"); },
     });
-    process.env.SENNEL_FLOW_HANDOFF_REQUEST = request.requestPath;
-    process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = request.dispatchInvocationId;
-    try {
+    const sealThroughDispatcher = async () => {
+      output.length = 0;
+      exitCode = null;
       await dispatch({
         container,
         entry: flowCommands.run["seal-handoff"],
@@ -1363,8 +1414,38 @@ describe("worker artifact handoff", () => {
           throw new Error("seal-handoff must not build ambient Flow context");
         },
       });
+      return JSON.parse(output.join(""));
+    };
+    try {
+      const beforeSeal = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath, request.payloadPath("draft.json")]);
+      for (const refusal of [
+        { name: "missing request path", requestPath: null, invocationId: request.dispatchInvocationId,
+          code: "FLOW_ARTIFACT_HANDOFF_INVALID", classification: "invalid" },
+        { name: "missing invocation id", requestPath: request.requestPath, invocationId: null,
+          code: "FLOW_ARTIFACT_HANDOFF_INVALID", classification: "invalid" },
+        { name: "another invocation id", requestPath: request.requestPath, invocationId: `${request.dispatchInvocationId}-other`,
+          code: "FLOW_ARTIFACT_HANDOFF_STALE", classification: "stale" },
+      ]) {
+        if (refusal.requestPath === null) delete process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+        else process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = refusal.requestPath;
+        if (refusal.invocationId === null) delete process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
+        else process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = refusal.invocationId;
 
-      const envelope = JSON.parse(output.join(""));
+        const envelope = await sealThroughDispatcher();
+        assert.equal(envelope.ok, false, refusal.name);
+        assert.equal(exitCode, 1, refusal.name);
+        assert.deepEqual(envelope.errors.map(({ code }) => code), [refusal.code], refusal.name);
+        assert.equal(envelope.data.classification, refusal.classification, refusal.name);
+        assert.equal(envelope.data.retryBudgetConsumed, false, refusal.name);
+        assert.equal(contextBuilds, 0, refusal.name);
+        assert.equal(fs.existsSync(request.submissionPath), false, refusal.name);
+        beforeSeal.assertUnchanged(value.flowManager, value.specId, refusal.name);
+      }
+
+      process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = request.requestPath;
+      process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = request.dispatchInvocationId;
+      const envelope = await sealThroughDispatcher();
       assert.equal(envelope.ok, true);
       assert.equal(exitCode, 0);
       assert.equal(contextBuilds, 0);
@@ -1372,10 +1453,10 @@ describe("worker artifact handoff", () => {
       assert.equal(envelope.data.handoffPath, request.submissionPath);
       assert.equal(fs.existsSync(path.join(value.executionRoot, ".tmp")), false);
     } finally {
-      if (previousRequestPath === undefined) delete process.env.SENNEL_FLOW_HANDOFF_REQUEST;
-      else process.env.SENNEL_FLOW_HANDOFF_REQUEST = previousRequestPath;
-      if (previousInvocationId === undefined) delete process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
-      else process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = previousInvocationId;
+      if (previousRequestPath === undefined) delete process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+      else process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = previousRequestPath;
+      if (previousInvocationId === undefined) delete process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
+      else process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = previousInvocationId;
       removeTmpDir(value.mainRoot);
     }
   });
@@ -1490,7 +1571,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("recovers clean tracked before state from Git index and rejects source changes after manifest generation", () => {
+  it("captures clean tracked raw before-state and rejects source changes after manifest generation", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1512,7 +1593,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("classifies a clean tracked content edit and chmod from normalized Git index modes", () => {
+  it("classifies tracked content and respects the effective Git filemode policy", () => {
     const contentValue = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(contentValue);
@@ -1539,7 +1620,7 @@ describe("worker artifact handoff", () => {
       });
       fs.chmodSync(product, 0o755);
       const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "mode");
+      assert.deepEqual(manifest.mutations, []);
     } finally {
       removeTmpDir(modeValue.mainRoot);
     }
@@ -1610,7 +1691,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("preserves Git-invisible permission bits while rolling back tracked content", () => {
+  it("publishes Git-produced metadata while rolling back tracked content", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1628,13 +1709,13 @@ describe("worker artifact handoff", () => {
       authority.rollbackRejectedSourceMutation();
 
       assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
-      assert.equal(fs.statSync(product).mode & 0o777, 0o600);
+      assert.equal(execFileSync("git", ["diff", "--raw", "--", "product.js"], { cwd: value.mainRoot, encoding: "utf8" }), "");
     } finally {
       removeTmpDir(value.mainRoot);
     }
   });
 
-  it("preserves 0755 to 0700 permission narrowing while rolling back tracked content", () => {
+  it("publishes the Git-produced executable representation while rolling back content", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1654,13 +1735,13 @@ describe("worker artifact handoff", () => {
       authority.rollbackRejectedSourceMutation();
 
       assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
-      assert.equal(fs.statSync(product).mode & 0o777, 0o700);
+      assert.equal(execFileSync("git", ["diff", "--raw", "--", "product.js"], { cwd: value.mainRoot, encoding: "utf8" }), "");
     } finally {
       removeTmpDir(value.mainRoot);
     }
   });
 
-  it("keeps a large clean tracked tree out of the source request authority", () => {
+  it("captures a bounded clean tracked tree without embedding its raw before-images in the worker request", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1679,17 +1760,19 @@ describe("worker artifact handoff", () => {
       });
       const stored = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
 
-      assert.equal(request.sourceMutationBaseline.snapshot.entries.length, 2);
-      assert.deepEqual(request.sourceMutationBaseline.snapshot.entries.map((entry) => entry.path), [
-        "product.js", "untracked.txt",
-      ]);
+      const capturedPaths = new Set(request.sourceMutationBaseline.snapshot.entries.map((entry) => entry.path));
+      assert.equal(capturedPaths.has("tracked-fixture/00000.txt"), true);
+      assert.equal(capturedPaths.has("tracked-fixture/18762.txt"), true);
+      assert.equal(capturedPaths.has("product.js"), true);
+      assert.equal(capturedPaths.has("untracked.txt"), true);
+      assert.ok(capturedPaths.size >= 18_765);
       assert.equal(Object.hasOwn(request.sourceMutationBaseline.snapshot.toJSON(), "modeEntries"), false);
       assert.equal(Object.hasOwn(stored, "sourceMutationBaseline"), false);
       assert.equal(Object.hasOwn(stored, "sourceHandoffCheckpoint"), false);
       assert.equal(stored.sourceMutationBaselineDigest, request.sourceMutationBaseline.digest);
       assert.equal(stored.sourceHandoffCheckpointDigest, request.sourceHandoffCheckpoint.digest);
       const requestBytes = fs.statSync(request.requestPath).size;
-      assert.ok(Buffer.byteLength(JSON.stringify(request.sourceMutationBaseline.toJSON())) < 10_000);
+      assert.ok(Buffer.byteLength(JSON.stringify(request.sourceMutationBaseline.toJSON())) < 16 * 1024 * 1024);
       assert.ok(requestBytes < 512 * 1024);
       assert.ok(requestBytes < 8 * 1024 * 1024);
       assert.equal(value.flowManager.readSourceHandoffAuthority({
@@ -1701,41 +1784,21 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("classifies clean tracked symlink target and type changes", () => {
-    const linkValue = fixture("implement", { worktree: false, specRecord: validSpec() });
-    try {
-      initializeGitRepository(linkValue);
-      const link = path.join(linkValue.mainRoot, "link.js");
-      fs.symlinkSync("product.js", link);
-      execFileSync("git", ["add", "link.js"], { cwd: linkValue.mainRoot });
-      execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: linkValue.mainRoot });
-      const request = linkValue.coordinator.createRequest({
-        ctx: linkValue.ctx, state: linkValue.flowManager.load(), invocation: linkValue.invocation,
-      });
-      fs.unlinkSync(link);
-      fs.symlinkSync("other.js", link);
-      const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "content");
-    } finally {
-      removeTmpDir(linkValue.mainRoot);
-    }
-
-    const typeValue = fixture("implement", { worktree: false, specRecord: validSpec() });
-    try {
-      initializeGitRepository(typeValue);
-      const link = path.join(typeValue.mainRoot, "link.js");
-      fs.symlinkSync("product.js", link);
-      execFileSync("git", ["add", "link.js"], { cwd: typeValue.mainRoot });
-      execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: typeValue.mainRoot });
-      const request = typeValue.coordinator.createRequest({
-        ctx: typeValue.ctx, state: typeValue.flowManager.load(), invocation: typeValue.invocation,
-      });
-      fs.unlinkSync(link);
-      fs.writeFileSync(link, "export const replacement = true;\n");
-      const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "type");
-    } finally {
-      removeTmpDir(typeValue.mainRoot);
+  it("rejects native links and logical-link host type mismatches before a worker starts", () => {
+    for (const hostRegular of [false, true]) {
+      const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+      try {
+        initializeGitRepository(value);
+        const link = path.join(value.mainRoot, "link.js");
+        fs.symlinkSync("product.js", link);
+        execFileSync("git", ["add", "link.js"], { cwd: value.mainRoot });
+        execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: value.mainRoot });
+        if (hostRegular) { fs.unlinkSync(link); fs.writeFileSync(link, "product.js"); }
+        assert.throws(() => value.coordinator.createRequest({ ctx: value.ctx,
+          state: value.flowManager.load(), invocation: value.invocation }),
+        /unsupported native type|inconsistent regular host/);
+        assert.equal(fs.lstatSync(link).isFile(), hostRegular);
+      } finally { removeTmpDir(value.mainRoot); }
     }
   });
 
@@ -2013,15 +2076,16 @@ describe("worker artifact handoff", () => {
       const untracked = path.join(value.mainRoot, "preexisting.txt");
       fs.writeFileSync(clean, "export const clean = 1;\n");
       fs.writeFileSync(deleted, "export const deleted = 1;\n");
+      execFileSync("git", ["config", "core.symlinks", "false"], { cwd: value.mainRoot });
       fs.writeFileSync(link, "clean.js");
-      fs.unlinkSync(link);
-      fs.symlinkSync("clean.js", link);
+      const linkOid = execFileSync("git", ["hash-object", "-w", "link.js"], { cwd: value.mainRoot, encoding: "utf8" }).trim();
+      execFileSync("git", ["update-index", "--add", "--cacheinfo", "120000", linkOid, "link.js"], { cwd: value.mainRoot });
       fs.writeFileSync(dirtyDeleted, "export const removed = 1;\n");
       execFileSync("git", ["add", "clean.js", "deleted.js", "link.js", "dirty-deleted.js"], { cwd: value.mainRoot });
       execFileSync("git", ["commit", "-q", "-m", "rollback baseline"], { cwd: value.mainRoot });
       fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 0;\n");
       fs.unlinkSync(link);
-      fs.symlinkSync("product.js", link);
+      fs.writeFileSync(link, "product.js");
       fs.unlinkSync(dirtyDeleted);
       fs.writeFileSync(untracked, "before\n");
 
@@ -2034,9 +2098,9 @@ describe("worker artifact handoff", () => {
       fs.writeFileSync(clean, "export const clean = 2;\n");
       fs.unlinkSync(deleted);
       fs.unlinkSync(link);
-      fs.symlinkSync("clean.js", link);
+      fs.writeFileSync(link, "clean.js");
       fs.writeFileSync(path.join(value.mainRoot, "new-untracked.js"), "export const created = true;\n");
-      fs.symlinkSync("clean.js", path.join(value.mainRoot, "new-link.js"));
+      fs.writeFileSync(path.join(value.mainRoot, "new-link.js"), "clean.js");
       fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 1;\n");
       fs.writeFileSync(untracked, "after\n");
       fs.writeFileSync(dirtyDeleted, "export const removed = 1;\n");
@@ -2045,7 +2109,7 @@ describe("worker artifact handoff", () => {
 
       assert.equal(fs.readFileSync(clean, "utf8"), "export const clean = 1;\n");
       assert.equal(fs.readFileSync(deleted, "utf8"), "export const deleted = 1;\n");
-      assert.equal(fs.readlinkSync(link), "product.js");
+      assert.equal(fs.readFileSync(link, "utf8"), "product.js");
       assert.equal(fs.readFileSync(path.join(value.mainRoot, "product.js"), "utf8"), "export const value = 0;\n");
       assert.equal(fs.readFileSync(untracked, "utf8"), "before\n");
       assert.equal(fs.existsSync(dirtyDeleted), false);
@@ -2506,7 +2570,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("discards a parent-validated artifact handoff after a pre-commit interruption", () => {
+  it("retains a parent-validated claimed artifact handoff after a pre-commit interruption", () => {
     const value = fixture("draft");
     try {
       const request = value.coordinator.createRequest({
@@ -2533,16 +2597,18 @@ describe("worker artifact handoff", () => {
           && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
       );
 
+      const beforeRecovery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath, request.payloadPath("draft.json")]);
       const recovered = value.coordinator.recoverPending({ ctx: value.ctx });
-      assert.equal(recovered.completed, true);
-      assert.equal(recovered.cleanedHandoffs, 1);
+      assert.equal(recovered, null, "cleanup cannot discard a durable claimed execution");
+      assertClaimedHandoffRetained(value, request, beforeRecovery);
       assert.equal(value.flowManager.readArtifact({
         specId: value.specId,
         logicalKey: "draft",
         consumerNodeId: "draft-questions-review",
         optional: true,
       }), null, "recovery must not publish an artifact without a committed parent confirmation");
-      assert.equal(fs.existsSync(request.directory), false);
+      assert.equal(fs.existsSync(request.submissionPath), true);
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -2801,23 +2867,9 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("binds finding repairs to parent-observed mutations across many-to-many path claims", () => {
+  it("binds finding repairs to parent-observed mutations across many-to-many path claims", (t) => {
     const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
-        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
-        path: relativePath,
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: String(index + 1).repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: String(index + 3).repeat(64),
-      })),
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js", "two.js"]);
     const report = (findings) => SourceWorkerEffectReport.fromDocument({
       version: 1,
       stepId: "impl-repair",
@@ -2862,23 +2914,9 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("binds each parsed source Gate repair observation to its exact parent-observed mutation", () => {
+  it("binds each parsed source Gate repair observation to its exact parent-observed mutation", (t) => {
     const attempt = { id: "task-gate-repair-attempt", nodeId: "task-impl", sequence: 2 };
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
-        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
-        path: relativePath,
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: String(index + 1).repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: String(index + 3).repeat(64),
-      })),
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js", "two.js"]);
     const fingerprints = ["a".repeat(64), "c".repeat(64)];
     const document = {
       version: 1,
@@ -2940,11 +2978,7 @@ describe("worker artifact handoff", () => {
         && error.data.missing.includes("two.js") && error.data.unknown.includes("unknown.js"),
       "the parent rejects unknown and unclaimed observed mutations",
     );
-    const unchangedManifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: [],
-    });
+    const unchangedManifest = capturedMutationManifest(t, attempt, []);
     const unchangedEffect = SourceWorkerEffectReport.fromDocument(invalidDocument([{
       ...document.gateRepair.results[0], paths: [],
     }]), "task-impl").bind(
@@ -2974,24 +3008,10 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("rejects incomplete, unknown, and finding-mismatched repair mutation claims", () => {
+  it("rejects incomplete, unknown, and finding-mismatched repair mutation claims", (t) => {
     const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
     const mutationId = SourceMutationManifest.mutationId(attempt, "one.js");
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: [{
-        mutationId,
-        path: "one.js",
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: "1".repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: "2".repeat(64),
-      }],
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js"]);
     const effect = new SourceRepairEffect({
       version: 1,
       appliedFindingKeys: ["F1"],
@@ -3514,7 +3534,6 @@ describe("worker artifact handoff", () => {
         state: value.flowManager.load(),
         invocation: value.invocation,
       });
-      assert.equal(request.version, 5);
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
       fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
       seal(request);
@@ -7021,6 +7040,7 @@ describe("worker artifact handoff", () => {
     const originalAccumulate = value.flowManager.accumulateAgentMetrics;
     let stderr = "";
     let calls = 0;
+    let metricCalls = 0;
     try {
       const action = {
         taskId: null,
@@ -7038,7 +7058,7 @@ describe("worker artifact handoff", () => {
         agent: withScenarioProviderAdmission({
           async call() {
             calls += 1;
-            throw new Error("simulated provider failure");
+            return ""; // A completed external call deliberately omits its required handoff.
           },
         }),
         repositoryFingerprint: () => "stable-fixture",
@@ -7046,6 +7066,7 @@ describe("worker artifact handoff", () => {
       });
       dispatcher.container = {};
       value.flowManager.accumulateAgentMetrics = () => {
+        metricCalls += 1;
         throw new Error("simulated metric persistence failure");
       };
       process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
@@ -7061,6 +7082,7 @@ describe("worker artifact handoff", () => {
 
       assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
       assert.equal(calls, 2);
+      assert.ok(metricCalls > 0, "the actual advisory metric save must reach the injected persistence failure");
       assert.match(stderr, /metric accumulation failed: simulated metric persistence failure/);
       assert.equal(findStepById(value.flowManager.load().steps, "draft").status, "in_progress");
     } finally {
@@ -8463,6 +8485,7 @@ describe("worker artifact handoff", () => {
     });
     try {
       let workerCalls = 0;
+      const providerFailure = new Error("unclassified provider failure");
       const nextAction = new GetNextActionCommand();
       const dispatcher = new RunDispatchCommand({
         nextAction: nextActionRunner(nextAction, () => ({
@@ -8470,23 +8493,31 @@ describe("worker artifact handoff", () => {
         })),
         agent: withScenarioProviderAdmission({ async call() {
           workerCalls += 1;
-          throw new Error("unclassified provider failure");
+          throw providerFailure;
         } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
       dispatcher.container = {};
-      const result = await dispatcher.execute({
+      await assert.rejects(() => dispatcher.execute({
         ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
         expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
         expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
-      });
-      assert.equal(result.ok, false);
+      }), (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.code === "PROMPT_BATCH_EXECUTION_INCOMPLETE" && error.cause === providerFailure);
       assert.equal(workerCalls, 1);
       assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
-      assert.equal((await nextAction.execute({
+      const beforeRecoveryQuery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId);
+      const next = await nextAction.execute({
         ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-      })).directive.kind, "execute_step");
+      });
+      assert.equal(next.directive.kind, "execute_command");
+      assert.equal(next.directive.actionId, "RECOVER_ARTIFACT_EXECUTION");
+      assert.equal(next.directive.command.subcommand, "recover-artifact-execution");
+      assert.deepEqual(next.directive.command.args, ["--expect-run-id", value.flowManager.loadReadOnly(value.specId).runId,
+        "--expect-spec", value.specId, "--expect-no-issue"]);
+      assert.equal(workerCalls, 1, "reading the selected recovery must not retry the unknown provider result");
+      beforeRecoveryQuery.assertUnchanged(value.flowManager, value.specId, "unclassified provider recovery query");
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -8857,9 +8888,6 @@ describe("worker artifact handoff", () => {
         agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             workerCalls += 1;
-            // Provider entry follows the normal claim. Protect everything from
-            // this boundary through publication, including that retained claim.
-            before = specRepairSnapshot(value);
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
             fs.writeFileSync(
@@ -8876,7 +8904,12 @@ describe("worker artifact handoff", () => {
         leaseFactory: () => ({ acquire() {}, release() {} }),
         handoffCoordinator: new WorkerArtifactHandoffCoordinator({
           faultInjector({ phase }) {
-            if (phase === "before-worker-handoff-publication") throw new Error("simulated pre-commit crash");
+            if (phase === "before-worker-handoff-publication") {
+              // The completed Prompt response/accounting is already durable.
+              // Protect the exact semantic publication transaction from here.
+              before = specRepairSnapshot(value);
+              throw new Error("simulated pre-commit crash");
+            }
           },
         }),
       });
@@ -9016,7 +9049,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("discards an unsealed work unit from the current Run during recovery", () => {
+  it("retains an unsealed claimed work unit from the current Run during cleanup-only recovery", () => {
     const value = fixture();
     try {
       const request = value.coordinator.createRequest({
@@ -9025,12 +9058,14 @@ describe("worker artifact handoff", () => {
         invocation: value.invocation,
       });
 
+      const beforeRecovery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath]);
       const recovered = value.coordinator.recoverPending({ ctx: value.ctx });
 
-      assert.equal(recovered.completed, true);
-      assert.equal(recovered.cleanedHandoffs, 1);
-      assert.equal(fs.existsSync(request.directory), false);
-      assert.equal(fs.existsSync(executionHandoffRoot(value)), false);
+      assert.equal(recovered, null, "cleanup cannot discard a durable claim merely because its response is missing");
+      assertClaimedHandoffRetained(value, request, beforeRecovery);
+      assert.equal(fs.existsSync(request.submissionPath), false);
+      assert.equal(fs.existsSync(executionHandoffRoot(value)), true);
       assert.equal(fs.existsSync(path.join(value.executionRoot, ".sennel", "handoffs")), true);
     } finally {
       removeTmpDir(value.mainRoot);

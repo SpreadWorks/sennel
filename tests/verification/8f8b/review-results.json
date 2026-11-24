@@ -1,0 +1,175 @@
+{
+  "board": "8f8b",
+  "baseCommit": "2ca911cb6b19c4e7108d66479f45e2b4a5f9cd54",
+  "productFilesChecked": 939,
+  "productChangedSinceBaseline": [],
+  "testChangesSinceRecordedResults": [],
+  "additionalSelectedScenarios": 8,
+  "additionalNodeTests": 11,
+  "checks": [
+    {
+      "log": ".tmp/8f8b/review-draft-prepare-error.log",
+      "logSha256": "354e9fab6a8d1e06933c054e8320b9f1686425f0008119d9b7c176a3424dafaf",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "releases handoff authority when conditional Draft preparation throws"
+        },
+        {
+          "status": "passed",
+          "name": "Draft dispatcher handoff authority lifecycle"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-gate-applied.log",
+      "logSha256": "6d77dbf6b8a2d7c65844702be80eebce0553251fb9211a803a55f67d772457a1",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "restores the published Gate selection across restart without candidate or provider repetition (applied)"
+        },
+        {
+          "status": "passed",
+          "name": "Draft dispatcher handoff authority lifecycle"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-gate-boundaries.log",
+      "logSha256": "694dd9aad8147271cef3efc34ac1a0f70c871087d2cfec1ba892f867e5fb45e6",
+      "counts": {
+        "tests": 4,
+        "pass": 4,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "worker"
+        },
+        {
+          "status": "passed",
+          "name": "publication"
+        },
+        {
+          "status": "passed",
+          "name": "terminal"
+        },
+        {
+          "status": "passed",
+          "name": "checks fixture-prepared boundary contracts: releases authority once at worker, publication, and terminal exits"
+        },
+        {
+          "status": "passed",
+          "name": "Draft dispatcher handoff authority lifecycle"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-gate-no-progress.log",
+      "logSha256": "9a1c08d983acbdb3df541be3f3b8952bd971f48f62bb2626e8005398d7fbc533",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "restores the published Gate selection across restart without candidate or provider repetition (no-progress)"
+        },
+        {
+          "status": "passed",
+          "name": "Draft dispatcher handoff authority lifecycle"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-nested-fixture-index.log",
+      "logSha256": "d833cce400f7f4321945d08cbeba24491b6b80efeb3bbf8ffa92ad1e4e802593",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "refuses nested worktree refine replay when fixtures/.tmp/input.json index only changes without provider or persistence effects"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-nested-fixture-source.log",
+      "logSha256": "32c0e82b92fe14bcdba29b8a629ea897dd2e6989b3e504acbe21e002f08886f8",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "refuses nested worktree refine replay when fixtures/.tmp/input.json source changes without provider or persistence effects"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-nested-readme-index.log",
+      "logSha256": "f37b7b0163ed4bb09b91243f746386c0e887e07a2edf22c049b8741390d5445f",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "refuses nested worktree refine replay when README.md index only changes without provider or persistence effects"
+        }
+      ]
+    },
+    {
+      "log": ".tmp/8f8b/review-nested-readme-source.log",
+      "logSha256": "5f665307a614497dc46c9b032b6fcf84617fbf484bfaa50d969f13f10d59c597",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "status": "passed",
+          "name": "refuses nested worktree refine replay when README.md source changes without provider or persistence effects"
+        }
+      ]
+    }
+  ]
+}

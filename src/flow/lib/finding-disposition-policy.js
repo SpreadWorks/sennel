@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { runGit } from "../../lib/git-command-execution.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { assertOk } from "../../lib/process.js";
 import { FlowActivity } from "./current-flow-state.js";
 import { FlowArtifactActivityAssociation, FlowArtifactActivityIndex } from "../../lib/flow-version.js";
 import { ReviewEvidence, sha256 } from "./review-observation-values.js";
@@ -424,18 +426,19 @@ export class RepairReference {
     if (findingTime !== null && !Number.isFinite(findingTime)) return false;
     if (this.commit !== null) {
       try {
-        execFileSync("git", ["-C", repositoryRoot, "merge-base", "--is-ancestor", this.commit, "HEAD"], {
-          stdio: "ignore",
-        });
-        const committedAt = Date.parse(execFileSync(
-          "git",
+        const ancestor = runGit(["-C", repositoryRoot, "merge-base", "--is-ancestor", this.commit, "HEAD"], { cwd: repositoryRoot, stdio: "ignore" });
+        assertOk(ancestor, "repair evidence commit is not an ancestor");
+        const shown = runGit(
           ["-C", repositoryRoot, "show", "-s", "--format=%cI", this.commit],
-          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-        ).trim());
+          { cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+        );
+        assertOk(shown, "repair evidence commit time is unavailable");
+        const committedAt = Date.parse(shown.stdout.trim());
         if (Number.isFinite(committedAt) && (findingTime === null || committedAt + 999 >= findingTime)) {
           return true;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         // A file reference may still provide material evidence.
       }
     }

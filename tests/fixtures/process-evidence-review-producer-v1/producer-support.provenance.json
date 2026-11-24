@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "sourcePackageRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+  "sourceManifest": "r168-historical-r152-source-rebinding.json",
+  "sourceManifestSha256": "ae594d5898f74ec5ac6fb344d0f36a934fc47f4b6e40af9f6c857b5fd975170c",
+  "files": [
+    {
+      "key": "tests/support/infrastructure/flow-setup.js",
+      "asset": "flow-setup.js.txt",
+      "bytes": 55443,
+      "digest": "02857d18f26cceb6cb78176bb66b320b474273aff575f92435ba7b931d67deea"
+    },
+    {
+      "key": "tests/support/builders/source-handoff-scenario.js",
+      "asset": "source-handoff-scenario.js.txt",
+      "bytes": 2620,
+      "digest": "bc00161e805c3d1245f4d3c7b2ce3eb5795e44c3824d23c07441f6e7055d2dee"
+    },
+    {
+      "key": "tests/support/infrastructure/git-repo.js",
+      "asset": "git-repo.js.txt",
+      "bytes": 674,
+      "digest": "ba9afdf2b282dbbf6e4bb935a3b5aae94b64e523032480dc6a0bf3d4a50f582e"
+    }
+  ],
+  "scope": "Exact original test helper source only; no runtime state, serializer emulation or current product classes."
+}

@@ -8,7 +8,7 @@ import { dispatchContainer, dispatchFlowCommand, FlowDispatchExecution } from ".
 import { StepResult } from "../../src/flow/engine/step-result.js";
 import { DraftStepSettlementReceipt } from "../../src/flow/definition.js";
 import { CanonicalAcceptanceArtifactStore } from "../../src/flow/lib/canonical-acceptance-artifacts.js";
-import { AcceptanceRepairFindingSet } from "../../src/flow/lib/acceptance-review-artifacts.js";
+import { AcceptanceEvidenceBindings, AcceptanceRepairFindingSet } from "../../src/flow/lib/acceptance-review-artifacts.js";
 import { CanonicalCommandAttemptArtifactHistory } from "../../src/flow/lib/canonical-command-result.js";
 import { assertAcceptancePhaseResult, assertAcceptancePhaseSettlementRoundtrip } from "./assertions/acceptance-phase-result.js";
 
@@ -17,10 +17,13 @@ const acceptanceLeaves = futurePhaseManifests.find((manifest) => manifest.id ===
 export function acceptanceProviderResponse(scenario, { status = "met", disposition = "fixed" } = {}) {
   const evidence = scenario.acceptanceContexts.at(-1);
   assert.ok(evidence, "external Acceptance response needs the actual consumer's canonical input");
+  const bindings = new AcceptanceEvidenceBindings(evidence);
   return {
     requirementJudgments: evidence.requirementIds.map((requirementId) => ({ requirementId, status,
       requestRefs: ["flow.request"], requirementRefs: [`spec.json#${requirementId}`],
-      diffRefs: [], repairRefs: [evidence.evidence.repairEvidence.ref], testRefs: [],
+      diffRefs: status === "notVerifiable" ? [] : [...bindings.diff],
+      repairRefs: [evidence.evidence.repairEvidence.ref],
+      testRefs: status === "notVerifiable" ? [] : bindings.testReferences([requirementId]),
       missingEvidence: status === "notVerifiable" ? ["Independent semantic confirmation is required."] : [],
     })),
     deferredFindingDispositions: evidence.deferredFindings

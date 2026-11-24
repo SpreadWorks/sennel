@@ -6,6 +6,7 @@
  * publication to the active Attempt. Performs no test execution.
  */
 
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { validateTestExecuteResultV2, validateTestResultReview } from "./test-artifacts.js";
@@ -57,8 +58,10 @@ async function executeCanonicalRetro(ctx) {
   }
   const currentFingerprint = buildRepairFingerprint({
     root: ctx.executionRoot || ctx.root,
-    artifactRoot: ctx.root,
+    artifactRoot: flowArtifactRoot(ctx),
     specPath: store.location.relativeSpecFile,
+    state: ctx.flowState,
+    flowManager: ctx.flowManager,
   });
   const staleFacts = readCurrentRetroStaleEvidenceRecoveryFacts({
     flowManager: ctx.flowManager,

@@ -1,0 +1,403 @@
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { test } from "node:test";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { ProcessExecutionRuntime, ProcessExecutionBinding } from "../../../src/lib/process-execution-runtime.js";
+import { FlowProcessExecutionBinding } from "../../../src/flow/lib/flow-process-execution-binding.js";
+import { readFlowProcessStops } from "../../../src/flow/lib/process-runtime-admission.js";
+import { ArtifactWorkerRecoveryAuthorized, ArtifactWorkerRecoveryRequired,
+  ArtifactWorkerExecutionContinuationFacts, DraftWorkerExecutionClaim } from "../../../src/flow/definition.js";
+import { ArtifactWorkerExecutionFrontier } from "../../../src/flow/lib/artifact-worker-recovery-values.js";
+import { executeArtifactWorkerPrompt } from "../../../src/flow/lib/artifact-worker-prompt-execution.js";
+import { PromptExecutionReservationContinuation, PromptProviderProcessIdentity } from "../../../src/lib/prompt-execution-journal.js";
+import { PromptBatchExecutionIncompleteFailure } from "../../../src/lib/prompt-batching.js";
+import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff,
+  DispatchExecutionRepositoryBinding, WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { OriginalArtifactWorkerAuthorization } from "../../../src/flow/lib/original-artifact-worker-authorization.js";
+import { CanonicalPromptReservationReconciliationPublication } from "../../../src/flow/lib/canonical-prompt-execution.js";
+import { FlowExecutionContractRefusal } from "../../../src/flow/lib/flow-execution-contract.js";
+import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
+import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
+import RunRecoverArtifactExecutionCommand from "../../../src/flow/lib/run-recover-artifact-execution.js";
+import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { DraftGateRepairWorkerRequiredResult, DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { DraftConditionalWorkerExecutionBinding, settleDraftStepResult } from "../../../src/flow/definition.js";
+import { FlowDispatchTarget, FlowDispatchSession, FlowDispatchInvocation,
+  UnapprovedFlowDispatchAuthorization } from "../../../src/flow/lib/dispatch-invocation.js";
+import RunDispatchCommand, { dispatchRepositoryFingerprint } from "../../../src/flow/lib/run-dispatch.js";
+import { selectWorkerExecutionAdmission, projectWorkerExecutionAdmission,
+  assertCurrentWorkerExecutionSelection } from "../../../src/flow/lib/worker-execution-admission.js";
+import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
+import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
+import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { testTemporaryRoot } from "../../test-environment.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { dispatchContainer, dispatchFlowCommand } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
+
+function bytesUnder(directory) {
+  const entries = [];
+  const visit = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(current, entry.name);
+      const relative = path.relative(directory, absolute);
+      if (entry.isDirectory()) { entries.push([relative, null]); visit(absolute); }
+      else entries.push([relative, fs.readFileSync(absolute).toString("base64")]);
+    }
+  };
+  visit(directory);
+  return entries;
+}
+
+const retainedRecoveryRoots = new Set();
+
+function assertArtifactContinuation(value, selection, Expected) {
+  const continuation = selection.artifactContinuation;
+  if (!(continuation instanceof Expected)) {
+    retainedRecoveryRoots.add(value.root);
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+  }
+  assert.ok(continuation instanceof Expected, JSON.stringify({
+    root: value.root, expected: Expected.name, actual: continuation?.constructor.name,
+    code: continuation?.code, reason: continuation?.reason, cause: continuation?.cause?.stack,
+  }));
+}
+
+function recoveryRepository(t) {
+  const root = createTmpDir("artifact-worker-recovery-");
+  const runtimes = [];
+  t.after(async () => {
+    try { for (const runtime of runtimes) if (!runtime.closed) await runtime.close(); }
+    catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw error; }
+    if (!retainedRecoveryRoots.has(root)) removeTmpDir(root);
+  });
+  initGitRepo(root);
+  fs.writeFileSync(path.join(root, "README.md"), "Artifact worker recovery fixture\n");
+  commitAll(root, "Create artifact worker recovery fixture");
+  return { root, runtimes };
+}
+
+function boundFixture({ root, runtimes, specId, manager, request, scenario = null }) {
+  const reload = (options = {}) => new FlowManager({ root, mainRoot: root, inWorktree: false, specId, ...options });
+  const context = (flowManager) => ({ root, mainRoot: root, executionRoot: root, specId,
+    flowManager, flowState: flowManager.loadReadOnly(specId) });
+  const binding = (flowManager) => {
+    const state = flowManager.canonicalState(specId);
+    return { runId: state.runId, specId, stepId: request.stepId, nodeId: request.stepId, attempt: state.attempt };
+  };
+  return { root, specId, manager, request, scenario, runtimes, reload, context, binding };
+}
+
+function selectedInvocation({ root, manager, specId, id }) {
+  const ctx = { root, mainRoot: root, executionRoot: root, specId,
+    flowManager: manager, flowState: manager.loadReadOnly(specId) };
+  const stepId = manager.canonicalState(specId).attempt.nodeId;
+  const selected = selectWorkerExecutionAdmission({ ctx, stepId });
+  const binding = FlowTargetBinding.captureContext(ctx);
+  const session = new FlowDispatchSession({ id,
+    target: FlowDispatchTarget.captureContext({ ...ctx, expectBinding: binding.serialize() }) });
+  const action = session.captureAction({ step: stepId, directive: projectWorkerExecutionAdmission(selected).toJSON() },
+    dispatchRepositoryFingerprint(ctx));
+  return new FlowDispatchInvocation({ session, action, authorization: new UnapprovedFlowDispatchAuthorization(action) });
+}
+
+function conditionalFixture(t) {
+  const { root, runtimes } = recoveryRepository(t);
+  const specId = "artifact-worker-recovery";
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  const flow = new CanonicalFlowFixture({ flowManager: manager, specId, runId: "artifact-worker-recovery-run",
+    request: "Retain one conditional worker authorization through a restart.",
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null } }).create().registerActive().activate("draft");
+  manager.confirmCurrentAttempt({ specId, artifactWrites: [{ logicalKey: "draft", mediaType: "application/json",
+    bytes: Buffer.from(JSON.stringify(canonicalDraftDocument({ goal: "Retain the selected behavior", questions: [] }))) }] });
+  flow.activate("draft-gate");
+  const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId }).select({
+    issueLogId: "artifact-worker-recovery-issue", observations: [{ kind: "violation", failureMode: "guardrail-violation",
+      requirementRef: "R-1", where: { file: "draft.json", locator: "goal" },
+      observed: "State the selected behavior precisely.", severity: "blocking", refs: ["R-1"] }],
+  });
+  // The shared scenario predates atomic canonical request snapshots. Exercise the
+  // current production checkpoint/claim APIs with the same selected Gate facts.
+  const invocation = selectedInvocation({ root, manager, specId, id: `draft-gate-repair-${manager.canonicalState(specId).attempt.id}` });
+  let request = scenario.coordinator.createRequest({ ctx: scenario.ctx, state: manager.loadReadOnly(specId), invocation,
+    deferPreparation: true, deferConditionalAdmission: true });
+  request = request.withDispatchRepositoryBinding(DispatchExecutionRepositoryBinding.capture({
+    ctx: { ...scenario.ctx, flowState: manager.loadReadOnly(specId) }, request, invocation, fingerprint: dispatchRepositoryFingerprint }));
+  const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-gate-repair" });
+  const stepResult = new DraftGateRepairWorkerRequiredResult();
+  const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+  const executionBinding = new DraftConditionalWorkerExecutionBinding({ executionGeneration: 0,
+    inputDigest: request.inputDigest, inputRevision: request.inputRevision, contentDigest: request.checkpointContentDigest() });
+  manager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding });
+  manager.claimDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+    executionContract: request.executionContract, requestSnapshot: request.requestSnapshot(),
+    executionClaim: new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
+      generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest }) });
+  scenario.coordinator.admitConditionalDraftRequest({ ctx: scenario.ctx, state: manager.loadReadOnly(specId), request });
+  request.prepare();
+  scenario.request = request;
+  return boundFixture({ root, runtimes, specId, manager, request, scenario });
+}
+
+function originalFixture(t) {
+  const { root, runtimes } = recoveryRepository(t);
+  const specId = "original-artifact-reservation";
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  new CanonicalFlowFixture({ flowManager: manager, specId, runId: "original-artifact-reservation-run",
+    request: "Resume only the original unstarted worker reservation.",
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null } }).create().registerActive().activate("draft");
+  const request = new WorkerArtifactHandoffCoordinator().createRequest({ ctx: { root, mainRoot: root,
+    executionRoot: root, flowManager: manager, specId }, state: manager.loadReadOnly(specId),
+    invocation: selectedInvocation({ root, manager, specId, id: "original-artifact-dispatch" }) });
+  return boundFixture({ root, runtimes, specId, manager, request });
+}
+
+function workerProcessBinding(request) {
+  return new ProcessExecutionBinding({ ...FlowProcessExecutionBinding.forContract(request.executionContract).toJSON(),
+    dispatchInvocationId: request.dispatchInvocationId, requestDigest: request.requestDigest });
+}
+
+async function interruptOriginalReservation(value, manager, { boundary, ordinal, reservationContinuation = null }) {
+  const { request, root, specId } = value;
+  const processBinding = workerProcessBinding(request);
+  const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root,
+    runId: request.runId, specId, binding: processBinding });
+  value.runtimes.push(runtime);
+  const failure = new Error(`Interrupted original worker ${boundary} ${ordinal}`);
+  try {
+    await assert.rejects(runtime.enter(() => executeArtifactWorkerPrompt({ flowManager: manager, request,
+      prompt: "Publish the selected Draft behavior", reservationContinuation,
+      callOptions: { commandId: "flow.worker", processExecutionBinding: processBinding },
+      agent: { async call(_prompt, options) {
+        options.providerCallAdmission.claim();
+        const context = { attempt: 1, maxAttempts: 1, providerKey: "test", profileKey: "original",
+          attemptId: `original-provider-${ordinal}`, logicalInvocationId: `original-logical-${ordinal}` };
+        await options.providerCallAdmission.beforeProviderAttempt(context);
+        const invocation = { kind: "provider", providerAttemptId: context.attemptId, logicalInvocationId: context.logicalInvocationId,
+          providerAttemptContext: context, promptProcessIdentity: options.providerCallAdmission.processExecutionIdentity.toJSON() };
+        if (boundary === "before-permit") {
+          const call = await runtime.reserveCall({ binding: processBinding, invocation: { kind: "provider",
+            providerAttemptId: context.attemptId, logicalInvocationId: context.logicalInvocationId,
+            providerAttemptContext: context, promptProcessIdentity: options.providerCallAdmission.processExecutionIdentity.toJSON() } });
+          await runtime.revokeCall(call);
+        } else if (boundary === "after-permit") {
+          await executeManagedProcess(process.execPath, ["-e", "process.stdout.write('worker started without a submission')"], {
+            ...invocation, processExecutionBinding: processBinding, timeoutMs: 60000, maxBuffer: 1024 });
+        }
+        throw failure;
+      } },
+    })), (error) => error instanceof PromptBatchExecutionIncompleteFailure && error.cause === failure);
+  } finally { await runtime.close(); }
+}
+
+async function completeOriginalReservation(value, manager, reservationContinuation, payload) {
+  const { request, root, specId } = value;
+  const processBinding = workerProcessBinding(request);
+  const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root,
+    runId: request.runId, specId, binding: processBinding });
+  value.runtimes.push(runtime);
+  try {
+    return await runtime.enter(() => executeArtifactWorkerPrompt({ flowManager: manager, request,
+      prompt: "Publish the selected Draft behavior", reservationContinuation,
+      callOptions: { commandId: "flow.worker", processExecutionBinding: processBinding },
+      agent: { async call(_prompt, options) {
+        const admission = options.providerCallAdmission;
+        admission.claim();
+        const context = { attempt: 1, maxAttempts: 1, providerKey: "test", profileKey: "original",
+          attemptId: "completed-provider-attempt", logicalInvocationId: "completed-logical-invocation" };
+        await admission.beforeProviderAttempt(context);
+        fs.writeFileSync(request.payloadPath("draft-gate-repair.json"), JSON.stringify(payload));
+        sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+        const result = await executeManagedProcess(process.execPath, ["-e", "process.stdout.write('sealed worker result')"], {
+          processExecutionBinding: processBinding, kind: "provider", timeoutMs: 60000, maxBuffer: 1024,
+          providerAttemptId: context.attemptId, logicalInvocationId: context.logicalInvocationId,
+          providerAttemptContext: context, promptProcessIdentity: admission.processExecutionIdentity.toJSON(),
+          onProcessExecutionStop: (receipt) => admission.observeProcessStop(receipt, context) });
+        admission.settle();
+        return result.stdout;
+      } },
+    }));
+  } finally { await runtime.close(); }
+}
+
+async function closeStoppedRuntime(value) {
+  await interruptOriginalReservation(value, value.manager, { boundary: "after-permit", ordinal: "stopped-source" });
+  return ProcessExecutionRuntime.inspect({ mainRoot: value.root, executionRoot: value.root });
+}
+
+async function recoverArtifact(value, manager) {
+  const ctx = value.context(manager);
+  const envelope = await new RunRecoverArtifactExecutionCommand().execute({ ...ctx,
+    expectBinding: FlowTargetBinding.captureContext(ctx).serialize() });
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  const frontier = manager.artifactWorkerExecutionState({ binding: value.binding(manager) });
+  return frontier.recovery ?? new OriginalArtifactWorkerAuthorization({
+    requestSnapshot: manager.readArtifactWorkerRequest({ executionContract: frontier.executionContract }) });
+}
+
+async function guardedRecovery(value, manager) {
+  const selection = selectWorkerExecutionAdmission({ ctx: value.context(manager), stepId: value.request.stepId });
+  assertArtifactContinuation(value, selection, ArtifactWorkerRecoveryRequired);
+  const binding = FlowTargetBinding.captureContext(value.context(manager));
+  const directive = projectWorkerExecutionAdmission(selection, { binding });
+  assert.equal(directive.command.subcommand, "recover-artifact-execution");
+  const execution = await dispatchFlowCommand({ container: dispatchContainer({ root: value.root, flowManager: manager,
+    agent: { call: () => assert.fail("the recovery command cannot call a provider") } }),
+    group: "run", name: "recover-artifact-execution", argv: [...directive.command.args] });
+  assert.equal(execution.exitCode, 0, execution.stderr || execution.stdout);
+  assert.equal(execution.envelope.ok, true, execution.stdout);
+  return execution.envelope.data;
+}
+
+function canonicalSnapshot(value, manager) {
+  return { state: manager.canonicalState(value.specId).toJSON(),
+    activities: JSON.parse(JSON.stringify(manager.activityLedger(value.specId))),
+    catalog: manager.artifactCatalog(value.specId).toJSON(),
+    sourceCapability: bytesUnder(value.request.directory),
+    budget: manager.readStoredPromptExecutionEpisode({ executionContract: value.request.executionContract }).budget };
+}
+
+function claimReplacement(value, manager, receipt) {
+  const coordinator = new WorkerArtifactHandoffCoordinator();
+  const request = coordinator.storedArtifactExecutionRequest({ ctx: value.context(manager),
+    state: manager.loadReadOnly(value.specId), executionContract: receipt.targetContract });
+  const execution = manager.draftStepExecutionState({ binding: value.binding(manager) });
+  const selected = execution.executionIdentity();
+  manager.claimDraftStepExecution({ binding: value.binding(manager), stepResult: selected.stepResult,
+    settlement: selected.settlement, executionBinding: execution.lifecycle.binding, executionContract: request.executionContract,
+    requestSnapshot: request.requestSnapshot(),
+    executionClaim: new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
+      generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest }) });
+  request.prepare();
+  return request;
+}
+
+async function consumeCoverage(t, value, expectedGoal) {
+  const consumer = value.reload();
+  const saved = consumer.readArtifact({ specId: value.specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
+  assert.equal(JSON.parse(saved.bytes).goal, expectedGoal);
+  let reviewed = false;
+  const reviewProcess = installReviewProcessFake((_command, _args, options) => {
+    const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+    assert.equal(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")).goal, expectedGoal);
+    assert.equal(source.revision.digest, saved.descriptor.hash);
+    reviewed = true;
+    const work = ReviewWorkUnit.fromEnvironment(options.env);
+    fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), JSON.stringify({
+      version: 2, phase: "draft-coverage", sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+      generatedAt: "2026-10-06T00:00:00.000Z", verdict: "PASS", summary: "The recovered Draft retains the behavior.",
+      blockingFindings: [], advisoryFindings: [], repairTargets: [],
+    }));
+    work.seal();
+    return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
+  });
+  t.after(() => reviewProcess.mock.restore());
+  const agent = { call: () => assert.fail("Coverage uses its registered external Review process") };
+  for (let index = 0; index < 3 && !reviewed; index++) {
+    const resumed = value.reload();
+    const dispatch = new RunDispatchCommand({ agent, maxDispatches: 1 });
+    dispatch.container = dispatchContainer({ root: value.root, flowManager: resumed, agent });
+    const review = await dispatch.execute({ ...value.context(resumed),
+      expectBinding: FlowTargetBinding.captureContext(value.context(resumed)).serialize(),
+      _envelopeType: "run", _envelopeKey: "dispatch" });
+    assert.equal(review.errors[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(review));
+  }
+  assert.equal(reviewed, true);
+  const consumedReview = value.reload().readArtifact({ specId: value.specId, logicalKey: "draft.coverage.review", consumerNodeId: "draft-coverage-triage" });
+  assert.equal(JSON.parse(consumedReview.bytes).attempts.at(-1).artifact.payload.sourceDraftRevision.digest, saved.descriptor.hash);
+  assert.equal(value.reload().canonicalState(value.specId).nextAction().nodeId, "draft-gate",
+    "the clean Coverage review skips empty triage and repair work through Definition");
+}
+
+
+
+function exportConsumedCanonical(value, manager, contract, consumed) {
+  const inventory = ProcessExecutionRuntime.inspect({ mainRoot: value.root, executionRoot: value.root });
+  assert.equal(inventory.version, 9);
+  assert.equal(inventory.slot, null);
+  for (const execution of inventory.executions) assert.equal(execution.status, "closed");
+  const episode = manager.readStoredPromptExecutionEpisode({ executionContract: contract });
+  const location = manager.specLocation(value.specId);
+  const descriptors = manager.readCanonicalTransitionView({ specId: value.specId, read: view => [...view.catalog.artifacts] });
+  const exportRoot = fileURLToPath(new URL(`../../../../canonical-export-${process.version}/`, import.meta.url));
+  fs.mkdirSync(exportRoot);
+  const names = [...new Set(["artifact-catalog.json", "activities.jsonl", ...descriptors.map(entry => entry.relativePath)])].sort();
+  const records = [];
+  for (const name of names) {
+    const bytes = fs.readFileSync(location.resolve(name));
+    const relativePath = path.posix.join(location.relativeDirectory, name);
+    const target = path.join(exportRoot, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, bytes, { flag: "wx" });
+    records.push({ relativePath, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
+  const provenance = { fixtureKind: "authentic-previous-two-ancestor-reservation-canonical-data",
+    specId: value.specId, producerNode: process.version, sourceRuntimeRecordVersion: inventory.version,
+    sourceFlowSchemaRevision: manager.canonicalState(value.specId).schemaRevision,
+    executionContract: contract.toJSON(), savedBudget: episode.budget,
+    savedScopes: episode.scopes.map(scope => scope.toJSON()),
+    continuation: consumed.toJSON(), continuationId: consumed.id,
+    originalOwnerReleased: true, normalCoordinatorClosed: true, notPhysicalRuntimeOwnershipFixture: true,
+    artifactLogicalKeys: [...new Set(descriptors.map(entry => entry.logicalKey))].sort(), records };
+  assert.equal(consumed.pending, false);
+  fs.writeFileSync(path.join(exportRoot, "provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`, { flag: "wx" });
+}
+test("previous producer exports two consumed ancestor generations after repeated unused-reservation recovery", async (t) => {
+  const value = conditionalFixture(t);
+  const { request, specId, scenario } = value;
+  const sourceOwner = value.manager.draftStepExecutionState({ binding: value.binding(value.manager) });
+  const sourceClaim = sourceOwner.lifecycle.claim.toJSON();
+  const sourceState = value.manager.canonicalState(specId);
+  await interruptOriginalReservation(value, value.manager, { boundary: "before-reservation", ordinal: "first" });
+  const first = value.reload();
+  const firstResponse = await guardedRecovery(value, first);
+  const firstFrontier = value.reload().artifactWorkerExecutionState({ binding: value.binding(first) });
+  const firstMarker = firstFrontier.reservationContinuation;
+  const budget = first.readStoredPromptExecutionEpisode({ executionContract: request.executionContract }).budget;
+  assert.equal(firstResponse.executionGeneration, 0);
+  assert.equal(firstMarker.pending, true);
+  assert.equal(firstMarker.history.length, 0);
+
+  const interrupted = value.reload();
+  await interruptOriginalReservation(value, interrupted, { boundary: "before-permit", ordinal: "second", reservationContinuation: firstMarker });
+  const second = value.reload();
+  const consumed = PromptExecutionReservationContinuation.fromJSON(
+    second.readStoredPromptExecutionEpisode({ executionContract: request.executionContract })
+      .scopes[0].batches[0].reservationContinuation);
+  assert.equal(consumed.id, firstMarker.id);
+  assert.equal(consumed.pending, false);
+  let latest = second;
+  let latestConsumed = consumed;
+  for (const [index, ordinal] of ["third", "fourth"].entries()) {
+    await guardedRecovery(value, latest);
+    const recovered = value.reload();
+    const frontier = recovered.artifactWorkerExecutionState({ binding: value.binding(recovered) });
+    const marker = frontier.reservationContinuation;
+    assert.equal(marker.pending, true);
+    assert.equal(marker.history.length, index + 1);
+    assert.deepEqual(marker.previousClaim, latestConsumed.consumedClaim);
+    await interruptOriginalReservation(value, recovered, { boundary: "before-permit", ordinal,
+      reservationContinuation: marker });
+    latest = value.reload();
+    latestConsumed = PromptExecutionReservationContinuation.fromJSON(
+      latest.readStoredPromptExecutionEpisode({ executionContract: request.executionContract })
+        .scopes[0].batches[0].reservationContinuation);
+    assert.equal(latestConsumed.pending, false);
+    assert.equal(latestConsumed.id, marker.id);
+    assert.equal(latestConsumed.history.length, index + 1);
+    assert.deepEqual(latest.readStoredPromptExecutionEpisode({ executionContract: request.executionContract }).budget, budget);
+  }
+  const finalOwner = latest.draftStepExecutionState({ binding: value.binding(latest) });
+  assert.deepEqual(finalOwner.lifecycle.claim.toJSON(), sourceClaim);
+  assert.deepEqual(latest.canonicalState(specId).attempt.toJSON(), sourceState.attempt.toJSON());
+  assert.equal(latestConsumed.history.length, 2);
+  assert.ok(latestConsumed.calls.length > 0, "the latest proof includes actual revoked-before-launch calls");
+  exportConsumedCanonical(value, latest, request.executionContract, latestConsumed);
+});

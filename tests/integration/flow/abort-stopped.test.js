@@ -12,7 +12,6 @@ import { FlowCommandExecutionLease } from "../../../src/flow/lib/flow-command-ex
 import { ReviewExecutionLease } from "../../../src/flow/lib/review-execution-lease.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -145,7 +144,7 @@ test("the abort operation boundary prevents a new direct command from starting",
   } finally { operation.release(); }
 });
 
-test("a prior Review Attempt owner and a stale worker owner both refuse deletion without reclamation", async (t) => {
+test("a prior Review Attempt owner and an exited worker token both refuse deletion without reclamation", async (t) => {
   const f = fixture(t);
   const before = fs.readFileSync(f.ctx.specLocation.flowStateFile);
   const review = new ReviewExecutionLease({ mainRoot: f.root, runId: f.ctx.flowState.runId,
@@ -155,16 +154,19 @@ test("a prior Review Attempt owner and a stale worker owner both refuse deletion
     assert.equal((await new RunAbortCommand().execute(f.ctx)).errors[0].code, "ABORT_EXECUTION_BUSY");
     assertUntouched(f, before);
   } finally { review.release(); }
-  const worker = new FlowHandoffAuthorityLease({ mainRoot: f.root, executionRoot: f.root });
-  worker.lock.processLock.processIdentitySource = new ProcessIdentitySource({ platform: "linux", pid: process.pid,
-    readBootIdentity: () => "previous-boot", readProcessStartFingerprint: () => "441" });
-  worker.acquire();
-  const ownerBytes = fs.readFileSync(worker.lock.lockPath);
-  try {
-    assert.equal((await new RunAbortCommand().execute(f.ctx)).errors[0].code, "ABORT_EXECUTION_BUSY");
+  const leaseModule = new URL("../../../src/lib/flow-handoff-authority-lease.js", import.meta.url).href;
+  const source = `import { FlowHandoffAuthorityLease } from ${JSON.stringify(leaseModule)};
+    new FlowHandoffAuthorityLease({mainRoot:${JSON.stringify(f.root)},executionRoot:${JSON.stringify(f.root)}}).acquire();
+    process.stdout.write('held');`;
+  assert.equal(execFileSync(process.execPath, ["--import", new URL("../../../src/sennel.js", import.meta.url).href,
+    "--input-type=module", "-e", source], { encoding: "utf8" }).trim(), "held");
+  const lockPath = FlowHandoffAuthorityLease.pathFor({ mainRoot: f.root, executionRoot: f.root });
+  const ownerBytes = fs.readFileSync(lockPath);
+  for (const force of [false, true]) {
+    assert.equal((await new RunAbortCommand().execute({ ...f.ctx, force })).errors[0].code, "ABORT_EXECUTION_BUSY");
     assertUntouched(f, before);
-    assert.deepEqual(fs.readFileSync(worker.lock.lockPath), ownerBytes);
-  } finally { worker.release(); }
+    assert.deepEqual(fs.readFileSync(lockPath), ownerBytes);
+  }
 });
 
 test("unknown command ownership and malformed history refuse before journal or deletion", async (t) => {

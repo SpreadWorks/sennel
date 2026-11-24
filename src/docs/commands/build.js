@@ -7,6 +7,7 @@
  * (`cmd.run(container, input)`).
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import { stat, readdir } from "node:fs/promises";
 import path from "path";
 import { pathToFileURL } from "node:url";
@@ -28,7 +29,7 @@ import DocsReadmeCommand from "./readme.js";
 import DocsAgentsCommand from "./agents.js";
 import DocsTranslateCommand from "./translate.js";
 
-const VALID_BUILD_FLAGS = new Set(["-h", "--help", "--verbose", "--dry-run", "--force", "--regenerate", "--yes"]);
+const VALID_BUILD_FLAGS = new Set(["-h", "--help", ...docsCommands.build.args.flags]);
 
 async function dirExists(p) {
   try {

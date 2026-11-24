@@ -1,7 +1,5 @@
 import { performance } from "node:perf_hooks";
-import crypto from "node:crypto";
-import { ProcessIdentity } from "./process-identity.js";
-import { ProcessLock } from "./process-lock.js";
+import { ProcessLock, ProcessLockPublicationPendingError } from "./process-lock.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERVAL_MS = 50;
@@ -63,6 +61,24 @@ export class FileLockTimeoutError extends FileLockTerminalError {
   }
 }
 
+/** Lock construction and validation happen only when this acquisition is next. */
+export class FileLockAcquisition {
+  #createLock;
+  #onAcquired;
+  constructor(createLock, onAcquired = () => {}) {
+    if (typeof createLock !== "function" || typeof onAcquired !== "function") throw new TypeError("File lock acquisition requires factory and validation functions");
+    this.#createLock = createLock;
+    this.#onAcquired = onAcquired;
+    Object.freeze(this);
+  }
+  createLock() {
+    const lock = this.#createLock();
+    if (!(lock instanceof FileLock)) throw new TypeError("File lock acquisition factory must return a FileLock");
+    return lock;
+  }
+  onAcquired(lock) { return this.#onAcquired(lock); }
+}
+
 export class FileLock {
   constructor({ waitPolicy = new FileLockWaitPolicy(), ...lockOptions } = {}) {
     if (!(waitPolicy instanceof FileLockWaitPolicy)) {
@@ -75,7 +91,8 @@ export class FileLock {
   get directoryAuthority() { return this.processLock.directoryAuthority; }
   get directory() { return this.processLock.directory; }
   get lockPath() { return this.processLock.lockPath; }
-  get processIdentity() { return this.processLock.processIdentity; }
+  get ownerToken() { return this.processLock.ownerToken; }
+  get ownerSession() { return this.processLock.ownerSession; }
   get lockIdentity() { return this.processLock.lockIdentity; }
 
   acquire() {
@@ -104,8 +121,8 @@ export class FileLock {
     return this.processLock.inspect();
   }
 
-  conflict(owner, assessment) {
-    return this.processLock.conflict(owner, assessment);
+  conflict(owner) {
+    return this.processLock.conflict(owner);
   }
 
   runExclusive(body) {
@@ -120,6 +137,30 @@ export class FileLock {
     }
     this.#releaseAfter(bodyError);
     if (bodyError) throw bodyError;
+    return result;
+  }
+
+  /** Synchronous lazy acquisition with complete reverse-order unwinding. */
+  static runExclusiveGroup(acquisitions, body) {
+    if (typeof body !== "function") throw new TypeError("file lock exclusive body must be a function");
+    const acquired = [];
+    let result, failure;
+    let failed = false;
+    try {
+      for (const acquisition of acquisitions) {
+        if (!(acquisition instanceof FileLockAcquisition)) throw new TypeError("File lock group requires typed acquisitions");
+        const lock = acquisition.createLock();
+        lock.acquire();
+        acquired.push(lock);
+        acquisition.onAcquired(lock);
+      }
+      result = body();
+    } catch (error) { failed = true; failure = error; }
+    for (let index = acquired.length - 1; index >= 0; index--) {
+      try { acquired[index].#releaseAfter(failed ? failure : null); }
+      catch (error) { failed = true; failure = error; }
+    }
+    if (failed) throw failure;
     return result;
   }
 
@@ -142,8 +183,8 @@ export class FileLock {
     try {
       return this.processLock.acquire();
     } catch (error) {
-      if (error?.lockStatus !== "live") throw error;
-      if (this.#isHeldByCurrentProcess(error)) throw this.#reentrancy(error);
+      if (error?.lockStatus !== "busy" && !(error instanceof ProcessLockPublicationPendingError)) throw error;
+      if (!(error instanceof ProcessLockPublicationPendingError) && this.#isHeldByCurrentProcess(error)) throw this.#reentrancy(error);
       const waitedMs = elapsedSince(startedAt);
       if (waitedMs >= this.waitPolicy.timeoutMs) throw this.#timeout(error, waitedMs);
       return new FileLockRetry(Math.min(this.waitPolicy.intervalMs, this.waitPolicy.timeoutMs - waitedMs));
@@ -151,9 +192,7 @@ export class FileLock {
   }
 
   #isHeldByCurrentProcess(conflict) {
-    const owner = new ProcessIdentity(conflict.owner?.processIdentity ?? {});
-    const requester = this.processLock.processIdentitySource.createOwner(crypto.randomUUID());
-    return requester.sameBirth(owner);
+    return this.processLock.isOwnerCurrent(conflict.owner);
   }
 
   #reentrancy(conflict) {

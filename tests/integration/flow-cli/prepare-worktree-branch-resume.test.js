@@ -1,16 +1,17 @@
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { it } from "node:test";
 import { PrepareArtifactScenario } from "../../support/prepare-artifact-scenario.js";
-import { dispatchContainer, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { CanonicalFlowArtifactWrite } from "../../../src/flow/lib/current-flow-state.js";
 import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { LockOwnerSession } from "../../../src/lib/process-lock.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
@@ -27,6 +28,7 @@ async function assertDraftConsumesPreparation(scenario, ready) {
     sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
     return "sealed";
   } };
+  withScenarioProviderAdmission(agent);
   const ctx = scenario.context();
   ctx.expectBinding = FlowTargetBinding.capture({ flowState: ctx.flowState,
     mainRoot: scenario.root, authorityRoot: scenario.executionRoot }).serialize();
@@ -60,7 +62,7 @@ function installCountedPreparePlugin(scenario) {
   return { invocationLog, pluginPath };
 }
 
-// Durable branch publication -> dead journal owner -> authenticated public
+// Durable branch publication -> released operation owner -> authenticated public
 // recovery -> mandatory publication -> real Draft consumer. The child changes
 // only the commit-response/read boundary; all saved facts come from production.
 it("worktree retry preserves a committed branch after response and receipt acknowledgement loss", async (t) => {
@@ -70,7 +72,7 @@ it("worktree retry preserves a committed branch after response and receipt ackno
   const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
   const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
   const storeModule = new URL("../../../src/flow/lib/current-flow-state.js", import.meta.url).href;
-  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", [
+  const child = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", [
     `import { FlowManager } from ${JSON.stringify(managerModule)};`,
     `import RunPrepareSpecCommand from ${JSON.stringify(commandModule)};`,
     `import { CurrentFlowVersionStore } from ${JSON.stringify(storeModule)};`,
@@ -99,7 +101,8 @@ it("worktree retry preserves a committed branch after response and receipt ackno
   assert.equal(fault.receiptReads, 1);
   const journalPath = path.join(scenario.root, ".sennel", ".worktree-prepare-attempt.json");
   const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
-  assert.equal(new ProcessIdentitySource().assess(journal.processIdentity).status, "stale");
+  assert.deepEqual(new LockOwnerSession(journal.owner).toJSON(), journal.owner);
+  assert.equal(new RepositoryFlowOperationLock({ mainRoot: scenario.root }).lock.inspect(), null);
   scenario.specId = journal.specId;
   const first = scenario.reload();
   const branch = first.readCurrentStepSettlement({ specId: scenario.specId, stepId: "branch", completed: true });
@@ -148,28 +151,34 @@ for (const changed of [false, true]) {
     const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
     const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
     const storeModule = new URL("../../../src/flow/lib/current-flow-state.js", import.meta.url).href;
-    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", [
+    const persistenceModule = new URL("../../../src/flow/lib/step-persistence-failure.js", import.meta.url).href;
+    const child = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", [
       `import { FlowManager } from ${JSON.stringify(managerModule)};`,
       `import RunPrepareSpecCommand from ${JSON.stringify(commandModule)};`,
       `import { CurrentFlowVersionStore } from ${JSON.stringify(storeModule)};`,
+      `import { StepPersistenceFailure } from ${JSON.stringify(persistenceModule)};`,
       `const input = ${JSON.stringify(scenario.prepareInput())};`,
       "const original = CurrentFlowVersionStore.prototype.apply;",
+      "let publication = null;",
       "CurrentFlowVersionStore.prototype.apply = function (input) {",
       "const result = original.call(this, input);",
       'if (input.activity?.transition?.operation === "publish_plugin_artifacts") {',
-      "process.stdout.write(JSON.stringify({ specId: this.location.specId.toString(), activityId: input.activity.id }));",
-      "process.exit(73); } return result; };",
+      "publication = { specId: this.location.specId.toString(), activityId: input.activity.id };",
+      'throw new StepPersistenceFailure(new Error("lost plugin publication acknowledgement")); } return result; };',
       "const flowManager = new FlowManager({ root: input.root, mainRoot: input.mainRoot, inWorktree: false });",
-      "await new RunPrepareSpecCommand().execute({ ...input, flowManager });",
+      "try { await new RunPrepareSpecCommand().execute({ ...input, flowManager }); }",
+      "catch (error) { if (publication === null) throw error; process.stdout.write(JSON.stringify({ ...publication, failureCode: error.code })); process.exit(73); }",
       'throw new Error("expected interruption after canonical plugin publication");',
     ].join("\n")], { cwd: scenario.root, env: scenario.environment(scenario.root), encoding: "utf8", timeout: 30_000 });
     assert.equal(child.error, undefined, child.error?.stack);
     assert.equal(child.status, 73, child.stderr || child.stdout);
     const publication = JSON.parse(child.stdout);
+    assert.equal(publication.failureCode, "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
     scenario.specId = publication.specId;
     const journalPath = path.join(scenario.root, ".sennel", ".worktree-prepare-attempt.json");
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
-    assert.equal(new ProcessIdentitySource().assess(journal.processIdentity).status, "stale");
+    assert.deepEqual(new LockOwnerSession(journal.owner).toJSON(), journal.owner);
+    assert.equal(new RepositoryFlowOperationLock({ mainRoot: scenario.root }).lock.inspect(), null);
     const manager = scenario.reload();
     const branch = manager.readCurrentStepSettlement({ specId: scenario.specId, stepId: "branch", completed: true });
     const pluginDescriptors = manager.artifactCatalog(scenario.specId).artifacts.filter((entry) =>

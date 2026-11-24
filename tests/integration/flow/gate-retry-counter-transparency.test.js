@@ -2,8 +2,9 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { countGateRetry } from "../../../src/flow/lib/run-gate.js";
 
 const SENNEL_CMD = path.join(process.cwd(), "src/sennel.js");
@@ -12,7 +13,7 @@ function activeFixture(root) {
   const flowManager = makeFlowManager(root);
   return new CanonicalFlowFixture({
     flowManager,
-    execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/001-test" },
+    execution: { mode: "direct", baseBranch: "main" },
   }).create().registerActive();
 }
 
@@ -48,10 +49,10 @@ describe("issue-log recording does not increment gateRetry (REQ-4)", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("flow set issue-log leaves gateRetry count at zero", () => {
-    tmp = createTmpDir();
+  it("flow set issue-log leaves gateRetry count at zero", async () => {
+    tmp = fixtureRepository("gate-counter-issue-log-");
     setupFlowConfig(tmp, "ja");
-    activeFixture(tmp).activate("impl-gate");
+    await activeFixture(tmp).activateWithProducers("impl-gate");
 
     const result = spawnSync(
       "node",

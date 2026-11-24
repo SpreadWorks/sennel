@@ -1,3 +1,4 @@
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +14,7 @@ const imports = `
   import assert from "node:assert/strict";
   import { createHash } from "node:crypto";
   import { SpecGateRepairContext } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-context.js")};
-  import { SpecGateRepairSourceSnapshotManifest, SpecGateRepairSourceSnapshotReference } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-values.js")};
+  import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest, SpecGateRepairSourceSnapshotReference } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-values.js")};
   import { SpecGateRepairSourcePublication } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-source-storage.js")};
   import { SpecGateRepairBundle } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-bundle.js")};
   import { readSpecGateRepairSources } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-sources.js")};
@@ -42,7 +43,7 @@ const imports = `
 `;
 
 function inLocale(locale, root, script) {
-  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", imports + script], {
+  const result = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", imports + script], {
     env: { ...process.env, LANG: `${locale}.UTF-8`, LC_ALL: `${locale}.UTF-8`, TMPDIR: root },
     encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
   });
@@ -58,24 +59,27 @@ function inLocale(locale, root, script) {
 function sourceFiles(root) {
   for (const name of ["ä", "z"]) {
     fs.mkdirSync(path.join(root, "src", name), { recursive: true });
-    fs.writeFileSync(path.join(root, "src", `${name}.js`), "export const value = '漢🧭';\n");
-    fs.writeFileSync(path.join(root, "src", name, "AGENTS.md"), "Preserve the existing exports.\n");
-    fs.writeFileSync(path.join(root, "src", name, "code.js"), "export const nested = 1;\n");
+    fs.writeFileSync(path.join(root, "src", name, "AGENTS.md"), "Preserve the existing exports 漢🧭.\n");
   }
   assert.equal(runGit(["init", "-q"], { cwd: root }).ok, true);
   assert.equal(runGit(["add", "src"], { cwd: root }).ok, true);
 }
 
-test("repair evidence, index, selection and persisted bundle identities survive a real locale change", (t) => {
+test("explicit rule evidence, index, selection and persisted bundle identities survive a real locale change", (t) => {
   const root = createTmpDir("repair-locale-identity-");
   t.after(() => removeTmpDir(root));
   sourceFiles(root);
   const script = `
     const root = ${JSON.stringify(root)};
     const spec = validWorkerHandoffSpec();
+    const ruleSnapshots = new SpecGateRepairSourceSnapshots(["ä", "z"].map((name) => {
+      const origin = "src/" + name + "/AGENTS.md";
+      return new SpecGateRepairSource({ id: "project-rule:" + origin, origin, revision: "saved-rule",
+        content: fs.readFileSync(path.join(root, origin), "utf8"), appliesTo: ["src/" + name] });
+    }));
     const sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
-      state: { request: "Inspect src/ä.js, src/z.js, src/ä/code.js and src/z/code.js", issue: null },
-      executionRoot: root, spec });
+      state: { request: "Preserve the explicitly saved scoped rules.", issue: null },
+      executionRoot: root, ruleSnapshots });
     const target = { entity: "requirement", id: "R1", field: "desc" };
     const findings = ["ä", "z"].map((id) => ({
       identity: { sourceArtifact: "gate/result.json", sourceStep: "spec-gate", sourceFindingId: id,
@@ -98,7 +102,8 @@ test("repair evidence, index, selection and persisted bundle identities survive 
   const { locale: firstLocale, collation: firstCollation, ...firstIdentity } = first;
   const { locale: secondLocale, collation: secondCollation, ...secondIdentity } = second;
   assert.deepEqual(secondIdentity, firstIdentity);
-  assert.equal(first.snapshots.manifest.sources.filter((source) => source.origin.startsWith("src/")).length, 6);
+  assert.deepEqual(first.snapshots.manifest.sources.filter((source) => source.origin.startsWith("src/"))
+    .map((source) => source.origin), ["src/z/AGENTS.md", "src/ä/AGENTS.md"]);
   const persisted = path.join(root, "saved-context.json");
   fs.writeFileSync(persisted, JSON.stringify(firstIdentity));
   const restored = inLocale("sv_SE", root, `
@@ -114,17 +119,18 @@ test("repair evidence, index, selection and persisted bundle identities survive 
   assert.deepEqual(restored.selections, first.selections);
 });
 
-test("claimed repair checkpoint resumes under another locale and refuses only changed evidence without mutation", (t) => {
+test("claimed repair checkpoint resumes under another locale and refuses changed canonical rules without mutation", (t) => {
   const parent = createTmpDir("repair-locale-restart-");
   t.after(() => removeTmpDir(parent));
   const created = inLocale("en_US", parent, `
     const value = await createSpecGateRepairScenario({
       request: "Inspect src/ä.js and src/z.js.",
       beforeGate: ({ root }) => {
+        fs.writeFileSync(path.join(root, "AGENTS.md"), "Preserve the behavior of src/ä.js and src/z.js.\\n");
         fs.mkdirSync(path.join(root, "src"));
         for (const name of ["ä", "z"]) fs.writeFileSync(path.join(root, "src", name + ".js"), "export const same = 1;\\n");
         assert.equal(runGit(["init", "-q"], { cwd: root }).ok, true);
-        assert.equal(runGit(["add", "src"], { cwd: root }).ok, true);
+        assert.equal(runGit(["add", "src", "AGENTS.md"], { cwd: root }).ok, true);
       },
     });
     const request = value.coordinator.createRequest({ ctx: value.ctx,
@@ -169,7 +175,7 @@ test("claimed repair checkpoint resumes under another locale and refuses only ch
   assert.deepEqual(resumed.snapshots, created.snapshots);
   assert.equal(resumed.binding.inputDigest, created.inputDigest);
   assert.equal(resumed.binding.inputRevision, created.inputRevision);
-  fs.writeFileSync(path.join(created.root, "src/ä.js"), "export const same = 2;\n");
+  fs.writeFileSync(path.join(created.root, "AGENTS.md"), "Require a changed behavior of src/ä.js and src/z.js.\n");
   const rejected = inLocale("sv_SE", parent, restart);
   assert.equal(rejected.errorCode, "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED");
 });

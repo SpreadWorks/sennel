@@ -199,7 +199,7 @@ function collectImplementationSubjects({
   const effectiveLimit = Number.isFinite(parsedLimit) ? parsedLimit : MAX_IMPLEMENTATION_SUBJECTS;
   const boundedLimit = Math.trunc(Math.max(0, Math.min(effectiveLimit, MAX_IMPLEMENTATION_SUBJECTS)));
   if (!cwd || !baseBranch || !featureBranch || boundedLimit === 0) return [];
-  const res = runGit(["-C", cwd, "log", `--max-count=${boundedLimit}`, "--format=%s", `${baseBranch}..${featureBranch}`]);
+  const res = runGit(["-C", cwd, "log", `--max-count=${boundedLimit}`, "--format=%s", `${baseBranch}..${featureBranch}`], { cwd });
   if (!res.ok) {
     process.stderr.write(`[sennel] warning: failed to collect implementation commit subjects: ${res.stderr || res.stdout}\n`);
     return [];
@@ -377,7 +377,7 @@ function runMerge(ctx, preparation = null) {
     if (existing !== null) return { strategy: "pr", resumed: true,
       prNumber: existing.number, prUrl: existing.url, repository: existing.repository.toJSON(), headOid: existing.headOid };
 
-    const pushRes = runGit(["-C", executionRoot, "push", "-u", remote, featureBranch]);
+    const pushRes = runGit(["-C", executionRoot, "push", "-u", remote, featureBranch], { cwd: executionRoot });
     assertOk(pushRes, "git push failed");
     const created = acquired.githubProvider.createPullRequest({ ...request, title, body });
     return { strategy: "pr", prNumber: created.number, prUrl: created.url,
@@ -387,7 +387,7 @@ function runMerge(ctx, preparation = null) {
   // Squash merge route
   if (worktree && mainRepoPath) {
     const remote = acquired.remote;
-    const beforeSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch]);
+    const beforeSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch], { cwd: mainRepoPath });
     assertOk(beforeSync, "failed to capture feature HEAD before pre-merge synchronization");
     const syncResult = runPreSync({ worktreePath: executionRoot, baseBranch, featureBranch, remote });
     if (syncResult.ok === false) {
@@ -409,7 +409,7 @@ function runMerge(ctx, preparation = null) {
       });
     }
 
-    const afterSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch]);
+    const afterSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch], { cwd: mainRepoPath });
     assertOk(afterSync, "failed to capture feature HEAD after pre-merge synchronization");
     if (
       acquired.requireRevalidationAfterSync
@@ -449,7 +449,7 @@ function runPreSync({ worktreePath, baseBranch, featureBranch, remote = "origin"
     throw err;
   }
   const rebaseRef = `${remote}/${baseBranch}`;
-  const baseHeadRes = runGit(["-C", worktreePath, "rev-parse", rebaseRef]);
+  const baseHeadRes = runGit(["-C", worktreePath, "rev-parse", rebaseRef], { cwd: worktreePath });
   if (!baseHeadRes.ok) {
     const err = new Error(
       `pre-merge base resolution failed: git rev-parse ${rebaseRef} exited ${baseHeadRes.status}: ${baseHeadRes.stderr || baseHeadRes.stdout}`,

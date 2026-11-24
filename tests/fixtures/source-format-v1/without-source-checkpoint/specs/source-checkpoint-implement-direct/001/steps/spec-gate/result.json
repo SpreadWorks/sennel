@@ -1,0 +1,19 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fixture producer result"
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "fixture": "canonical-producer-result",
+          "nodeId": "spec-gate"
+        }
+      }
+    }
+  ]
+}

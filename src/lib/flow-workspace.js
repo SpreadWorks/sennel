@@ -2,6 +2,11 @@ import path from "node:path";
 import { FlowSpecId } from "./flow-spec-id.js";
 import { FlowVersion, FlowVersionAuthorityScope, FlowVersionLocation } from "./flow-version.js";
 
+/** Canonical artifact authority for CLI and explicit execution-root contexts. */
+export function flowArtifactRoot(ctx) {
+  return ctx.artifactRoot ?? ctx.mainRoot ?? ctx.repositoryRoot ?? ctx.root;
+}
+
 export const DEFAULT_FLOW_SPEC_DIR = "specs";
 const FLOW_STATE_LOCATIONS = new WeakMap();
 // Process-local command views receive a plain `relativeFlowSpecFile` string in

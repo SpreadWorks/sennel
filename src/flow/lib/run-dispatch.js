@@ -1068,7 +1068,7 @@ export class FlowDispatchWork {
     Object.freeze(this);
   }
 
-  /** Pure transport projection before a conditional Step persists its checkpoint. */
+  /** Pure transport projection before persisting new worker execution authority. */
   static forAdmission(invocation, request) {
     return new FlowDispatchWork(invocation, request, new WorkerArtifactHandoffReference(request));
   }
@@ -1084,13 +1084,20 @@ export class FlowDispatchWork {
         requestDigest: this.handoffRequest.requestDigest,
         commandId: `flow.dispatch.${this.handoffRequest.stepId}`,
       }),
-      cacheMode: "bypass", retryCount: 0, waitForProcessTree: true,
+      cacheMode: "bypass", retryCount: 0,
       executionEnvironment: this.executionEnvironment(workerInvocation), deferredMetric,
       onSupervisorEvent(event) {
         supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
       },
       ...agentOptions,
     };
+  }
+
+  async assertAgentAdmission(agent, options) {
+    const workerInvocation = this.workerInvocation();
+    const callOptions = this.callOptions(options, workerInvocation);
+    await assertWorkerAgentAdmission(agent, this.prompt(workerInvocation), callOptions, this.handoffRequest.stepId);
+    return callOptions;
   }
 
   workerInvocation() {
@@ -1464,6 +1471,7 @@ export default class RunDispatchCommand extends FlowCommand {
         canonicalRevision,
       );
     } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
       throw new FlowDispatchRepositoryFingerprintError({
         cause,
         nextAction,
@@ -1507,17 +1515,15 @@ export default class RunDispatchCommand extends FlowCommand {
 
   async runDispatcherOwnedRepair(ctx, target, action) {
     if (!(action.directive instanceof RepairEvidenceDirective)) return null;
-    const match = /^sennel flow run ([a-z][a-z0-9-]*)(?:\s|$)/.exec(action.directive.nextAction);
-    const commandName = match?.[1] || null;
+    const command = action.directive.command;
+    if (command === null || command.group !== "run") return null;
+    const commandName = command.subcommand;
     if (!DISPATCHER_OWNED_REPAIR_COMMANDS.has(commandName)) return null;
 
     if (this.repairCommandRunner) {
       return this.repairCommandRunner({ ctx, target, action, commandName });
     }
 
-    const command = guardedExecutionCommand(new FlowExecutionCommand({
-      group: "run", subcommand: commandName,
-    }), readFlowState(ctx), target.binding);
     return this.runRegisteredFlowCommand(ctx, target, command);
   }
 
@@ -1615,7 +1621,6 @@ export default class RunDispatchCommand extends FlowCommand {
       temporaryRoot: flowTemporaryRoot(ctx),
       cacheMode: "bypass",
       retryCount: 0,
-      waitForProcessTree: true,
       jsonSchema: schema,
       fmtFallback: `Return only JSON matching this schema:\n${JSON.stringify(schema, null, 2)}`,
     });
@@ -1651,57 +1656,59 @@ export default class RunDispatchCommand extends FlowCommand {
     requiresCanonicalActionProgress = false,
     preserveCommandFailure = false,
   }) {
-    const refreshed = await this.fetchNextAction(target);
-    if (refreshed instanceof Envelope) {
-      return { current: refreshed, stalledDispatches, failure: null, progressed: false };
-    }
-    const refreshedIdentity = requiresCanonicalActionProgress
-      ? session.captureCanonicalAction(refreshed, invocation.action)
-      : this.captureAction(
-        ctx,
-        session,
-        refreshed,
-        dispatchCount,
-        "post-handoff-progress",
-      );
-    const hasProgressed = requiresCanonicalActionProgress
-      ? invocation.hasCanonicalActionProgressedTo(refreshedIdentity)
-      : invocation.hasProgressedTo(refreshedIdentity);
-    const nextStalledDispatches = hasProgressed
-      ? 0
-      : stalledDispatches + 1;
-    if (preserveCommandFailure && nextStalledDispatches > 0) {
+    return withFlowProcessRuntime(ctx, async () => {
+      const refreshed = await this.fetchNextAction(target);
+      if (refreshed instanceof Envelope) {
+        return { current: refreshed, stalledDispatches, failure: null, progressed: false };
+      }
+      const refreshedIdentity = requiresCanonicalActionProgress
+        ? session.captureCanonicalAction(refreshed, invocation.action)
+        : this.captureAction(
+          ctx,
+          session,
+          refreshed,
+          dispatchCount,
+          "post-handoff-progress",
+        );
+      const hasProgressed = requiresCanonicalActionProgress
+        ? invocation.hasCanonicalActionProgressedTo(refreshedIdentity)
+        : invocation.hasProgressedTo(refreshedIdentity);
+      const nextStalledDispatches = hasProgressed
+        ? 0
+        : stalledDispatches + 1;
+      if (preserveCommandFailure && nextStalledDispatches > 0) {
+        return {
+          current: refreshed,
+          stalledDispatches: nextStalledDispatches,
+          failure: null,
+          progressed: false,
+        };
+      }
+      if (nextStalledDispatches >= this.maxStalledDispatches) {
+        return {
+          current: refreshed,
+          stalledDispatches: nextStalledDispatches,
+          failure: this.failure(
+            ctx,
+            "FLOW_DISPATCH_STALLED",
+            `the dispatcher-owned ${owner} returned ${nextStalledDispatches} time(s) without durable progress`,
+            blockedBoundary({
+              target,
+              nextAction: refreshed,
+              dispatchCount,
+              message: `The dispatcher-owned ${owner} returned successfully, but the guarded Flow and repository state did not change.`,
+            }),
+          ),
+          progressed: false,
+        };
+      }
       return {
         current: refreshed,
         stalledDispatches: nextStalledDispatches,
         failure: null,
-        progressed: false,
+        progressed: nextStalledDispatches === 0,
       };
-    }
-    if (nextStalledDispatches >= this.maxStalledDispatches) {
-      return {
-        current: refreshed,
-        stalledDispatches: nextStalledDispatches,
-        failure: this.failure(
-          ctx,
-          "FLOW_DISPATCH_STALLED",
-          `the dispatcher-owned ${owner} returned ${nextStalledDispatches} time(s) without durable progress`,
-          blockedBoundary({
-            target,
-            nextAction: refreshed,
-            dispatchCount,
-            message: `The dispatcher-owned ${owner} returned successfully, but the guarded Flow and repository state did not change.`,
-          }),
-        ),
-        progressed: false,
-      };
-    }
-    return {
-      current: refreshed,
-      stalledDispatches: nextStalledDispatches,
-      failure: null,
-      progressed: nextStalledDispatches === 0,
-    };
+    }, { commandId: "dispatch" });
   }
 
   async runApprovalContinuation(ctx, invocation) {
@@ -1920,9 +1927,7 @@ export default class RunDispatchCommand extends FlowCommand {
     }
     if (claimed === null && typeof agent?.projectInvocation === "function") {
       const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, request);
-      const plannedInvocation = plannedWork.workerInvocation();
-      admittedCallOptions = plannedWork.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, plannedInvocation);
-      await assertWorkerAgentAdmission(agent, plannedWork.prompt(plannedInvocation), admittedCallOptions, stepId);
+      admittedCallOptions = await plannedWork.assertAgentAdmission(agent, { ctx, agentOptions, deferredMetric, supervisorEvents });
     }
     if (preparedStep !== null) {
       await preparedStep.step.execute();
@@ -2146,10 +2151,19 @@ export default class RunDispatchCommand extends FlowCommand {
                 resumeStoppedArtifactExecution = selectedExecution.artifactContinuation.usesSavedResponse;
                 if (!resumeStoppedArtifactExecution) handoffRequest.prepare();
             }
-            handoffRequest ??= this.handoffCoordinator.createRequest({
-              ctx, state, invocation, workerInstructions,
-              previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
-            });
+            if (handoffRequest === null) {
+              handoffRequest = this.handoffCoordinator.createRequest({
+                ctx, state, invocation, workerInstructions,
+                previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
+                deferPreparation: handoffPolicy.kind !== "source",
+              });
+              if (handoffRequest.policy.kind !== "source") {
+                const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, handoffRequest);
+                admittedCallOptions = await plannedWork.assertAgentAdmission(agent,
+                  { ctx, agentOptions, deferredMetric, supervisorEvents });
+                handoffRequest.prepare();
+              }
+            }
           }
         }
         resumeSealedDraftExecution = (conditionalDraftExecution
@@ -2606,440 +2620,315 @@ export default class RunDispatchCommand extends FlowCommand {
     }
     let current = await this.fetchNextAction(target);
 
-    while (dispatchCount < this.maxDispatches) {
-      if (current instanceof Envelope) {
-        const code = errorCode(current);
-        if (code === "ACTIVE_FLOW_MISMATCH" || code === "FLOW_TARGET_NOT_FOUND") {
-          return new FlowDispatchBoundary({
-            kind: "target_mismatch",
-            nextAction: null,
-            dispatchCount,
-            message: errorMessages(current).join(" "),
-          }).toJSON();
-        }
-        return this.failure(
-          ctx,
-          code,
-          errorMessages(current),
-          blockedBoundary({
-            target,
-            nextAction: null,
-            dispatchCount,
-            message: "The guarded next action could not be resolved.",
-          }),
-        );
-      }
-
-      const action = new FlowDispatchAction(current);
-
-      if (action.nonblockingDecision !== null) {
-        let decision;
-        try {
-          decision = await this.runNonblockingAgentDecision(ctx, action);
-          recordNonBlockingDecision({
-            root: ctx.root,
-            flowManager: ctx.flowManager,
-            choice: decision.choice,
-            reason: decision.reason,
-            remainingRisk: decision.remainingRisk,
-            expectEvidenceDigest: action.nonblockingDecision.evidenceDigest,
-            expectIdentity: action.nonblockingDecision.identity().toJSON(),
-          });
-        } catch (error) {
-          if (error instanceof ProcessExecutionControlFailure) throw error;
+    // Keep counters and authorization in this dispatch while each continuation
+    // enters the admission's current checkout after a nested physical handoff.
+    const continueDispatch = () => withFlowProcessRuntime(ctx, async () => {
+      if (dispatchCount < this.maxDispatches) {
+        if (current instanceof Envelope) {
+          const code = errorCode(current);
+          if (code === "ACTIVE_FLOW_MISMATCH" || code === "FLOW_TARGET_NOT_FOUND") {
+            return new FlowDispatchBoundary({
+              kind: "target_mismatch",
+              nextAction: null,
+              dispatchCount,
+              message: errorMessages(current).join(" "),
+            }).toJSON();
+          }
           return this.failure(
             ctx,
-            error.code || "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
-            error.message || String(error),
+            code,
+            errorMessages(current),
+            blockedBoundary({
+              target,
+              nextAction: null,
+              dispatchCount,
+              message: "The guarded next action could not be resolved.",
+            }),
+          );
+        }
+
+        const action = new FlowDispatchAction(current);
+
+        if (action.nonblockingDecision !== null) {
+          let decision;
+          try {
+            decision = await this.runNonblockingAgentDecision(ctx, action);
+            recordNonBlockingDecision({
+              root: ctx.root,
+              flowManager: ctx.flowManager,
+              choice: decision.choice,
+              reason: decision.reason,
+              remainingRisk: decision.remainingRisk,
+              expectEvidenceDigest: action.nonblockingDecision.evidenceDigest,
+              expectIdentity: action.nonblockingDecision.identity().toJSON(),
+            });
+          } catch (error) {
+            if (error instanceof ProcessExecutionControlFailure) throw error;
+            return this.failure(
+              ctx,
+              error.code || "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
+              error.message || String(error),
+              blockedBoundary({
+                target,
+                nextAction: current,
+                dispatchCount,
+                message: "The dedicated advisory decision was not durably recorded; the original check evidence is unchanged.",
+              }),
+            );
+          }
+          dispatchCount += 1;
+          current = await this.fetchNextAction(target);
+          return continueDispatch();
+        }
+
+        if (action.awaitsHostAction) {
+          try {
+            executeHostFilterInput({ ctx, flowManager: ctx.flowManager,
+              specId: ctx.specId ?? ctx.flowState.specId, stepId: action.nextAction.step });
+            current = await this.fetchNextAction(target);
+          } catch (error) {
+            if (error instanceof ProcessExecutionControlFailure) throw error;
+            return this.failure(ctx, error.code || "FLOW_HOST_FILTER_CHECKPOINT_FAILED", error.message,
+              blockedBoundary({ target, nextAction: current, dispatchCount,
+                message: "The host filter request did not receive its canonical waiting receipt." }));
+          }
+          return new FlowDispatchBoundary({
+            kind: "host_action",
+            target,
+            nextAction: current,
+            dispatchCount,
+          }).toJSON();
+        }
+
+        if (action.awaitsUserDecision) {
+          if (suppliedApproval) {
+            return this.failure(
+              ctx,
+              "FLOW_DISPATCH_APPROVAL_STALE",
+              "the supplied approval token no longer targets an approval boundary",
+              new FlowDispatchBoundary({
+                kind: "await_user_decision",
+                target,
+                nextAction: current,
+                dispatchCount,
+              }).toJSON(),
+            );
+          }
+          if (action.nextAction.step === "acceptance-decision") {
+            await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager,
+              specId: ctx.specId ?? ctx.flowState?.specId });
+            current = await this.fetchNextAction(target);
+          }
+          return new FlowDispatchBoundary({
+            kind: "await_user_decision",
+            target,
+            nextAction: current,
+            dispatchCount,
+          }).toJSON();
+        }
+
+        if (action.isTerminal) {
+          if (suppliedApproval) {
+            return this.failure(
+              ctx,
+              "FLOW_DISPATCH_APPROVAL_STALE",
+              "the supplied approval token no longer targets an active approval boundary",
+              new FlowDispatchBoundary({
+                kind: action.directive.kind,
+                target,
+                nextAction: current,
+                dispatchCount,
+              }).toJSON(),
+            );
+          }
+          return new FlowDispatchBoundary({
+            kind: action.directive.kind,
+            target,
+            nextAction: current,
+            dispatchCount,
+          }).toJSON();
+        }
+
+        if (!action.isContinuation) {
+          return this.failure(
+            ctx,
+            "FLOW_DISPATCH_DIRECTIVE_INVALID",
+            `flow dispatch cannot execute directive kind ${action.directive.kind}`,
             blockedBoundary({
               target,
               nextAction: current,
               dispatchCount,
-              message: "The dedicated advisory decision was not durably recorded; the original check evidence is unchanged.",
+              message: "The next-action directive is not dispatchable.",
             }),
           );
         }
-        dispatchCount += 1;
-        current = await this.fetchNextAction(target);
-        continue;
-      }
 
-      if (action.awaitsHostAction) {
-        try {
-          executeHostFilterInput({ ctx, flowManager: ctx.flowManager,
-            specId: ctx.specId ?? ctx.flowState.specId, stepId: action.nextAction.step });
-          current = await this.fetchNextAction(target);
-        } catch (error) {
-          if (error instanceof ProcessExecutionControlFailure) throw error;
-          return this.failure(ctx, error.code || "FLOW_HOST_FILTER_CHECKPOINT_FAILED", error.message,
-            blockedBoundary({ target, nextAction: current, dispatchCount,
-              message: "The host filter request did not receive its canonical waiting receipt." }));
-        }
-        return new FlowDispatchBoundary({
-          kind: "host_action",
-          target,
-          nextAction: current,
-          dispatchCount,
-        }).toJSON();
-      }
-
-      if (action.awaitsUserDecision) {
-        if (suppliedApproval) {
-          return this.failure(
-            ctx,
-            "FLOW_DISPATCH_APPROVAL_STALE",
-            "the supplied approval token no longer targets an approval boundary",
-            new FlowDispatchBoundary({
-              kind: "await_user_decision",
-              target,
-              nextAction: current,
-              dispatchCount,
-            }).toJSON(),
-          );
-        }
-        if (action.nextAction.step === "acceptance-decision") {
-          await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager,
-            specId: ctx.specId ?? ctx.flowState?.specId });
-          current = await this.fetchNextAction(target);
-        }
-        return new FlowDispatchBoundary({
-          kind: "await_user_decision",
-          target,
-          nextAction: current,
-          dispatchCount,
-        }).toJSON();
-      }
-
-      if (action.isTerminal) {
-        if (suppliedApproval) {
-          return this.failure(
-            ctx,
-            "FLOW_DISPATCH_APPROVAL_STALE",
-            "the supplied approval token no longer targets an active approval boundary",
-            new FlowDispatchBoundary({
-              kind: action.directive.kind,
-              target,
-              nextAction: current,
-              dispatchCount,
-            }).toJSON(),
-          );
-        }
-        return new FlowDispatchBoundary({
-          kind: action.directive.kind,
-          target,
-          nextAction: current,
-          dispatchCount,
-        }).toJSON();
-      }
-
-      if (!action.isContinuation) {
-        return this.failure(
+        const actionIdentity = this.captureAction(
           ctx,
-          "FLOW_DISPATCH_DIRECTIVE_INVALID",
-          `flow dispatch cannot execute directive kind ${action.directive.kind}`,
-          blockedBoundary({
-            target,
-            nextAction: current,
-            dispatchCount,
-            message: "The next-action directive is not dispatchable.",
-          }),
+          session,
+          current,
+          dispatchCount,
+          "action-capture",
         );
-      }
-
-      const actionIdentity = this.captureAction(
-        ctx,
-        session,
-        current,
-        dispatchCount,
-        "action-capture",
-      );
-      let flowState = readFlowState(ctx);
-      const storedAuthorization = action.requiresApproval
-        ? ExplicitFlowDispatchAuthorization.matching(flowState, actionIdentity)
-        : null;
-      let invocation = new FlowDispatchInvocation({
-        session,
-        action: actionIdentity,
-        authorization: storedAuthorization
-          ?? new UnapprovedFlowDispatchAuthorization(actionIdentity),
-      });
-      let receiptMutation = null;
-      if (action.requiresApproval) {
-        const expectedApproval = invocation.approvalToken();
-        if (suppliedApproval && suppliedApproval !== expectedApproval) {
-          return this.failure(
-            ctx,
-            "FLOW_DISPATCH_APPROVAL_STALE",
-            "the supplied approval token does not match the current guarded next action",
-            new FlowDispatchBoundary({
+        let flowState = readFlowState(ctx);
+        const storedAuthorization = action.requiresApproval
+          ? ExplicitFlowDispatchAuthorization.matching(flowState, actionIdentity)
+          : null;
+        let invocation = new FlowDispatchInvocation({
+          session,
+          action: actionIdentity,
+          authorization: storedAuthorization
+            ?? new UnapprovedFlowDispatchAuthorization(actionIdentity),
+        });
+        let receiptMutation = null;
+        if (action.requiresApproval) {
+          const expectedApproval = invocation.approvalToken();
+          if (suppliedApproval && suppliedApproval !== expectedApproval) {
+            return this.failure(
+              ctx,
+              "FLOW_DISPATCH_APPROVAL_STALE",
+              "the supplied approval token does not match the current guarded next action",
+              new FlowDispatchBoundary({
+                kind: "approval_required",
+                target,
+                nextAction: current,
+                dispatchCount,
+                approvalToken: expectedApproval,
+              }).toJSON(),
+            );
+          }
+          if (suppliedApproval === expectedApproval) {
+            const explicitAuthorization = storedAuthorization
+              ?? new ExplicitFlowDispatchAuthorization({
+                action: actionIdentity,
+                runId: target.runId,
+                approvalToken: expectedApproval,
+            });
+            invocation = invocation.withAuthorization(explicitAuthorization);
+            const persisted = persistDispatchApproval(ctx, invocation, this.repositoryFingerprint);
+            invocation = invocation.withAuthorization(persisted.authorization);
+            receiptMutation = persisted.receiptMutation;
+            flowState = readFlowState(ctx);
+            suppliedApproval = null;
+          } else if (!invocation.approved && flowState?.autoApprove === true && action.isAutoApproveEligible) {
+            invocation = invocation.withAuthorization(
+              new AutoApprovedFlowDispatchAuthorization({
+                action: actionIdentity,
+                choiceId: action.autoApproveChoiceId,
+              }),
+            );
+          }
+          if (!invocation.approved) {
+            if (current.step === "approval") await persistApprovalAwaitResult(ctx);
+            return new FlowDispatchBoundary({
               kind: "approval_required",
               target,
               nextAction: current,
               dispatchCount,
               approvalToken: expectedApproval,
-            }).toJSON(),
-          );
-        }
-        if (suppliedApproval === expectedApproval) {
-          const explicitAuthorization = storedAuthorization
-            ?? new ExplicitFlowDispatchAuthorization({
-              action: actionIdentity,
-              runId: target.runId,
-              approvalToken: expectedApproval,
-          });
-          invocation = invocation.withAuthorization(explicitAuthorization);
-          const persisted = persistDispatchApproval(ctx, invocation, this.repositoryFingerprint);
-          invocation = invocation.withAuthorization(persisted.authorization);
-          receiptMutation = persisted.receiptMutation;
-          flowState = readFlowState(ctx);
-          suppliedApproval = null;
-        } else if (!invocation.approved && flowState?.autoApprove === true && action.isAutoApproveEligible) {
-          invocation = invocation.withAuthorization(
-            new AutoApprovedFlowDispatchAuthorization({
-              action: actionIdentity,
-              choiceId: action.autoApproveChoiceId,
-            }),
-          );
-        }
-        if (!invocation.approved) {
-          if (current.step === "approval") await persistApprovalAwaitResult(ctx);
-          return new FlowDispatchBoundary({
-            kind: "approval_required",
-            target,
-            nextAction: current,
-            dispatchCount,
-            approvalToken: expectedApproval,
-          }).toJSON();
-        }
-      } else if (suppliedApproval) {
-        return this.failure(
-          ctx,
-          "FLOW_DISPATCH_APPROVAL_STALE",
-          "the supplied approval token targets a different Flow action",
-          blockedBoundary({
-            target,
-            nextAction: current,
-            dispatchCount,
-            message: "Refresh the approval boundary before continuing.",
-          }),
-        );
-      }
-
-      const validated = await this.fetchNextAction(target);
-      if (validated instanceof Envelope) {
-        current = validated;
-        continue;
-      }
-      const activeAction = this.captureAction(
-        ctx,
-        session,
-        validated,
-        dispatchCount,
-        "pre-handoff-validation",
-      );
-      try {
-        this.assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation);
-      } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
-        return this.failure(
-          ctx,
-          error.code || "FLOW_DISPATCH_INVOCATION_STALE",
-          error.message || String(error),
-          {
-            ...blockedBoundary({
-              target,
-              nextAction: validated,
-              dispatchCount,
-              message: "The action or repository changed before worker handoff. Refresh the guarded invocation before continuing.",
-            }),
-            invocation: error.data ?? invocation.toJSON(),
-          },
-        );
-      }
-
-      let approvalContinuation;
-      try {
-        approvalContinuation = await this.runApprovalContinuation(ctx, invocation);
-      } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
-        return this.failure(
-          ctx,
-          error.code || "FLOW_DISPATCH_APPROVAL_CONTINUATION_FAILED",
-          error.message || String(error),
-          blockedBoundary({ target, nextAction: validated, dispatchCount, message: "The parent could not commit the approved Spec continuation." }),
-        );
-      }
-      if (approvalContinuation !== null) {
-        dispatchCount += 1;
-        const progressed = await this.parentCommandProgress({
-          ctx, session, target, invocation, dispatchCount, stalledDispatches, owner: "approval continuation",
-        });
-        if (progressed.failure) return progressed.failure;
-        stalledDispatches = progressed.stalledDispatches;
-        current = progressed.current;
-        continue;
-      }
-
-      let dispatcherOwnedRepair;
-      try {
-        dispatcherOwnedRepair = await this.runDispatcherOwnedRepair(ctx, target, action);
-      } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
-        return this.failure(
-          ctx,
-          error.code || "FLOW_DISPATCH_REPAIR_COMMAND_FAILED",
-          error.message || String(error),
-          blockedBoundary({
-            target,
-            nextAction: validated,
-            dispatchCount,
-            message: "The dispatcher-owned repair command failed before the worker handoff could begin.",
-          }),
-        );
-      }
-      if (dispatcherOwnedRepair != null) {
-        dispatchCount += 1;
-        if (commandFailed(dispatcherOwnedRepair)) {
+            }).toJSON();
+          }
+        } else if (suppliedApproval) {
           return this.failure(
             ctx,
-            errorCode(dispatcherOwnedRepair),
-            errorMessages(dispatcherOwnedRepair),
+            "FLOW_DISPATCH_APPROVAL_STALE",
+            "the supplied approval token targets a different Flow action",
+            blockedBoundary({
+              target,
+              nextAction: current,
+              dispatchCount,
+              message: "Refresh the approval boundary before continuing.",
+            }),
+          );
+        }
+
+        const validated = await this.fetchNextAction(target);
+        if (validated instanceof Envelope) {
+          current = validated;
+          return continueDispatch();
+        }
+        const activeAction = this.captureAction(
+          ctx,
+          session,
+          validated,
+          dispatchCount,
+          "pre-handoff-validation",
+        );
+        try {
+          this.assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation);
+        } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_INVOCATION_STALE",
+            error.message || String(error),
+            {
+              ...blockedBoundary({
+                target,
+                nextAction: validated,
+                dispatchCount,
+                message: "The action or repository changed before worker handoff. Refresh the guarded invocation before continuing.",
+              }),
+              invocation: error.data ?? invocation.toJSON(),
+            },
+          );
+        }
+
+        let approvalContinuation;
+        try {
+          approvalContinuation = await this.runApprovalContinuation(ctx, invocation);
+        } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_APPROVAL_CONTINUATION_FAILED",
+            error.message || String(error),
+            blockedBoundary({ target, nextAction: validated, dispatchCount, message: "The parent could not commit the approved Spec continuation." }),
+          );
+        }
+        if (approvalContinuation !== null) {
+          dispatchCount += 1;
+          const progressed = await this.parentCommandProgress({
+            ctx, session, target, invocation, dispatchCount, stalledDispatches, owner: "approval continuation",
+          });
+          if (progressed.failure) return progressed.failure;
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          return continueDispatch();
+        }
+
+        let dispatcherOwnedRepair;
+        try {
+          dispatcherOwnedRepair = await this.runDispatcherOwnedRepair(ctx, target, action);
+        } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_REPAIR_COMMAND_FAILED",
+            error.message || String(error),
             blockedBoundary({
               target,
               nextAction: validated,
               dispatchCount,
-              message: "The dispatcher-owned repair command did not complete the guarded Flow transition.",
+              message: "The dispatcher-owned repair command failed before the worker handoff could begin.",
             }),
           );
         }
-        const progressed = await this.parentCommandProgress({
-          ctx,
-          session,
-          target,
-          invocation,
-          dispatchCount,
-          stalledDispatches,
-          owner: "repair command",
-        });
-        if (progressed.failure) return progressed.failure;
-        stalledDispatches = progressed.stalledDispatches;
-        current = progressed.current;
-        continue;
-      }
-
-      let dispatcherOwnedRecovery;
-      try {
-        dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation);
-      } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
-        return this.failure(
-          ctx,
-          error.code || "FLOW_DISPATCH_RECOVERY_COMMAND_FAILED",
-          error.message || String(error),
-          blockedBoundary({
-            target,
-            nextAction: validated,
-            dispatchCount,
-            message: "The selected recovery command failed before completing its canonical transition.",
-          }),
-        );
-      }
-      if (action.directive instanceof ExecuteCommandDirective) {
-        dispatchCount += 1;
-        if (action.directive.command.subcommand === "recover-finalization"
-          && action.nextAction.step === "finalize-cleanup") {
-          if (dispatcherOwnedRecovery?.data?.status === "done") {
-            try { finalizeCleanupCompletion(dispatcherOwnedRecovery, target); }
-            catch (error) {
-              return this.failure(ctx, commandFailed(dispatcherOwnedRecovery) ? errorCode(dispatcherOwnedRecovery) : error.code,
-                commandFailed(dispatcherOwnedRecovery) ? errorMessages(dispatcherOwnedRecovery) : error.message,
-                blockedBoundary({ target, nextAction: validated, dispatchCount,
-                  message: "Finalize cleanup recovery returned without canonical completion assurance." }));
-            }
-            return new FlowDispatchBoundary({ kind: "completed", nextAction: null, dispatchCount }).toJSON();
-          }
-          if (commandFailed(dispatcherOwnedRecovery)) return this.failure(ctx,
-            errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
-            blockedBoundary({ target, nextAction: validated, dispatchCount,
-              message: "Finalize cleanup recovery failed without canonical completion assurance." }));
-        }
-        if (commandFailed(dispatcherOwnedRecovery)) {
-          const progressed = await this.parentCommandProgress({
-            ctx, session, target, invocation, dispatchCount, stalledDispatches,
-            owner: "failed recovery command", requiresCanonicalActionProgress: true,
-            preserveCommandFailure: true,
-          });
-          if (!progressed.progressed) return this.failure(
-            ctx, errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
-            blockedBoundary({ target, nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
-              dispatchCount, message: "The selected recovery command failed without a durable canonical transition." }),
-          );
-          stalledDispatches = progressed.stalledDispatches;
-          current = progressed.current;
-          continue;
-        }
-        const progressed = await this.parentCommandProgress({
-          ctx,
-          session,
-          target,
-          invocation,
-          dispatchCount,
-          stalledDispatches,
-          owner: "recovery command",
-          requiresCanonicalActionProgress: true,
-        });
-        if (progressed.failure) return progressed.failure;
-        stalledDispatches = progressed.stalledDispatches;
-        current = progressed.current;
-        continue;
-      }
-
-      let dispatcherOwnedCommand;
-      try {
-        dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action, invocation);
-      } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
-        return this.failure(
-          ctx,
-          error.code || "FLOW_DISPATCH_COMMAND_FAILED",
-          error.message || String(error),
-          blockedBoundary({
-            target,
-            nextAction: validated,
-            dispatchCount,
-            message: "The dispatcher-owned Flow command failed before it could complete the canonical transition.",
-          }),
-        );
-      }
-      if (dispatcherOwnedCommand != null) {
-        dispatchCount += 1;
-        if (dispatcherOwnedCommand.command.removesExecutionRoot) {
-          try {
-            finalizeCleanupCompletion(dispatcherOwnedCommand.result, target);
-          } catch (error) {
+        if (dispatcherOwnedRepair != null) {
+          dispatchCount += 1;
+          if (commandFailed(dispatcherOwnedRepair)) {
             return this.failure(
               ctx,
-              commandFailed(dispatcherOwnedCommand.result) ? errorCode(dispatcherOwnedCommand.result) : error.code,
-              commandFailed(dispatcherOwnedCommand.result) ? errorMessages(dispatcherOwnedCommand.result) : error.message,
+              errorCode(dispatcherOwnedRepair),
+              errorMessages(dispatcherOwnedRepair),
               blockedBoundary({
                 target,
                 nextAction: validated,
                 dispatchCount,
-                message: "Finalize cleanup returned without durable canonical completion evidence.",
+                message: "The dispatcher-owned repair command did not complete the guarded Flow transition.",
               }),
             );
           }
-          return new FlowDispatchBoundary({
-            kind: "completed",
-            nextAction: null,
-            dispatchCount,
-          }).toJSON();
-        }
-        if (commandFailed(dispatcherOwnedCommand.result)) {
-          // A command can return operational failure after its Store-owned
-          // transaction commits. Do not trust a command-side marker: reload
-          // canonical authority and continue only when the guarded Action has
-          // durably progressed. Otherwise preserve the command failure.
           const progressed = await this.parentCommandProgress({
             ctx,
             session,
@@ -3047,232 +2936,363 @@ export default class RunDispatchCommand extends FlowCommand {
             invocation,
             dispatchCount,
             stalledDispatches,
-            owner: "failed Flow command",
-            requiresCanonicalActionProgress: true,
-            preserveCommandFailure: true,
+            owner: "repair command",
           });
           if (progressed.failure) return progressed.failure;
-          if (!progressed.progressed) {
-            return this.failure(
-              ctx,
-              errorCode(dispatcherOwnedCommand.result),
-              errorMessages(dispatcherOwnedCommand.result),
-              blockedBoundary({
-                target,
-                nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
-                dispatchCount,
-                message: "The dispatcher-owned Flow command failed without a durable canonical transition.",
-              }),
-            );
-          }
           stalledDispatches = progressed.stalledDispatches;
           current = progressed.current;
-          continue;
-        }
-        const progressed = await this.parentCommandProgress({
-          ctx,
-          session,
-          target,
-          invocation,
-          dispatchCount,
-          stalledDispatches,
-          owner: "Flow command",
-        });
-        if (progressed.failure) return progressed.failure;
-        stalledDispatches = progressed.stalledDispatches;
-        current = progressed.current;
-        continue;
-      }
-      const workerState = ctx.flowManager.canonicalState(ctx.specId);
-      let attempt = await this.runWorkerAttempt(ctx, invocation);
-      dispatchCount += 1;
-      const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
-      if (attempt.error) {
-        if (settleRequirementTestStructuralHandoff(ctx, attempt, attempt.error)) {
-          await flushDeferredMetrics(deferredMetrics);
-          current = await this.fetchNextAction(target);
-          continue;
-        }
-        if (
-          attempt.error.retryable !== true
-          || !isExplicitWorkerToolingFailure(attempt.error, attempt.agentError)
-          || (isSpecArtifactWorkerStep(invocation.action.nextAction.step)
-            && isUnclassifiedWorkerError(attempt.agentError))
-          || !attempt.handoffRequest
-          || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
-        ) {
-          if (settleRequirementTestExternalFailure(ctx, attempt, attempt.error)) {
-            await flushDeferredMetrics(deferredMetrics);
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          if (settleRequirementTestToolingFailure(ctx, attempt, attempt.error)) {
-            await flushDeferredMetrics(deferredMetrics);
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, attempt.error, workerState, invocation);
-          const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step, producerFailureAdmitted);
-          discardDeferredMetrics(deferredMetrics);
-          if (correction?.continue) {
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount, producerFailureAdmitted);
+          return continueDispatch();
         }
 
-        // Only malformed JSON, a missing or unreadable handoff transport, or
-        // an explicitly retryable producer payload-format failure is retried
-        // once with a new dispatch invocation and handoff directory. Parsed
-        // semantic, identity, authority, and publication failures are terminal.
-        const retryFeedback = new WorkerArtifactRetryFeedback(attempt.error, {
-          previousExecutionContract: attempt.handoffRequest.executionContract,
-        });
-        const retryCurrent = await this.fetchNextAction(target, retryFeedback.previousExecutionContract);
-        const retryState = ctx.flowManager.canonicalState(ctx.specId);
-        if (
-          retryCurrent instanceof Envelope
-          || retryCurrent.step !== invocation.action.nextAction.step
-          || retryCurrent.action !== invocation.action.nextAction.action
-          || retryState.runId !== workerState.runId
-          || retryState.attempt?.id !== workerState.attempt?.id
-          || retryState.attempt?.sequence !== workerState.attempt?.sequence
-          || session.captureCanonicalAction(workerFacingNextAction(retryCurrent), invocation.action).digest !== invocation.action.digest
-        ) {
-          discardDeferredMetrics(deferredMetrics);
+        let dispatcherOwnedRecovery;
+        try {
+          dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation);
+        } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
           return this.failure(
             ctx,
-            attempt.error.code,
-            attempt.error.message,
-            workerHandoffFailureData(
-              ctx,
+            error.code || "FLOW_DISPATCH_RECOVERY_COMMAND_FAILED",
+            error.message || String(error),
+            blockedBoundary({
               target,
-              attempt.error,
-              attempt.handoffRequest,
+              nextAction: validated,
               dispatchCount,
-              attempt.agentError,
-              appendWorkerHandoffDiagnostic(ctx, attempt.error, attempt.handoffRequest, {
-                stepId: invocation.action.nextAction.step,
-                agentError: attempt.agentError,
-              }),
-            ),
+              message: "The selected recovery command failed before completing its canonical transition.",
+            }),
           );
         }
-        const retryInvocation = freshWorkerInvocation(invocation, retryCurrent);
-        const firstError = attempt.error;
-        const firstRequest = attempt.handoffRequest;
-        const firstAgentError = attempt.agentError;
-        attempt = await this.runWorkerAttempt(
-          ctx,
-          retryInvocation,
-          retryFeedback,
-        );
-        if (attempt.deferredMetric) deferredMetrics.push(attempt.deferredMetric);
-        dispatchCount += 1;
-        if (attempt.error) {
-          discardDeferredMetrics(deferredMetrics);
-          const exhausted = attempt.error.retryable === true
-            ? new WorkerArtifactRetryExhaustedError({
-                firstError,
-                secondError: attempt.error,
-                firstRequest,
-                secondRequest: attempt.handoffRequest,
-            })
-            : attempt.error;
-          if (exhausted instanceof WorkerArtifactHandoffError) {
-            exhausted.agentFailures = Object.freeze([firstAgentError, attempt.agentError].filter(Boolean));
+        if (action.directive instanceof ExecuteCommandDirective) {
+          dispatchCount += 1;
+          if (action.directive.command.subcommand === "recover-finalization"
+            && action.nextAction.step === "finalize-cleanup") {
+            if (dispatcherOwnedRecovery?.data?.status === "done") {
+              try { finalizeCleanupCompletion(dispatcherOwnedRecovery, target); }
+              catch (error) {
+                return this.failure(ctx, commandFailed(dispatcherOwnedRecovery) ? errorCode(dispatcherOwnedRecovery) : error.code,
+                  commandFailed(dispatcherOwnedRecovery) ? errorMessages(dispatcherOwnedRecovery) : error.message,
+                  blockedBoundary({ target, nextAction: validated, dispatchCount,
+                    message: "Finalize cleanup recovery returned without canonical completion assurance." }));
+              }
+              return new FlowDispatchBoundary({ kind: "completed", nextAction: null, dispatchCount }).toJSON();
+            }
+            if (commandFailed(dispatcherOwnedRecovery)) return this.failure(ctx,
+              errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
+              blockedBoundary({ target, nextAction: validated, dispatchCount,
+                message: "Finalize cleanup recovery failed without canonical completion assurance." }));
           }
-          if (settleRequirementTestExternalFailure(ctx, attempt, exhausted)) {
-            await flushDeferredMetrics(deferredMetrics);
-            current = await this.fetchNextAction(target);
-            continue;
+          if (commandFailed(dispatcherOwnedRecovery)) {
+            const progressed = await this.parentCommandProgress({
+              ctx, session, target, invocation, dispatchCount, stalledDispatches,
+              owner: "failed recovery command", requiresCanonicalActionProgress: true,
+              preserveCommandFailure: true,
+            });
+            if (!progressed.progressed) return this.failure(
+              ctx, errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
+              blockedBoundary({ target, nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
+                dispatchCount, message: "The selected recovery command failed without a durable canonical transition." }),
+            );
+            stalledDispatches = progressed.stalledDispatches;
+            current = progressed.current;
+            return continueDispatch();
           }
-          if (settleRequirementTestToolingFailure(ctx, attempt, exhausted)) {
-            await flushDeferredMetrics(deferredMetrics);
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          if (settleRequirementTestStructuralHandoff(ctx, attempt, exhausted)) {
-            await flushDeferredMetrics(deferredMetrics);
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, exhausted, workerState, retryInvocation);
-          const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step, producerFailureAdmitted);
-          if (correction?.continue) {
-            current = await this.fetchNextAction(target);
-            continue;
-          }
-          return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount, producerFailureAdmitted);
+          const progressed = await this.parentCommandProgress({
+            ctx,
+            session,
+            target,
+            invocation,
+            dispatchCount,
+            stalledDispatches,
+            owner: "recovery command",
+            requiresCanonicalActionProgress: true,
+          });
+          if (progressed.failure) return progressed.failure;
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          return continueDispatch();
         }
-        invocation = retryInvocation;
-      }
-      await flushDeferredMetrics(deferredMetrics);
-      const agentError = attempt.agentError;
 
-      const refreshed = await this.fetchNextAction(target);
-      if (refreshed instanceof Envelope) {
-        current = refreshed;
-        continue;
-      }
-      if (agentError) {
-        const refreshedAction = new FlowDispatchAction(refreshed);
-        if (refreshedAction.isTerminal || refreshedAction.awaitsUserDecision || refreshedAction.awaitsHostAction) {
-          current = refreshed;
-          continue;
+        let dispatcherOwnedCommand;
+        try {
+          dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action, invocation);
+        } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_COMMAND_FAILED",
+            error.message || String(error),
+            blockedBoundary({
+              target,
+              nextAction: validated,
+              dispatchCount,
+              message: "The dispatcher-owned Flow command failed before it could complete the canonical transition.",
+            }),
+          );
         }
-        const boundary = blockedBoundary({
-          target,
-          nextAction: refreshed,
-          dispatchCount,
-          message: "The worker process ended and guarded authority was refreshed. Resolve the provider failure before resuming this non-terminal action.",
-        });
-        return this.failure(
-          ctx,
-          agentError instanceof AgentFailure ? agentError.code : "FLOW_DISPATCH_AGENT_FAILED",
-          `the configured Flow worker failed: ${agentError.message || agentError}`,
-          agentError instanceof AgentFailure
-            ? { ...boundary, agentFailure: agentError.toJSON() }
-            : boundary,
-        );
-      }
-      const refreshedIdentity = this.captureAction(
-        ctx,
-        session,
-        refreshed,
-        dispatchCount,
-        "post-handoff-progress",
-      );
-      stalledDispatches = invocation.hasProgressedTo(refreshedIdentity)
-        || attempt.partialRepair === true || attempt.partialProgressReceipt != null
-        ? 0
-        : stalledDispatches + 1;
-      if (stalledDispatches >= this.maxStalledDispatches) {
-        return this.failure(
-          ctx,
-          "FLOW_DISPATCH_STALLED",
-          `the configured Flow worker returned ${stalledDispatches} time(s) without durable progress`,
-          blockedBoundary({
+        if (dispatcherOwnedCommand != null) {
+          dispatchCount += 1;
+          if (dispatcherOwnedCommand.command.removesExecutionRoot) {
+            try {
+              finalizeCleanupCompletion(dispatcherOwnedCommand.result, target);
+            } catch (error) {
+              return this.failure(
+                ctx,
+                commandFailed(dispatcherOwnedCommand.result) ? errorCode(dispatcherOwnedCommand.result) : error.code,
+                commandFailed(dispatcherOwnedCommand.result) ? errorMessages(dispatcherOwnedCommand.result) : error.message,
+                blockedBoundary({
+                  target,
+                  nextAction: validated,
+                  dispatchCount,
+                  message: "Finalize cleanup returned without durable canonical completion evidence.",
+                }),
+              );
+            }
+            return new FlowDispatchBoundary({
+              kind: "completed",
+              nextAction: null,
+              dispatchCount,
+            }).toJSON();
+          }
+          if (commandFailed(dispatcherOwnedCommand.result)) {
+            // A command can return operational failure after its Store-owned
+            // transaction commits. Do not trust a command-side marker: reload
+            // canonical authority and continue only when the guarded Action has
+            // durably progressed. Otherwise preserve the command failure.
+            const progressed = await this.parentCommandProgress({
+              ctx,
+              session,
+              target,
+              invocation,
+              dispatchCount,
+              stalledDispatches,
+              owner: "failed Flow command",
+              requiresCanonicalActionProgress: true,
+              preserveCommandFailure: true,
+            });
+            if (progressed.failure) return progressed.failure;
+            if (!progressed.progressed) {
+              return this.failure(
+                ctx,
+                errorCode(dispatcherOwnedCommand.result),
+                errorMessages(dispatcherOwnedCommand.result),
+                blockedBoundary({
+                  target,
+                  nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
+                  dispatchCount,
+                  message: "The dispatcher-owned Flow command failed without a durable canonical transition.",
+                }),
+              );
+            }
+            stalledDispatches = progressed.stalledDispatches;
+            current = progressed.current;
+            return continueDispatch();
+          }
+          const progressed = await this.parentCommandProgress({
+            ctx,
+            session,
+            target,
+            invocation,
+            dispatchCount,
+            stalledDispatches,
+            owner: "Flow command",
+          });
+          if (progressed.failure) return progressed.failure;
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          return continueDispatch();
+        }
+        const workerState = ctx.flowManager.canonicalState(ctx.specId);
+        let attempt = await this.runWorkerAttempt(ctx, invocation);
+        dispatchCount += 1;
+        const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
+        if (attempt.error) {
+          if (settleRequirementTestStructuralHandoff(ctx, attempt, attempt.error)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            return continueDispatch();
+          }
+          if (
+            attempt.error.retryable !== true
+            || !isExplicitWorkerToolingFailure(attempt.error, attempt.agentError)
+            || (isSpecArtifactWorkerStep(invocation.action.nextAction.step)
+              && isUnclassifiedWorkerError(attempt.agentError))
+            || !attempt.handoffRequest
+            || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
+          ) {
+            if (settleRequirementTestExternalFailure(ctx, attempt, attempt.error)) {
+              await flushDeferredMetrics(deferredMetrics);
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            if (settleRequirementTestToolingFailure(ctx, attempt, attempt.error)) {
+              await flushDeferredMetrics(deferredMetrics);
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, attempt.error, workerState, invocation);
+            const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step, producerFailureAdmitted);
+            discardDeferredMetrics(deferredMetrics);
+            if (correction?.continue) {
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount, producerFailureAdmitted);
+          }
+
+          // Only malformed JSON, a missing or unreadable handoff transport, or
+          // an explicitly retryable producer payload-format failure is retried
+          // once with a new dispatch invocation and handoff directory. Parsed
+          // semantic, identity, authority, and publication failures are terminal.
+          const retryFeedback = new WorkerArtifactRetryFeedback(attempt.error, {
+            previousExecutionContract: attempt.handoffRequest.executionContract,
+          });
+          const retryCurrent = await this.fetchNextAction(target, retryFeedback.previousExecutionContract);
+          const retryState = ctx.flowManager.canonicalState(ctx.specId);
+          if (
+            retryCurrent instanceof Envelope
+            || retryCurrent.step !== invocation.action.nextAction.step
+            || retryCurrent.action !== invocation.action.nextAction.action
+            || retryState.runId !== workerState.runId
+            || retryState.attempt?.id !== workerState.attempt?.id
+            || retryState.attempt?.sequence !== workerState.attempt?.sequence
+            || session.captureCanonicalAction(workerFacingNextAction(retryCurrent), invocation.action).digest !== invocation.action.digest
+          ) {
+            discardDeferredMetrics(deferredMetrics);
+            return this.failure(
+              ctx,
+              attempt.error.code,
+              attempt.error.message,
+              workerHandoffFailureData(
+                ctx,
+                target,
+                attempt.error,
+                attempt.handoffRequest,
+                dispatchCount,
+                attempt.agentError,
+                appendWorkerHandoffDiagnostic(ctx, attempt.error, attempt.handoffRequest, {
+                  stepId: invocation.action.nextAction.step,
+                  agentError: attempt.agentError,
+                }),
+              ),
+            );
+          }
+          const retryInvocation = freshWorkerInvocation(invocation, retryCurrent);
+          const firstError = attempt.error;
+          const firstRequest = attempt.handoffRequest;
+          const firstAgentError = attempt.agentError;
+          attempt = await this.runWorkerAttempt(
+            ctx,
+            retryInvocation,
+            retryFeedback,
+          );
+          if (attempt.deferredMetric) deferredMetrics.push(attempt.deferredMetric);
+          dispatchCount += 1;
+          if (attempt.error) {
+            discardDeferredMetrics(deferredMetrics);
+            const exhausted = attempt.error.retryable === true
+              ? new WorkerArtifactRetryExhaustedError({
+                  firstError,
+                  secondError: attempt.error,
+                  firstRequest,
+                  secondRequest: attempt.handoffRequest,
+              })
+              : attempt.error;
+            if (exhausted instanceof WorkerArtifactHandoffError) {
+              exhausted.agentFailures = Object.freeze([firstAgentError, attempt.agentError].filter(Boolean));
+            }
+            if (settleRequirementTestExternalFailure(ctx, attempt, exhausted)) {
+              await flushDeferredMetrics(deferredMetrics);
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            if (settleRequirementTestToolingFailure(ctx, attempt, exhausted)) {
+              await flushDeferredMetrics(deferredMetrics);
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            if (settleRequirementTestStructuralHandoff(ctx, attempt, exhausted)) {
+              await flushDeferredMetrics(deferredMetrics);
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, exhausted, workerState, retryInvocation);
+            const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step, producerFailureAdmitted);
+            if (correction?.continue) {
+              current = await this.fetchNextAction(target);
+              return continueDispatch();
+            }
+            return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount, producerFailureAdmitted);
+          }
+          invocation = retryInvocation;
+        }
+        await flushDeferredMetrics(deferredMetrics);
+        const agentError = attempt.agentError;
+
+        const refreshed = await this.fetchNextAction(target);
+        if (refreshed instanceof Envelope) {
+          current = refreshed;
+          return continueDispatch();
+        }
+        if (agentError) {
+          const refreshedAction = new FlowDispatchAction(refreshed);
+          if (refreshedAction.isTerminal || refreshedAction.awaitsUserDecision || refreshedAction.awaitsHostAction) {
+            current = refreshed;
+            return continueDispatch();
+          }
+          const boundary = blockedBoundary({
             target,
             nextAction: refreshed,
             dispatchCount,
-            message: "The worker response was not accepted as completion because the guarded Flow and repository state did not change.",
-          }),
+            message: "The worker process ended and guarded authority was refreshed. Resolve the provider failure before resuming this non-terminal action.",
+          });
+          return this.failure(
+            ctx,
+            agentError instanceof AgentFailure ? agentError.code : "FLOW_DISPATCH_AGENT_FAILED",
+            `the configured Flow worker failed: ${agentError.message || agentError}`,
+            agentError instanceof AgentFailure
+              ? { ...boundary, agentFailure: agentError.toJSON() }
+              : boundary,
+          );
+        }
+        const refreshedIdentity = this.captureAction(
+          ctx,
+          session,
+          refreshed,
+          dispatchCount,
+          "post-handoff-progress",
         );
+        stalledDispatches = invocation.hasProgressedTo(refreshedIdentity)
+          || attempt.partialRepair === true || attempt.partialProgressReceipt != null
+          ? 0
+          : stalledDispatches + 1;
+        if (stalledDispatches >= this.maxStalledDispatches) {
+          return this.failure(
+            ctx,
+            "FLOW_DISPATCH_STALLED",
+            `the configured Flow worker returned ${stalledDispatches} time(s) without durable progress`,
+            blockedBoundary({
+              target,
+              nextAction: refreshed,
+              dispatchCount,
+              message: "The worker response was not accepted as completion because the guarded Flow and repository state did not change.",
+            }),
+          );
+        }
+        current = refreshed;
+        return continueDispatch();
       }
-      current = refreshed;
-    }
 
-    return this.failure(
-      ctx,
-      "FLOW_DISPATCH_LIMIT_REACHED",
-      `flow dispatch exceeded its ${this.maxDispatches}-action safety limit`,
-      blockedBoundary({
-        target,
-        nextAction: current instanceof Envelope ? null : current,
-        dispatchCount,
-        message: "Resume after inspecting why the finite Flow exceeded the dispatcher safety limit.",
-      }),
-    );
+      return this.failure(
+        ctx,
+        "FLOW_DISPATCH_LIMIT_REACHED",
+        `flow dispatch exceeded its ${this.maxDispatches}-action safety limit`,
+        blockedBoundary({
+          target,
+          nextAction: current instanceof Envelope ? null : current,
+          dispatchCount,
+          message: "Resume after inspecting why the finite Flow exceeded the dispatcher safety limit.",
+        }),
+      );
+    }, { commandId: "dispatch" });
+    return continueDispatch();
   }
 }

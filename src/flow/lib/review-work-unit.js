@@ -16,6 +16,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { isNativePathWithin } from "../../lib/portable-path.js";
 import { PRODUCT } from "../../lib/product.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
@@ -32,22 +34,16 @@ export const REVIEW_WORK_UNIT_MANIFEST_ENV = PRODUCT.env("REVIEW_WORK_UNIT_MANIF
 const REVIEW_WORK_UNIT_ROOT = PRODUCT.managedPath("review-work-units");
 
 function isWithin(root, candidate) {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  return resolvedRoot !== resolvedCandidate && isNativePathWithin(resolvedRoot, resolvedCandidate);
 }
 
 function ensureRealDirectory(directory, boundary) {
   const target = path.resolve(directory);
   const root = path.resolve(boundary);
-  if (target !== root && !isWithin(root, target)) throw new Error("review work unit directory escapes execution authority");
-  const parent = path.dirname(target);
-  if (target !== root) ensureRealDirectory(parent, root);
-  if (!fs.existsSync(target)) fs.mkdirSync(target, { mode: 0o755 });
-  const stat = fs.lstatSync(target);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) {
-    throw new Error("review work unit directory must be a real directory");
-  }
-  return target;
+  if (!isNativePathWithin(root, target)) throw new Error("review work unit directory escapes execution authority");
+  return new RealDirectoryAuthority(root).descendant(target, { create: true }).directory;
 }
 
 function regularFile(file, label, maxBytes = MAX_UNTRUSTED_WORK_UNIT_FILE_BYTES) {
@@ -83,6 +79,7 @@ export class ReviewWorkUnit {
     this.target = target instanceof ReviewWorkUnitTarget ? target : new ReviewWorkUnitTarget(target);
     this.output = output instanceof ReviewWorkUnitOutput ? output : new ReviewWorkUnitOutput(output);
     this.root = path.dirname(ReviewWorkUnit.manifestPathFor(this));
+    this.directoryAuthority = new RealDirectoryAuthority(this.root);
     this.inputs = [];
     this.manifestDocument = null;
     this.executionContract = null;
@@ -97,7 +94,9 @@ export class ReviewWorkUnit {
   }
 
   prepare() {
+    if (this.directoryAuthority.identity !== null) this.directoryAuthority.assertStable();
     ensureRealDirectory(this.root, this.executionRoot);
+    this.directoryAuthority = new RealDirectoryAuthority(this.root);
     ensureRealDirectory(path.join(this.root, "inputs"), this.root);
     return this;
   }
@@ -206,11 +205,7 @@ export class ReviewWorkUnit {
 
   cleanup() {
     if (!fs.existsSync(this.root)) return false;
-    const stat = fs.lstatSync(this.root);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(this.root) !== this.root) {
-      throw new Error("review work unit cleanup target is invalid");
-    }
-    fs.rmSync(this.root, { recursive: true });
+    this.directoryAuthority.removeTree();
     return true;
   }
 
@@ -220,10 +215,8 @@ export class ReviewWorkUnit {
       throw new Error(`${REVIEW_WORK_UNIT_MANIFEST_ENV} must be an absolute manifest path`);
     }
     const directory = path.dirname(manifestPath);
-    const directoryStat = fs.lstatSync(directory);
-    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-      throw new Error("review worker manifest directory must be a real directory");
-    }
+    const directoryAuthority = new RealDirectoryAuthority(directory);
+    directoryAuthority.assertStable();
     const snapshot = regularFile(manifestPath, "review work unit manifest");
     let manifest;
     try { manifest = new ReviewWorkUnitManifest(JSON.parse(snapshot.bytes.toString("utf8"))); }
@@ -234,12 +227,14 @@ export class ReviewWorkUnit {
     if (expectedManifest !== null) manifest.assertBinding(expectedManifest);
     const instance = Object.create(ReviewWorkUnit.prototype);
     instance.root = directory;
+    instance.directoryAuthority = directoryAuthority;
     instance.manifestDocument = manifest;
     instance.manifestDigest = snapshot.digest;
     return instance;
   }
 
   readExecutionContract() {
+    this.directoryAuthority.assertStable();
     const proof = JSON.parse(regularFile(path.join(this.root, "execution.json"), "review execution proof").bytes.toString("utf8"));
     if (Object.keys(proof).sort().join(",") !== "contract,contractId,manifestDigest") {
       throw new FlowExecutionContractRefusal("Review execution proof has invalid fields");
@@ -258,6 +253,7 @@ export class ReviewWorkUnit {
   }
 
   seal() {
+    this.directoryAuthority.assertStable();
     if (!(this.manifestDocument instanceof ReviewWorkUnitManifest)) throw new Error("only a worker manifest may be sealed");
     for (const input of this.manifestDocument.inputs) assertReviewWorkUnitInputSnapshot(input, this.root);
     const output = regularFile(path.join(this.root, this.manifestDocument.output.basename), "review work unit output");
@@ -268,6 +264,7 @@ export class ReviewWorkUnit {
   }
 
   readSealedOutput() {
+    this.directoryAuthority.assertStable();
     if (!(this.manifestDocument instanceof ReviewWorkUnitManifest)) throw new Error("review work unit manifest is required");
     const sealSnapshot = regularFile(path.join(this.root, "seal.json"), "review work unit seal");
     let seal;
@@ -292,11 +289,7 @@ function expectedNodeForManifest(manifest) {
 }
 
 function safeDirectoryEntries(directory) {
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== path.resolve(directory)) {
-    throw new Error("review work unit reconciliation directory is not real");
-  }
-  return fs.readdirSync(directory, { withFileTypes: true }).map((entry) => {
+  return new RealDirectoryAuthority(directory).entries({ withFileTypes: true }).map((entry) => {
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       throw new Error("review work unit reconciliation found an unknown namespace entry");
     }
@@ -355,12 +348,11 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
     let publishedReview;
     let delta;
     try {
-      inputReview = new CanonicalSpecReview(JSON.parse(
-        assertReviewWorkUnitInputSnapshot(reviewInput[0], workUnit.directory).bytes.toString("utf8"),
-      ));
-      publishedReview = new CanonicalSpecReview(JSON.parse(
-        descriptorSnapshot(flowManager, specId, outputDescriptor).bytes.toString("utf8"),
-      ));
+      const inputBytes = assertReviewWorkUnitInputSnapshot(reviewInput[0], workUnit.directory).bytes;
+      const publishedBytes = descriptorSnapshot(flowManager, specId, outputDescriptor).bytes;
+      const processEvidence = catalog.processStopEncoding(flowManager.specLocation(specId), "spec.review", [inputBytes, publishedBytes]);
+      inputReview = CanonicalSpecReview.fromBytes(inputBytes, { processEvidence });
+      publishedReview = CanonicalSpecReview.fromBytes(publishedBytes, { processEvidence });
       delta = new SpecReviewDelta(JSON.parse(sealed.bytes.toString("utf8")));
       delta.assertCurrent(inputReview);
       if (delta.stage !== "spec-review") return false;
@@ -380,7 +372,7 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
         .assertCheckout(captureProcessExecutionCheckoutIdentity({
           mainRoot: flowManager.specLocation(specId).repositoryRoot, executionRoot,
         }));
-      return new CanonicalSpecReview({ ...merged.toJSON(), processStop: evidence.toJSON() }).digest === publishedReview.digest;
+      return new CanonicalSpecReview({ ...merged.toJSON(), processStop: evidence.receipt }).digest === publishedReview.digest;
     } catch (error) {
       if (error instanceof ProcessExecutionControlFailure) throw error;
       return false;
@@ -641,11 +633,7 @@ export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executi
             continue;
           }
         }
-        const stat = fs.lstatSync(directory);
-        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-          throw new Error("unsealed review work unit cleanup target is invalid");
-        }
-        fs.rmSync(directory, { recursive: true });
+        new RealDirectoryAuthority(directory).removeTree();
         cleaned += 1;
         continue;
       }

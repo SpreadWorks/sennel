@@ -21,10 +21,10 @@ function createHookConfigProject(command) {
   return root;
 }
 
-function expectDispatcherFailure(args, assertions, message = "should exit non-zero") {
+function expectDispatcherFailure(args, assertions, message = "should exit non-zero", options = {}) {
   let failure;
   try {
-    execFileSync("node", [SENNEL, ...args], { encoding: "utf8" });
+    execFileSync(process.execPath, [SENNEL, ...args], { encoding: "utf8", ...options });
   } catch (err) {
     failure = err;
   }
@@ -75,15 +75,39 @@ describe("sennel dispatcher", () => {
     assert.match(result, /setup/i);
   });
 
-  it("routes 'flow' to flow dispatcher", () => {
-    try {
-      execFileSync("node", [SENNEL, "flow"], { encoding: "utf8" });
-      assert.fail("should exit non-zero without subcommand");
-    } catch (err) {
-      const out = `${err.stdout || ""}${err.stderr || ""}`;
-      assert.match(out, /prepare|get|set|run/);
-    }
+  it("prints Flow help and fails with that help when no command is supplied", (t) => {
+    const root = createTmpDir("flow-routing-e2e-");
+    t.after(() => removeTmpDir(root));
+    const help = execFileSync(process.execPath, [SENNEL, "flow", "--help"], { cwd: root, encoding: "utf8" });
+    for (const group of ["get", "set", "run"]) assert.match(help, new RegExp(`\\b${group}\\b`));
+    expectDispatcherFailure(["flow"], (failure) => {
+      assert.equal(failure.status, 1);
+      assert.equal(failure.signal, null);
+      assert.equal(failure.stdout, help);
+    }, "missing Flow command must fail", { cwd: root });
   });
+
+  for (const command of [["unregistered-flow-group"], ["get", "unregistered-flow-command"]]) {
+    it(`rejects unknown Flow route ${command.join(" ")} with a typed failure envelope`, (t) => {
+      const root = createTmpDir("flow-routing-refusal-e2e-");
+      t.after(() => removeTmpDir(root));
+      expectDispatcherFailure(["flow", ...command], (failure) => {
+        assert.equal(failure.status, 1);
+        assert.equal(failure.signal, null);
+        const envelope = JSON.parse(failure.stdout);
+        assert.equal(envelope.ok, false);
+        assert.equal(envelope.type, command.length === 1 ? "run" : command[0]);
+        assert.equal(envelope.key, "unknown");
+        assert.deepEqual(envelope.errors.map((error) => error.code), ["FLOW_UNKNOWN_COMMAND"]);
+        assert.equal(envelope.guidance.schemaVersion, 1);
+        assert.equal(envelope.guidance.code, "FLOW_UNKNOWN_COMMAND");
+        assert.equal(envelope.guidance.nextAction.kind, "external_work");
+        assert.equal(envelope.guidance.currentState.persistence, "unconfirmed");
+        assert.ok(envelope.guidance.explanation.length > 0);
+        assert.ok(envelope.guidance.nextAction.instruction.length > 0);
+      }, "unknown Flow route must fail", { cwd: root });
+    });
+  }
 
   it("exposes registered-active-flow resume help without parked recovery", () => {
     const resume = execFileSync("node", [SENNEL, "flow", "resume", "--help"], { encoding: "utf8" });
@@ -120,7 +144,8 @@ describe("sennel dispatcher", () => {
   });
 
   it("routes 'hook list --json' and includes the current configured command", () => {
-    const tmp = createHookConfigProject("printf hook-json");
+    const command = { kind: "node-script", script: "hook-json.js", args: ["{{CWD}}"] };
+    const tmp = createHookConfigProject(command);
     try {
       const result = execFileSync("node", [SENNEL, "hook", "list", "--json"], {
         encoding: "utf8",
@@ -129,7 +154,7 @@ describe("sennel dispatcher", () => {
       const hooks = JSON.parse(result);
       const postWorktree = hooks.find((hook) => hook.name === "PostWorktree");
       assert.ok(postWorktree);
-      assert.equal(postWorktree.command, "printf hook-json");
+      assert.deepEqual(postWorktree.command, command);
       assert.deepEqual(postWorktree.placeholders, ["CWD"]);
     } finally {
       removeTmpDir(tmp);

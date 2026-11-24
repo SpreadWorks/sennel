@@ -238,8 +238,11 @@ describe("ReviewWorkUnit", () => {
     fs.symlinkSync(outsideDirectory, directorySymlinkSurface.directory);
     assert.throws(
       () => ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: directorySymlinkSurface.manifestPath }),
-      /manifest directory must be a real directory/i,
+      { code: "REAL_DIRECTORY_AUTHORITY_AUTHORITY_INVALID" },
     );
+    assert.deepEqual(fs.readFileSync(path.join(outsideDirectory, "manifest.json")), manifestBytes);
+    assert.deepEqual(fs.readdirSync(outsideDirectory), ["manifest.json"]);
+    assert.equal(fs.readFileSync(outside, "utf8"), "{}\n");
 
     const oversizedInput = createWorkUnit(executionRoot, { attemptId: "attempt-oversized-input" });
     oversizedInput.writeInput({ logicalKey: "draft", logicalPath: "draft.json", bytes: "{}\n", root: true });

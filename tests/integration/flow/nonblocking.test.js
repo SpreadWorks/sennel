@@ -26,6 +26,7 @@ import {
 } from "../../../src/flow/lib/nonblocking.js";
 import { applyNonblockingDecision, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { SeedWorkRoot, SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { fromAcceptanceResult, fromFinalRegressionResult, fromGateResult, fromReviewResult, fromVerificationResult } from "../../../src/flow/lib/nonblocking-evidence.js";
@@ -35,6 +36,7 @@ import RunDispatchCommand, { FlowDispatchAction } from "../../../src/flow/lib/ru
 import { ImplPhaseScenario } from "../../support/impl-phase-scenario.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { container } from "../../../src/lib/container.js";
@@ -44,6 +46,7 @@ import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
 
 let defaultGateSeed;
+let reviewInputSeed;
 const gateSeedScope = new SeedCleanupScope(after, mock);
 
 async function scenario(t, options) {
@@ -131,12 +134,12 @@ async function prepareScenario(phase, { step, passOnly = false }) {
   } else if (step === "retro") {
     const outcome = await new RunRetroCommand().execute(phase.context());
     assert.ok(outcome.artifacts.summary.not_done > 0, JSON.stringify(outcome));
-    manager.publishCurrentAttemptResult({ specId, commandResult: outcome });
+    await FLOW_COMMANDS.run.retro.post(phase.context(), outcome);
   } else if (step === "acceptance-review") {
     const outcome = await new RunAcceptanceReviewCommand({ responseSource: new InconclusiveAcceptanceResponse() })
       .execute(phase.context());
     assert.equal(outcome.verdict, "user_decision_required", JSON.stringify(outcome));
-    manager.publishCurrentAttemptResult({ specId, commandResult: outcome });
+    await FLOW_COMMANDS.run["acceptance-review"].post(phase.context(), outcome);
   }
   return { root, manager, fixture, phase };
 }
@@ -152,15 +155,22 @@ class InconclusiveAcceptanceResponse extends AcceptanceReviewResponseSource {
 }
 
 async function malformedReviewScenario(t, payload) {
-  const phase = ImplPhaseScenario.create(t);
-  await phase.advanceTo("impl-review");
-  const { root, manager, specId } = phase;
+  reviewInputSeed ??= ImplPhaseScenario.seed(gateSeedScope, { frontier: "impl-review" });
+  const seed = await reviewInputSeed;
+  const clone = new SeedWorkRoot(seed.root, { prefix: "sennel-invalid-review-boundary-" });
+  t.after(() => clone.cleanup());
+  const root = clone.root;
+  const specId = seed.specId;
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  const fixture = CanonicalFlowFixture.fromExisting({ flowManager: manager, specId });
+  seed.assertClone(manager);
+  const state = manager.canonicalState(specId);
   const candidate = new FlowArtifactAttemptHistory([new FlowArtifactAttemptRecord({
-    attempt: phase.state().attempt.sequence, payload: { artifact: { logicalKey: "impl.review", payload } },
+    attempt: state.attempt.sequence, payload: { artifact: { logicalKey: "impl.review", payload } },
   })]);
   manager.publishArtifacts({ specId, nodeId: "impl-review", artifactWrites: [{ logicalKey: "impl.review",
     mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(candidate.toJSON())}\n`) }] });
-  return { root, manager, fixture: { specId, runId: phase.state().runId }, phase };
+  return { root, manager, fixture };
 }
 
 async function taskScenario(t, step = "review", { failureKind = "mechanical", nextTask = false, reviewTooling = false, rejectPublication = false } = {}) {
@@ -170,8 +180,18 @@ async function taskScenario(t, step = "review", { failureKind = "mechanical", ne
   const { root, manager, specId } = phase;
   const fixture = { specId, runId: phase.state().runId };
   if (step === "review") {
-    const outcome = await phase.review(() => { const error = new Error("external Review invocation failed before provider start");
-      error.code = "EIO"; throw error; }).execute(phase.context());
+    let invocationCalls = 0;
+    const failInvocation = () => {
+      invocationCalls += 1;
+      const error = new Error("external Review invocation failed before provider start");
+      error.code = "EIO";
+      throw error;
+    };
+    const external = installReviewProcessFake(failInvocation);
+    let outcome;
+    try { outcome = await phase.review(failInvocation).execute(phase.context()); }
+    finally { external.mock.restore(); }
+    assert.equal(invocationCalls, 1, "the selected Task Review invocation must reach its own external dependency");
     assert.equal(outcome.ok, false);
     assert.ok(phase.state().attempt.failure, JSON.stringify(outcome));
     return { root, manager, fixture, phase };
@@ -288,7 +308,6 @@ function raceCanonicalNonblockingCommit({ manager, fixture, invoke, method, regi
 describe("canonical nonblocking policy", () => {
   for (const [step, payload] of [
     ["retro", { summary: { not_done: 1 } }],
-    ["acceptance-review", { verdict: "blocked" }],
   ]) {
     it(`uses Definition-owned acceptance boundary eligibility for ${step}`, async (t) => {
       const { root, manager, fixture } = await scenario(t, { step, payload });
@@ -301,6 +320,26 @@ describe("canonical nonblocking policy", () => {
       } finally { removeTmpDir(root); }
     });
   }
+
+  it("retains the Definition-owned manual decision after an inconclusive Acceptance Review", async (t) => {
+    const { root, manager, fixture, phase } = await scenario(t, { step: "acceptance-review" });
+    const source = manager.readCurrentStepSettlement({ specId: fixture.specId,
+      stepId: "acceptance-review", completed: true });
+    assert.equal(source.result.kind, "acceptance-review-decision-required");
+    assert.equal(source.settlement.targetStepId, "acceptance-decision");
+    assert.equal(phase.current(), "acceptance-decision");
+    const before = new CanonicalPersistenceSnapshot(manager, fixture.specId);
+    const next = await new GetNextActionCommand().execute({ root, mainRoot: root, executionRoot: root,
+      specId: fixture.specId, flowManager: manager, flowState: manager.loadReadOnly(fixture.specId) });
+    assert.equal(next.directive.kind, "await_user_decision");
+    assert.equal(definitionNonblockingEligibilityForActiveFlow(root, manager.loadReadOnly(fixture.specId), manager), null);
+    assert.throws(() => activateNonBlockingPolicy({ root, flowManager: manager,
+      reason: "An advisory policy cannot replace this Acceptance decision." }), /nonblocking is not supported for step: acceptance-decision/);
+    assert.equal(manager.loadReadOnly(fixture.specId).policy.nonblocking, null);
+    before.assertUnchanged(manager, fixture.specId, "manual Acceptance boundary cannot be bypassed by policy activation");
+    assert.equal(manager.readCurrentStepSettlement({ specId: fixture.specId,
+      stepId: "acceptance-review", completed: true }).receipt.id, source.receipt.id);
+  });
 
   it("keeps activation, evidence identity, and decision in the V1 policy and Activity ledger", async (t) => {
     const { root, manager, fixture } = await scenario(t);
@@ -750,16 +789,27 @@ describe("canonical nonblocking policy", () => {
       try {
         const before = JSON.stringify({ state: manager.canonicalState(fixture.specId),
           activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) });
-        const next = await new GetNextActionCommand().execute({
+        const readNext = () => new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId: fixture.specId,
-          flowManager: manager, flowState: manager.load(fixture.specId),
+          flowManager: manager, flowState: manager.loadReadOnly(fixture.specId),
         });
-        assert.equal(next.directive.actionPrompt, undefined);
-        assert.equal(next.nonblockingDecision, undefined);
-        assert.throws(() => activateNonBlockingPolicy({
+        const activate = () => activateNonBlockingPolicy({
           root, flowManager: manager,
           reason: "Invalid review evidence cannot enter acceptance.",
-        }), /not selected by the current Definition strict stop/);
+        });
+        if (payload.canonicalEvidence === null) {
+          const next = await readNext();
+          assert.equal(next.directive.actionPrompt, undefined);
+          assert.equal(next.nonblockingDecision, undefined);
+          assert.throws(activate, /not selected by the current Definition strict stop/);
+        } else {
+          // This boundary fixture deliberately publishes forged semantic evidence
+          // without a completed Review Result or its execution receipt. Both
+          // consumers must refuse it before offering or activating continuation.
+          const missingProducer = /Flow Review history lacks its one terminal producer/;
+          await assert.rejects(readNext, missingProducer);
+          assert.throws(activate, error => error.code === "NONBLOCKING_NOT_DEFINITION_ELIGIBLE");
+        }
         assert.equal(JSON.stringify({ state: manager.canonicalState(fixture.specId),
           activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) }), before);
       } finally { removeTmpDir(root); }

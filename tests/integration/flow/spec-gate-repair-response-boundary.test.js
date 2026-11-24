@@ -204,7 +204,7 @@ test("a sealed unauthorized response is charged once but cannot adopt or publish
   }
 });
 
-test("a legacy evidence-stage response is refused for a current v2 repair request", async () => {
+test("a retired evidence-stage payload is rejected at seal without publishing or charging a response", async () => {
   const value = await createSpecGateRepairScenario();
   try {
     const initialSpec = specBytes(value.flowManager, value.specId);
@@ -214,17 +214,16 @@ test("a legacy evidence-stage response is refused for a current v2 repair reques
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     assert.equal(context.mode, "repair");
     const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-    submit(request, value.ctx, handoffProposal(request, { legacy: true }));
+    assert.throws(() => submit(request, value.ctx, handoffProposal(request, { legacy: true })), {
+      name: "WorkerArtifactHandoffError", code: "FLOW_ARTIFACT_HANDOFF_INVALID",
+    });
+    assert.equal(fs.existsSync(request.submissionPath), false, "a rejected payload must not obtain a seal");
 
     const beforePrepare = progress(value.flowManager, value.specId, attemptId, 0, "claimed");
     const claimedBudget = budget(value.flowManager, value.specId, attemptId, context.baseRevision);
     assert.equal(claimedBudget.providerCallCount, 1);
     assert.equal(beforePrepare.responseCost, undefined);
     assert.equal(beforePrepare.phase, "claimed");
-    await assert.rejects(() => prepareSpecGateRepairService({ ctx: value.ctx, request,
-      Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
-    /typed repair disposition/);
-
     const reloaded = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
     assert.deepEqual(progress(reloaded, value.specId, attemptId, 0, "claimed"), beforePrepare);

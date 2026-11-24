@@ -37,7 +37,7 @@ export function validateLintGuardrails(guardrails) {
  * @returns {string[]} Relative file paths
  */
 export function getChangedFiles(root, base) {
-  const res = runGit(["-C", root, "diff", "--name-only", `${base}...HEAD`]);
+  const res = runGit(["-C", root, "diff", "--name-only", `${base}...HEAD`], { cwd: root });
   if (!res.ok) {
     assertOk(res, "git diff failed");
   }

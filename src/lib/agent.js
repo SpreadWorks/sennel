@@ -1,3 +1,4 @@
+import { NativeExecutableInvocation } from "./command-invocation.js";
 /**
  * src/lib/agent.js
  *
@@ -33,11 +34,13 @@ import {
   persistAgentInvocationMetric,
   persistPromptCacheHitMetric,
 } from "./agent-invocation-metric.js";
-import { AgentTimeout, DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeout.js";
-import { AgentTimeoutError, ChildProcessSupervisor, executeSupervisedProcess, DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS } from "./process-supervisor.js";
+import { AgentTimeout, DEFAULT_REGISTERED_CHILD_GRACE_MS } from "./agent-timeout.js";
+import { AgentTimeoutError, DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS } from "./process-supervisor.js";
 import { PRODUCT } from "./product.js";
 import { AtomicFile } from "./atomic-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { FlowAttributionPolicy } from "./flow-attribution.js";
 import {
@@ -56,6 +59,7 @@ import {
 } from "./agent-failure.js";
 import { resolvePromptCharacterLimit } from "./config.js";
 import { TemporaryPaths } from "./temporary-paths.js";
+import { ReadOnlyInvocationWorkspace, ReadOnlyProcessRuntimeStorage } from "./readonly-invocation-workspace.js";
 import { PromptExecutionJournalError, preservePromptExecutionControlFailure } from "./prompt-execution-journal.js";
 import {
   MAX_AGENT_ARGUMENT_BYTES,
@@ -73,6 +77,7 @@ export {
 };
 
 const DEFAULT_STDIN_FALLBACK_THRESHOLD = 100_000;
+export const AGENT_EXTERNAL_EXECUTION_INSTRUCTION = 'For every external executable, use sennel command -- <executable> [argument ...] from the inherited Sennel execution context. Pass literal arguments separately. Keep the inherited context; do not construct a Flow ID, run ID, or replacement execution context. Wait for every sennel command to exit and obtain its final result. If a tool returns a running handle or session, keep waiting for that command within the existing execution budget. Do not send your final response while any command is still running. If you cannot confirm completion within that budget, report the execution as incomplete rather than claiming success.';
 const MAX_EXECUTION_ENVIRONMENT_VARIABLES = 64;
 const MAX_EXECUTION_ENVIRONMENT_BYTES = 64 * 1024;
 const MAX_RETRY = 5;
@@ -132,6 +137,7 @@ class ResolvedAgentInvocationBlueprint {
     missingSchemaProfileFields,
     executionEnvironment,
     stdinContent,
+    profileArguments,
   }) {
     if (!(projection instanceof ResolvedAgentInvocationProjection)) {
       throw new Error("resolved agent invocation blueprint requires a projection");
@@ -142,10 +148,12 @@ class ResolvedAgentInvocationBlueprint {
     this.missingSchemaProfileFields = Object.freeze([...missingSchemaProfileFields]);
     this.executionEnvironment = Object.freeze({ ...executionEnvironment });
     this.stdinContent = stdinContent;
+    this.profileArguments = profileArguments;
     Object.freeze(this);
   }
 
   materialize({ temporaryRoot, commandId }) {
+    this.profileArguments.assertCurrent();
     let finalArgs = [...this.projection.finalArgs];
     let pendingSchemaWrite = null;
     if (this.projectedSchemaPath) {
@@ -258,6 +266,10 @@ class Agent {
   constructor({ config, paths, registry, logger, flowManager, supervision }) {
     this._config = config || {};
     this._paths = paths || {};
+    if (this._paths.temporaryPaths != null && !(this._paths.temporaryPaths instanceof TemporaryPaths)
+      && !(this._paths.temporaryPaths instanceof ReadOnlyInvocationWorkspace)) {
+      throw new TypeError("Agent temporary storage requires TemporaryPaths or a minted ReadOnlyInvocationWorkspace");
+    }
     this._registry = registry || new ProviderRegistry(this._config.agent?.providers || {});
     this._logger = logger;
     this._flowManager = flowManager || null;
@@ -332,7 +344,6 @@ class Agent {
    * @param {number}  [options.retryDelayMs=3000]
    * @param {string}  [options.executionWorkDir] - Per-call agent execution directory inside the repository
    * @param {string} [options.temporaryRoot] - Selected scratch scope, independently of executionWorkDir
-   * @param {boolean} [options.waitForProcessTree=false] - Wait for the provider process group to become idle
    * @param {"ambient"|"none"} [options.flowAttribution="ambient"]
    * @param {import("./agent-invocation-metric.js").DeferredAgentInvocationMetric} [options.deferredMetric]
    * @param {import("./prompt-batching.js").PromptProviderCallAdmission} [options.providerCallAdmission]
@@ -349,7 +360,7 @@ class Agent {
       ?? options.logicalInvocationId ?? crypto.randomUUID();
     const caller = AgentExecutionObservation.currentCaller();
     return AgentExecutionObservation.run(logicalInvocationId, () =>
-      withManagedProcessScope({ executionRoot: this._paths.root || process.cwd() },
+      withManagedProcessScope({ standaloneRoot: this._paths.root || process.cwd() },
         () => this._callInProcessScope(prompt, { ...options, logicalInvocationId, observationCaller: caller })));
   }
 
@@ -433,7 +444,6 @@ class Agent {
       executionObservation: observation,
       processExecutionBinding: processExecutionBinding ?? (runtime?.borrowed ? runtime.binding : session?.binding.toJSON()),
       logicalInvocationId: opts.logicalInvocationId,
-      executionWorkDir: executionContext.providerWorkDir,
       spawnCwd: executionContext.spawnCwd,
       temporaryRoot,
     };
@@ -534,6 +544,7 @@ class Agent {
   }
 
   _temporaryPaths() {
+    if (this._paths.temporaryPaths) return this._paths.temporaryPaths;
     const root = this._paths.repositoryRoot || this._paths.root || process.cwd();
     return new TemporaryPaths(root);
   }
@@ -555,7 +566,7 @@ class Agent {
     return PromptCacheIdentity.from({ resolved, prompt, options }).toKeyMaterial();
   }
 
-  _buildPromptCacheKeyForTest(resolved, prompt, options = {}) {
+  _buildPromptCacheKey(resolved, prompt, options = {}) {
     return sha256(this._buildPromptCacheKeyMaterialForTest(resolved, prompt, options));
   }
 
@@ -606,9 +617,11 @@ class Agent {
     if (!context) return null;
     const cache = new AgentPromptCache({
       root: this._paths.root || process.cwd(),
+      mainRoot: this._paths.repositoryRoot || this._paths.root || process.cwd(),
+      storagePolicy: this._paths.processRuntimeStorage ?? null,
       specId: context.specId,
     });
-    const key = this._buildPromptCacheKeyForTest(resolved, prompt, options);
+    const key = this._buildPromptCacheKey(resolved, prompt, options);
     return { cache, key, context };
   }
 
@@ -623,9 +636,9 @@ class Agent {
 
   _createInvocationBlueprint(resolved, prompt, options) {
     const { provider, profile } = resolved;
-    const baseArgs = Array.isArray(profile.args) ? [...profile.args] : [];
+    const profileArguments = new AgentProfileArguments(Array.isArray(profile.args) ? profile.args : []);
     const systemFlag = provider.systemPromptFlag();
-    const systemPrompt = options.systemPrompt ?? null;
+    const systemPrompt = effectiveSystemPrompt(options);
 
     const prefix = systemFlag && systemPrompt ? [systemFlag, systemPrompt] : [];
     let effectivePrompt = !systemFlag && systemPrompt
@@ -668,7 +681,7 @@ class Agent {
       projectedSchemaMode = "fallback";
     }
 
-    const promptedArgs = substitutePromptToken(baseArgs, effectivePrompt);
+    const promptedArgs = profileArguments.withPrompt(effectivePrompt);
 
     const workDirFlag = provider.workDirFlag();
     const executionWorkDir = this._resolveExecutionWorkDir(options.executionWorkDir);
@@ -688,7 +701,7 @@ class Agent {
       // Stdin fallback routes only the effective user prompt away from argv.
       // Separate system/schema arguments remain exactly as the provider profile
       // declares them and are accounted independently in the projection.
-      const strippedArgs = stripPromptArgs(baseArgs);
+      const strippedArgs = profileArguments.withoutPrompt();
       const strippedFinal = workDirFlag
         ? injectWorkDirFlag(workDirFlag, executionWorkDir, strippedArgs)
         : strippedArgs;
@@ -700,7 +713,7 @@ class Agent {
       : 0;
     const transportedPromptCharacters = usesStdin
       ? String(effectivePrompt).length
-      : substitutedPromptCharacterCount(baseArgs, effectivePrompt);
+      : profileArguments.promptCharacterCount(effectivePrompt);
     const projection = new ResolvedAgentInvocationProjection({
       providerKey: resolved.providerKey,
       profileKey: resolved.profileKey,
@@ -722,6 +735,7 @@ class Agent {
       missingSchemaProfileFields,
       executionEnvironment: normalizedExecutionEnvironment(options.executionEnvironment),
       stdinContent,
+      profileArguments,
     });
   }
 
@@ -733,6 +747,12 @@ class Agent {
       throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider attempts exhausted this call's transport retry limit");
     }
     for (let attempt = initialAttempt; attempt <= retry.retryCount; attempt++) {
+      if (blueprint.profileArguments.usesControlDirectory) {
+        // An attempt/resumed call uses its current runtime generation, never a
+        // control directory retained in an earlier projection or retry.
+        blueprint = this._createInvocationBlueprint(resolved, prompt, options);
+        blueprint.projection.assertWithinLimit(this.promptCharacterLimit);
+      }
       const materializedInvocation = blueprint.materialize({
         temporaryRoot: this._resolveTemporaryRoot(options),
         commandId: options.commandId,
@@ -830,22 +850,19 @@ class Agent {
       let completed;
       try {
         const runtime = ProcessExecutionRuntime.current();
-        const execute = runtime ? executeManagedProcess : executeSupervisedProcess;
-        completed = await execute(profile.command, finalArgs, {
-          runtime, cwd, env, stdinContent, timeoutMs,
+        const invocation = new NativeExecutableInvocation({ executable: profile.command, args: finalArgs, cwd, env, stdio: [stdinContent == null ? "ignore" : "pipe", "pipe", "pipe"] });
+        completed = await executeManagedProcess(invocation, [], {
+          runtime, stdinContent, timeoutMs, kind: "provider",
           processExecutionBinding: options.processExecutionBinding ?? options.providerCallAdmission?.processExecutionBinding,
           onProcessExecutionStop: async (receipt) => {
             await options.providerCallAdmission?.observeProcessStop?.(receipt, options.providerAttemptContext);
             await options.onProcessExecutionStop?.(receipt);
           },
-          graceMs: this._supervision.graceMs || DEFAULT_AGENT_PROCESS_TREE_GRACE_MS,
+          graceMs: this._supervision.graceMs || DEFAULT_REGISTERED_CHILD_GRACE_MS,
           exitDrainMs: this._supervision.exitDrainMs || DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS,
-          platform: this._supervision.platform,
-          spawn: this._supervision.spawn,
-          runTaskkill: this._supervision.runTaskkill,
-          onSpawn: (child) => {
-            providerStarted = child.pid != null;
-            if (providerStarted) startedAt = new Date().toISOString();
+          onSpawn: () => {
+            providerStarted = true;
+            startedAt = new Date().toISOString();
           },
           onEvent: options.onSupervisorEvent,
           onSupervisorEvent: (event) => {
@@ -855,7 +872,6 @@ class Agent {
           onStderr: options.onStderr,
           activityMonitor: options.activityMonitor,
           abortSignal: options.abortSignal,
-          waitForProcessTree: options.waitForProcessTree === true,
           timeoutDiagnostic: options.timeoutDiagnostic,
           commandId: options.commandId,
           observationBinding: options.executionObservation?.binding.toJSON() ?? null,
@@ -878,9 +894,9 @@ class Agent {
         if (startup !== null) error.providerStartupEvidence = startup;
         throw formatSpawnError(error, { command: profile.command, env, providerKey, profileKey, commandId: options.commandId });
       }
-      const { code, signal, stdout, stderr, stdinError, processTreeQuiescence } = completed;
+      const { code, signal, stdout, stderr, stdinError, registeredExecutionQuiescence } = completed;
       const providerCompletionEvidence = new AgentProviderCompletionEvidence({
-        provider: providerKey, profile: profileKey, exitCode: code, signal, stdout, stderr, processTreeQuiescence,
+        provider: providerKey, profile: profileKey, exitCode: code, signal, stdout, stderr, registeredExecutionQuiescence,
       });
       if (code === 0 && !signal && !stdinError) {
         const trimmed = String(stdout).trim();
@@ -945,6 +961,10 @@ class PromptCachePolicy {
   }
 }
 
+function effectiveSystemPrompt(options) {
+  return [options.systemPrompt, AGENT_EXTERNAL_EXECUTION_INSTRUCTION].filter(Boolean).join("\n\n");
+}
+
 class PromptCacheIdentity {
   constructor(input = {}) {
     this.commandId = input.commandId ?? null;
@@ -965,7 +985,7 @@ class PromptCacheIdentity {
       provider: resolved.providerKey,
       profileKey: resolved.profileKey,
       invocation: PromptCacheInvocation.fromProfile(resolved.profile),
-      systemPrompt: options.systemPrompt ?? null,
+      systemPrompt: effectiveSystemPrompt(options),
       userPrompt: prompt,
       jsonSchema: options.jsonSchema ?? null,
       fmtFallback: options.fmtFallback ?? null,
@@ -1041,7 +1061,7 @@ export class AgentInvocationConfiguration extends PromptCacheInvocation {
 }
 
 class AgentPromptCache {
-  constructor({ root, specId }) {
+  constructor({ root, mainRoot, storagePolicy, specId }) {
     this.root = path.resolve(root);
     this.specId = String(specId);
     const rootAuthority = new RealDirectoryAuthority(this.root);
@@ -1056,8 +1076,11 @@ class AgentPromptCache {
     const fileName = `${cacheFileName(specId)}.json`;
     this.filePath = path.join(this.directory.directory, fileName);
     this.lock = new FileLock({
-      directoryAuthority: this.directory,
-      fileName: `.${fileName}.lock`,
+      location: new RepositoryLockAuthority(mainRoot, {
+        rootAuthority: path.resolve(mainRoot) === this.root ? rootAuthority : null,
+        storagePolicy,
+      }).location({ namespace: "agent-prompt-cache", identity: this.filePath, fileName: `.${fileName}.lock`,
+        legacyPaths: [path.join(this.directory.directory, `.${fileName}.lock`)] }),
       kind: "agent-prompt-cache",
       authority: { specId: this.specId },
       waitPolicy: new FileLockWaitPolicy({
@@ -1110,7 +1133,8 @@ class AgentPromptCache {
   read() {
     if (!fs.existsSync(this.filePath)) return this.emptyStore();
     try {
-      const data = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      const data = JSON.parse(captureRegularFile(this.filePath, { label: "agent prompt cache", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        requireSingleLink: true }).text());
       if (!data || typeof data !== "object" || data.version !== 1 || !data.entries || typeof data.entries !== "object") {
         return this.emptyStore();
       }
@@ -1360,25 +1384,61 @@ function matchDefaultProfileFallback(profiles, profileName, commandId) {
   return matchProfilePrefix(profiles.default, commandId);
 }
 
-function substitutePromptToken(args, prompt) {
-  const hasToken = args.some((a) => typeof a === "string" && a.includes("{{PROMPT}}"));
-  if (hasToken) {
-    // A replacement function preserves `$&`, `$1`, and other replacement
-    // syntax as literal prompt content.
-    return args.map((a) => (
-      typeof a === "string" ? a.replaceAll("{{PROMPT}}", () => prompt) : a
-    ));
+/** Literal profile templates can explicitly request the current owned control path. */
+class AgentProfileArguments {
+  #args;
+  #controlDirectory = null;
+  #generation = null;
+  constructor(args) {
+    this.#args = Object.freeze([...args]);
+    this.usesControlDirectory = args.some((argument) => typeof argument === "string" && /\{\{CONTROL_DIRECTORY(?:_JSON)?\}\}/.test(argument));
+    if (this.usesControlDirectory) {
+      const authority = this.#current();
+      this.#controlDirectory = authority.directory;
+      this.#generation = authority.generation;
+    }
+    Object.freeze(this);
   }
-  return [...args, prompt];
-}
-
-function substitutedPromptCharacterCount(args, prompt) {
-  const templates = args.filter((argument) => typeof argument === "string" && argument.includes("{{PROMPT}}"));
-  if (templates.length === 0) return String(prompt).length;
-  return templates.reduce(
-    (total, template) => total + template.replaceAll("{{PROMPT}}", () => prompt).length,
-    0,
-  );
+  #current() {
+    const runtime = ProcessExecutionRuntime.current();
+    if (runtime === null || runtime.closed || runtime.root.closed) {
+      throw new AgentPermissionConfigurationFailure({ message: "Control directory profile arguments require an active managed execution scope" });
+    }
+    const grant = runtime.remoteGrant();
+    const storage = grant.endpoint.storage;
+    if (storage === null || storage === undefined) {
+      throw new AgentPermissionConfigurationFailure({ message: "Control directory profile arguments require owned endpoint storage" });
+    }
+    const owned = ReadOnlyProcessRuntimeStorage.fromGrant(storage);
+    return { directory: owned.directory,
+      generation: JSON.stringify([grant.executionId, grant.ownerEpoch, storage.workspaceGeneration, storage.token]) };
+  }
+  assertCurrent() {
+    if (!this.usesControlDirectory) return;
+    const current = this.#current();
+    if (current.generation !== this.#generation || current.directory !== this.#controlDirectory) {
+      throw new AgentPermissionConfigurationFailure({ message: "Control directory generation changed; project the current managed invocation again" });
+    }
+  }
+  #render(argument, prompt) {
+    if (typeof argument !== "string") return argument;
+    // Substitute only the original template: prompt/path contents are literal,
+    // including tokens, dollar replacements, quotes and backslashes.
+    return argument.replace(/\{\{(?:PROMPT|CONTROL_DIRECTORY|CONTROL_DIRECTORY_JSON)\}\}/g, (token) => {
+      if (token === "{{PROMPT}}") return prompt;
+      return token === "{{CONTROL_DIRECTORY_JSON}}" ? JSON.stringify(this.#controlDirectory) : this.#controlDirectory;
+    });
+  }
+  withPrompt(prompt) {
+    const rendered = this.#args.map((argument) => this.#render(argument, prompt));
+    return this.#args.some((argument) => typeof argument === "string" && argument.includes("{{PROMPT}}")) ? rendered : [...rendered, prompt];
+  }
+  withoutPrompt() { return stripPromptArgs(this.#args).map((argument) => this.#render(argument, null)); }
+  promptCharacterCount(prompt) {
+    const templates = this.#args.filter((argument) => typeof argument === "string" && argument.includes("{{PROMPT}}"));
+    return templates.length === 0 ? String(prompt).length
+      : templates.reduce((total, argument) => total + this.#render(argument, prompt).length, 0);
+  }
 }
 
 function stripPromptArgs(args) {
@@ -1411,7 +1471,10 @@ function injectWorkDirFlag(flag, workDir, args) {
 
 function ensureWorkDir(workDir) {
   if (!workDir) return;
-  fs.mkdirSync(workDir, { recursive: true });
+  RealDirectoryAuthority.resolve(workDir, {
+    create: true,
+    errorFactory: (_status, message, { cause } = {}) => new AgentPermissionConfigurationFailure({ message, cause }),
+  });
 }
 
 const STREAMING_EVENT_PATTERN = /^\s*\{[^}]*"type"\s*:\s*"(message_start|message_delta|message_stop|content_block_start|content_block_delta|content_block_stop)"/;
@@ -1583,4 +1646,4 @@ export function createPluginAgentApi(options) {
   return new PluginAgentApi(options);
 }
 
-export { Agent, AgentTimeoutError, ChildProcessSupervisor, filterStreamingEvents };
+export { Agent, AgentTimeoutError, filterStreamingEvents };

@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+await import("../src/sennel.js");
+const { runCmd } = await import("../src/lib/process.js");
+const { runGit } = await import("../src/lib/git-helpers.js");
+const { NativeExecutableInvocation } = await import("../src/lib/command-invocation.js");
 import path from "node:path";
+const { AtomicJsonFile } = await import("../src/lib/atomic-json-file.js");
 
 const ALPHA_VERSION_PATTERN = /^0\.1\.0-alpha\.(0|[1-9]\d*)$/;
 const ALPHA_RELEASE_PACKAGE_NAME = "sennel";
@@ -176,7 +179,7 @@ class GitRepository {
   }
 
   #run(args, operation) {
-    const result = spawnSync("git", args, { cwd: this.root, encoding: "utf8" });
+    const result = runGit(args, { cwd: this.root, encoding: "utf8" });
     if (result.error) throw new Error(`failed to ${operation}: ${result.error.message}`, { cause: result.error });
     if (result.status !== 0) {
       throw new Error(`failed to ${operation}: ${(result.stderr || result.stdout || "git failed").trim()}`);
@@ -194,7 +197,7 @@ class PackageManifest {
   read() {
     let value;
     try {
-      value = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      value = new AtomicJsonFile(this.filePath).read();
     } catch (cause) {
       throw new Error(`failed to read package.json: ${cause.message}`, { cause });
     }
@@ -212,54 +215,19 @@ class PackageManifest {
     if (!(version instanceof AlphaVersion)) throw new Error("package version update requires an AlphaVersion");
     const value = this.read();
     value.version = version.toString();
-    const temporaryPath = path.join(
-      this.root,
-      `.package.json.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-    let descriptor = null;
-    let renamed = false;
-    try {
-      descriptor = fs.openSync(temporaryPath, "wx", 0o644);
-      fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`);
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = null;
-      fs.renameSync(temporaryPath, this.filePath);
-      renamed = true;
-      descriptor = fs.openSync(this.root, "r");
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = null;
-    } catch (error) {
-      const cleanupErrors = [];
-      if (descriptor !== null) {
-        try { fs.closeSync(descriptor); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
-      }
-      if (!renamed) {
-        try { fs.unlinkSync(temporaryPath); } catch (cleanupError) {
-          if (cleanupError.code !== "ENOENT") cleanupErrors.push(cleanupError);
-        }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [error, ...cleanupErrors],
-          "package version update and temporary-file cleanup both failed",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    new AtomicJsonFile(this.filePath).write(value);
   }
 }
 
 class NpmCommand {
-  constructor(root, spawn = spawnSync) {
+  constructor(root, spawn = runCmd) {
     this.root = requireRoot(root);
     this.spawn = spawn;
   }
 
   run(args, operation) {
-    const result = this.spawn("npm", args, { cwd: this.root, encoding: "utf8" });
+    const invocation = new NativeExecutableInvocation({ executable: "npm", args, cwd: this.root });
+    const result = this.spawn(invocation, [], { encoding: "utf8" });
     if (result.error) throw new Error(`failed to ${operation}: ${result.error.message}`, { cause: result.error });
     if (result.status !== 0) {
       throw new Error(`failed to ${operation}: ${(result.stderr || result.stdout || "npm failed").trim()}`);

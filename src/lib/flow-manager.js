@@ -259,7 +259,6 @@ export class FlowManager {
     bindingFaultInjector = () => {},
     targetIdentityFaultInjector = () => {},
     versionStoreFaultInjector = null,
-    processIdentitySource,
   }) {
     this._root = root;
     this._mainRoot = mainRoot;
@@ -269,22 +268,18 @@ export class FlowManager {
     this._bindingFaultInjector = bindingFaultInjector;
     this._targetIdentityFaultInjector = targetIdentityFaultInjector;
     this._versionStoreFaultInjector = versionStoreFaultInjector;
-    this._processIdentitySource = processIdentitySource;
     this._usesWorktreeFlowBinding = isManagedFlowWorktree(root, mainRoot, inWorktree);
     this._activeFlows = new ActiveFlowRegistry({
       mainRoot,
       specRoot: this._workspace.specRoot,
-      ...(processIdentitySource && { processIdentitySource }),
     });
     this._preparing = new PreparingFlowStore({
       mainRoot,
-      ...(processIdentitySource && { processIdentitySource }),
     });
     this._targetIdentities = new FlowTargetIdentityAuthority({
       mainRoot,
       specRoot: this._workspace.specRoot,
       faultInjector: targetIdentityFaultInjector,
-      ...(processIdentitySource && { processIdentitySource }),
     });
     this._store = new CanonicalFlowManagerStore({
       root,
@@ -297,7 +292,6 @@ export class FlowManager {
       ? new WorktreeFlowBindingStore({
           worktreePath: root,
           faultInjector: bindingFaultInjector,
-          ...(processIdentitySource && { processIdentitySource }),
         })
       : null;
   }
@@ -378,7 +372,6 @@ export class FlowManager {
       bindingFaultInjector: opts.bindingFaultInjector ?? this._bindingFaultInjector,
       targetIdentityFaultInjector: opts.targetIdentityFaultInjector ?? this._targetIdentityFaultInjector,
       versionStoreFaultInjector: opts.versionStoreFaultInjector ?? this._versionStoreFaultInjector,
-      ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
     });
   }
 
@@ -446,6 +439,9 @@ export class FlowManager {
       read,
     });
   }
+  recordProcessEvent(event) { return this._store.recordProcessEvent(event); }
+  recordProcessEvents(group) { return this._store.recordProcessEvents(group); }
+
   activityLedger(specId = this._boundSpecId) {
     return this._store.activityLedger(specId);
   }
@@ -1728,7 +1724,6 @@ export class FlowManager {
       mainRoot: this._mainRoot,
       maintenanceOwnerToken: options.maintenanceOwnerToken,
       operationOwnerToken: options.operationOwnerToken,
-      ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
     });
   }
 }

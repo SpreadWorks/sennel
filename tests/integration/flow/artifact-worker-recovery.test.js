@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime, ProcessExecutionBinding } from "../../../src/lib/process-execution-runtime.js";
 import { FlowProcessExecutionBinding } from "../../../src/flow/lib/flow-process-execution-binding.js";
@@ -15,7 +16,6 @@ import { PromptBatchExecutionIncompleteFailure } from "../../../src/lib/prompt-b
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff,
   DispatchExecutionRepositoryBinding, WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { OriginalArtifactWorkerAuthorization } from "../../../src/flow/lib/original-artifact-worker-authorization.js";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 import { CanonicalPromptReservationReconciliationPublication } from "../../../src/flow/lib/canonical-prompt-execution.js";
 import { FlowExecutionContractRefusal } from "../../../src/flow/lib/flow-execution-contract.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
@@ -35,6 +35,7 @@ import { selectWorkerExecutionAdmission, projectWorkerExecutionAdmission,
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { dispatchContainer, dispatchFlowCommand } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
@@ -53,12 +54,27 @@ function bytesUnder(directory) {
   return entries;
 }
 
+const retainedRecoveryRoots = new Set();
+
+function assertArtifactContinuation(value, selection, Expected) {
+  const continuation = selection.artifactContinuation;
+  if (!(continuation instanceof Expected)) {
+    retainedRecoveryRoots.add(value.root);
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+  }
+  assert.ok(continuation instanceof Expected, JSON.stringify({
+    root: value.root, expected: Expected.name, actual: continuation?.constructor.name,
+    code: continuation?.code, reason: continuation?.reason, cause: continuation?.cause?.stack,
+  }));
+}
+
 function recoveryRepository(t) {
   const root = createTmpDir("artifact-worker-recovery-");
   const runtimes = [];
   t.after(async () => {
     try { for (const runtime of runtimes) if (!runtime.closed) await runtime.close(); }
-    finally { removeTmpDir(root); }
+    catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw error; }
+    if (!retainedRecoveryRoots.has(root)) removeTmpDir(root);
   });
   initGitRepo(root);
   fs.writeFileSync(path.join(root, "README.md"), "Artifact worker recovery fixture\n");
@@ -168,7 +184,7 @@ async function interruptOriginalReservation(value, manager, { boundary, ordinal,
           const call = await runtime.reserveCall({ binding: processBinding, invocation: { kind: "provider",
             providerAttemptId: context.attemptId, logicalInvocationId: context.logicalInvocationId,
             providerAttemptContext: context, promptProcessIdentity: options.providerCallAdmission.processExecutionIdentity.toJSON() } });
-          await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+          await runtime.revokeCall(call);
         } else if (boundary === "after-permit") {
           await executeManagedProcess(process.execPath, ["-e", "process.stdout.write('worker started without a submission')"], {
             ...invocation, processExecutionBinding: processBinding, timeoutMs: 60000, maxBuffer: 1024 });
@@ -226,7 +242,7 @@ async function recoverArtifact(value, manager) {
 
 async function guardedRecovery(value, manager) {
   const selection = selectWorkerExecutionAdmission({ ctx: value.context(manager), stepId: value.request.stepId });
-  assert.ok(selection.artifactContinuation instanceof ArtifactWorkerRecoveryRequired);
+  assertArtifactContinuation(value, selection, ArtifactWorkerRecoveryRequired);
   const binding = FlowTargetBinding.captureContext(value.context(manager));
   const directive = projectWorkerExecutionAdmission(selection, { binding });
   assert.equal(directive.command.subcommand, "recover-artifact-execution");
@@ -298,6 +314,37 @@ async function consumeCoverage(t, value, expectedGoal) {
     "the clean Coverage review skips empty triage and repair work through Definition");
 }
 
+
+test("a reloaded dispatch binding refuses an identical-byte index replacement without changing canonical authority", (t) => {
+  const value = conditionalFixture(t);
+  try {
+    const manager = value.reload();
+    const request = new WorkerArtifactHandoffCoordinator().storedArtifactExecutionRequest({
+      ctx: value.context(manager), state: manager.loadReadOnly(value.specId),
+      executionContract: value.request.executionContract,
+    });
+    const binding = request.dispatchRepositoryBinding;
+    assert.equal(binding.assertCurrent({ flowManager: manager, request }), binding.repositoryFingerprint);
+    const canonicalBefore = bytesUnder(request.canonicalDirectory);
+    const indexPath = path.join(value.root, ".git", "index");
+    const indexBytes = fs.readFileSync(indexPath);
+    const generation = FileIdentity.capture(fs.lstatSync(indexPath, { bigint: true }));
+    const replacement = path.join(value.root, ".git", "replacement-index");
+    fs.writeFileSync(replacement, indexBytes);
+    fs.renameSync(replacement, indexPath);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBytes);
+    assert.equal(FileIdentity.capture(fs.lstatSync(indexPath, { bigint: true })).equals(generation), false);
+
+    assert.throws(() => binding.assertCurrent({ flowManager: manager, request }),
+      (error) => error instanceof FlowExecutionContractRefusal && error.code === "FLOW_EXECUTION_CONTRACT_MISMATCH");
+    assert.deepEqual(bytesUnder(request.canonicalDirectory), canonicalBefore);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBytes);
+  } catch (error) {
+    if (testTemporaryRoot().retainOnUnconfirmedExecution(error)) retainedRecoveryRoots.add(value.root);
+    throw error;
+  }
+});
+
 for (const boundary of ["before-reservation", "before-permit"]) {
   test(`an original ${boundary} reservation resumes through the guarded command without a new generation or budget`, async (t) => {
     const value = originalFixture(t);
@@ -332,7 +379,7 @@ for (const boundary of ["before-reservation", "before-permit"]) {
     assert.deepEqual(recoveredState.steps, originalState.steps);
     assert.deepEqual(recoveredState.lifecycle, originalState.lifecycle);
     const selected = selectWorkerExecutionAdmission({ ctx: value.context(fresh), stepId: request.stepId });
-    assert.ok(selected.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized);
+    assertArtifactContinuation(value, selected, ArtifactWorkerRecoveryAuthorized);
     assert.equal(selected.artifactContinuation.reservationContinuation.id, frontier.reservationContinuation.id);
     assert.equal(projectWorkerExecutionAdmission(selected).kind, "execute_step");
     const snapshot = canonicalSnapshot(value, fresh);
@@ -365,7 +412,7 @@ test("the original unused grant remains available before any Prompt reservation 
   assert.equal(frontier.reservationContinuation, null);
   assert.deepEqual(canonicalSnapshot(value, fresh), before);
   const selected = selectWorkerExecutionAdmission({ ctx: value.context(fresh), stepId: value.request.stepId });
-  assert.ok(selected.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized);
+  assertArtifactContinuation(value, selected, ArtifactWorkerRecoveryAuthorized);
   assert.equal(projectWorkerExecutionAdmission(selected).kind, "execute_step");
 });
 
@@ -466,6 +513,18 @@ test("an original reservation with a physical start permit refuses same-generati
 test("a stopped unsealed conditional claim saves one replacement and owner checkpoint, then replays them after fresh readback", async (t) => {
   const value = conditionalFixture(t);
   const { root, specId, manager, request } = value;
+  const processBinding = workerProcessBinding(request);
+  const hasWorkerBinding = (binding) => new ProcessExecutionBinding(binding).matches(processBinding);
+  const workerExecutions = (inventory) => inventory.executions.filter((execution) =>
+    hasWorkerBinding(execution.binding) || execution.calls.some((call) => hasWorkerBinding(call.binding)));
+  const assertClosedInventory = (inventory) => {
+    assert.equal(inventory.slot, null);
+    for (const execution of inventory.executions) {
+      assert.equal(execution.status, "closed");
+      assert.notEqual(execution.closure, null);
+      for (const call of execution.calls) assert.notEqual(call.receipt ?? call.revocation, null);
+    }
+  };
   const beforeState = manager.canonicalState(specId);
   const sourceExecution = manager.draftStepExecutionState({ binding: value.binding(manager) });
   assert.equal(sourceExecution.lifecycle.phase, "claimed");
@@ -478,12 +537,22 @@ test("a stopped unsealed conditional claim saves one replacement and owner check
   const sourceActivities = JSON.parse(JSON.stringify(manager.activityLedger(specId)));
   const sourceBudget = manager.readStoredPromptExecutionEpisode({ executionContract: request.executionContract }).budget;
   assert.equal(sourceBudget.providerCallCount, 1);
-  assert.equal(closedInventory.executions.length, 1);
-  assert.equal(closedInventory.executions[0].status, "closed");
-  assert.equal(closedInventory.executions[0].calls.length, 1);
-  assert.notEqual(closedInventory.executions[0].calls[0].permit, null);
-  assert.equal(readFlowProcessStops({ mainRoot: root, executionRoot: root }).length, 1,
+  assertClosedInventory(closedInventory);
+  const closedWorkerExecutions = workerExecutions(closedInventory);
+  assert.equal(closedWorkerExecutions.length, 1);
+  const closedWorker = closedWorkerExecutions[0];
+  assert.equal(hasWorkerBinding(closedWorker.binding), true);
+  assert.equal(closedWorker.status, "closed");
+  assert.equal(closedWorker.calls.length, 1);
+  const workerCalls = closedWorker.calls.filter((call) => hasWorkerBinding(call.binding));
+  assert.equal(workerCalls.length, 1);
+  assert.notEqual(workerCalls[0].permit, null);
+  assert.notEqual(workerCalls[0].receipt, null);
+  const workerStops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
+    .filter((stop) => stop.receipt.binding.matches(processBinding));
+  assert.equal(workerStops.length, 1,
     "the managed worker retains its exact process stop receipt");
+  assert.deepEqual(workerStops[0].receipt.toJSON(), workerCalls[0].receipt);
 
   const restarted = value.reload();
   const receipt = await recoverArtifact(value, restarted);
@@ -530,10 +599,24 @@ test("a stopped unsealed conditional claim saves one replacement and owner check
   assert.deepEqual(readback.canonicalState(specId).attempt.toJSON(), beforeState.attempt.toJSON());
   assert.deepEqual(readback.canonicalState(specId).current, beforeState.current);
   assert.deepEqual(readback.readStoredPromptExecutionEpisode({ executionContract: receipt.targetContract }).budget, sourceBudget);
-  assert.deepEqual(ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root }), closedInventory);
+  const readbackInventory = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root });
+  assertClosedInventory(readbackInventory);
+  assert.equal(readbackInventory.version, closedInventory.version);
+  assert.deepEqual(readbackInventory.checkout, closedInventory.checkout);
+  assert.equal(readbackInventory.slot, closedInventory.slot);
+  for (const execution of closedInventory.executions) assert.deepEqual(
+    readbackInventory.executions.find((entry) => entry.executionId === execution.executionId), execution);
+  assert.deepEqual(workerExecutions(readbackInventory), closedWorkerExecutions);
+  const originalExecutionIds = new Set(closedInventory.executions.map((entry) => entry.executionId));
+  const additionalExecutions = readbackInventory.executions.filter((entry) => !originalExecutionIds.has(entry.executionId));
+  for (const execution of additionalExecutions) {
+    assert.equal(execution.binding, null);
+    for (const call of execution.calls) assert.equal(call.binding, null);
+  }
+  assert.equal(readbackInventory.ownerEpoch - closedInventory.ownerEpoch, additionalExecutions.length);
 
   const selected = selectWorkerExecutionAdmission({ ctx: value.context(readback), stepId: "draft-gate-repair" });
-  assert.ok(selected.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized);
+  assertArtifactContinuation(value, selected, ArtifactWorkerRecoveryAuthorized);
   assert.equal(projectWorkerExecutionAdmission(selected).kind, "execute_step");
   const after = { state: readback.canonicalState(specId).toJSON(),
     activities: JSON.parse(JSON.stringify(readback.activityLedger(specId))), catalog: readback.artifactCatalog(specId).toJSON() };
@@ -753,7 +836,7 @@ test("an unstarted replacement reservation requires durable reconciliation and f
   const budget = before.readStoredPromptExecutionEpisode({ executionContract: receipt.targetContract }).budget;
   assert.equal(budget.providerCallCount, 2, "the stopped source and replacement retain their two provider reservations");
   const required = selectWorkerExecutionAdmission({ ctx: value.context(before), stepId: "draft-gate-repair" });
-  assert.ok(required.artifactContinuation instanceof ArtifactWorkerRecoveryRequired);
+  assertArtifactContinuation(value, required, ArtifactWorkerRecoveryRequired);
   const directive = projectWorkerExecutionAdmission(required);
   assert.equal(directive.actionId, "RECOVER_ARTIFACT_EXECUTION");
   assert.equal(directive.command.subcommand, "recover-artifact-execution");
@@ -770,7 +853,7 @@ test("an unstarted replacement reservation requires durable reconciliation and f
   assert.equal(reconciled.contracts.length, 2);
   assert.deepEqual(fresh.readStoredPromptExecutionEpisode({ executionContract: receipt.targetContract }).budget, budget);
   const selected = selectWorkerExecutionAdmission({ ctx: value.context(fresh), stepId: "draft-gate-repair" });
-  assert.ok(selected.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized);
+  assertArtifactContinuation(value, selected, ArtifactWorkerRecoveryAuthorized);
   assert.equal(selected.artifactContinuation.reservationContinuation.id, marker.id);
   assert.equal(projectWorkerExecutionAdmission(selected).kind, "execute_step");
 

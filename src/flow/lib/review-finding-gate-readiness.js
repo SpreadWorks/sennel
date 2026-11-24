@@ -6,6 +6,8 @@
  * registered Gate Steps before Definition selects their settlement.
  */
 import { FindingDispositionPolicy, ReviewFindingGateArtifact, CanonicalTaskReviewFindingGateArtifact } from "./finding-disposition-policy.js";
+import { FlowReviewSemanticHandoff } from "./flow-review-semantic-handoff.js";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -66,7 +68,11 @@ export function evaluateReviewFindingGateReadiness({
   triage = null, repairLedger = null, runId = null, supersedesHistory = false,
   reviewFingerprints = [], triageFingerprint = null, repairFingerprint = null,
   resolvedFindingIds = [],
+  semanticHandoff = null,
 } = {}) {
+  if (semanticHandoff !== null && !(semanticHandoff instanceof FlowReviewSemanticHandoff)) {
+    throw new TypeError("Review readiness requires a verified semantic handoff");
+  }
   const expectedTaskId = taskId == null ? null : String(taskId).trim();
   const artifacts = reviewArtifacts.filter((artifact) => (
     (artifact?.taskId == null ? null : String(artifact.taskId).trim()) === expectedTaskId
@@ -94,11 +100,16 @@ export function evaluateReviewFindingGateReadiness({
     .filter((item) => item?.decision === "reject")
     .map((item) => item.findingId));
   const resolved = new Set(resolvedFindingIds);
-  const findings = [...obligations.values()].map((finding) => (
-    rejected.has(finding.findingId) || resolved.has(finding.findingId)
+  const findings = [...obligations.values()].map(finding => {
+    if (semanticHandoff?.includes(new FlowFindingSourceIdentity({
+      sourceArtifact: semanticHandoff.sourceArtifact, sourceStep: "impl-review",
+      sourceFindingId: finding.findingId, fingerprint: finding.fingerprint }))) {
+      return { ...finding.toJSON(), explicitDecision: { kind: "defer", findingFingerprint: finding.fingerprint } };
+    }
+    return rejected.has(finding.findingId) || resolved.has(finding.findingId)
       ? { ...finding.toJSON(), explicitDecision: { kind: "allow", findingFingerprint: finding.fingerprint } }
-      : finding
-  ));
+      : finding;
+  });
   const decision = new FindingDispositionPolicy({ maxOccurrences: 3 }).evaluateGate({
     findings,
     issueLogEntries: issueLog?.entries || [],

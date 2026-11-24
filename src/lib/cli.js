@@ -1,3 +1,4 @@
+import { GitRepositoryPolicy } from "./git-repository-environment.js";
 /**
  * tools/lib/cli.js
  *
@@ -9,7 +10,8 @@ import { readRuntimeResource } from "./runtime-package.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { runCmd, assertOk } from "./process.js";
+import { assertOk } from "./process.js";
+import { runBootstrapGitProbe } from "./bootstrap-process.js";
 import { PRODUCT } from "./product.js";
 
 /**
@@ -27,9 +29,9 @@ export const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url))
  */
 export function repoRoot() {
   if (process.env[PRODUCT.env("WORK_ROOT")]) return process.env[PRODUCT.env("WORK_ROOT")];
-  // Logger 基盤の依存元のため runCmd を直接使う。runGit に変更してはならない
+  // Root admission uses only the fixed read-only bootstrap probe.
   // （Logger.git → resolveLogDir → repoRoot → runGit → Logger.git で無限再帰になる）。
-  const res = runCmd("git", ["rev-parse", "--show-toplevel"]);
+  const res = runBootstrapGitProbe("repository-root");
   if (res.ok) return res.stdout.trim();
   // npm パッケージとしてインストールされた場合、相対パス推定は
   // node_modules/ 内部を指すため process.cwd() を使用する
@@ -124,9 +126,9 @@ export function isInsideWorktree(root) {
  * @returns {string} メインリポジトリの絶対パス
  */
 export function getMainRepoPath(root) {
-  // Logger 基盤の依存元のため runCmd を直接使う。runGit に変更してはならない
+  // Root admission uses only the fixed read-only bootstrap probe.
   // （Logger.git → resolveLogDir → getMainRepoPath → runGit → Logger.git で無限再帰になる）。
-  const res = runCmd("git", ["-C", root, "rev-parse", "--git-common-dir"]);
+  const res = runBootstrapGitProbe("common-directory", { cwd: root });
   if (!res.ok && !(res.status === 0 && res.stdout.trim())) {
     assertOk(res, "failed to resolve git-common-dir");
   }

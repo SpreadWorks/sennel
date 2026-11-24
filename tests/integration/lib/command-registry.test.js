@@ -2,6 +2,39 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 describe("unified command registry (R3)", () => {
+  it("shares the inherited command entrypoint while retaining help in ordinary CLI routing", async () => {
+    const { coreCommandRegistry, CommandEntrypoint } = await import("../../../src/lib/command-registry.js");
+    const { publicCommandEntrypoint } = await import("../../../src/lib/command-entrypoint.js");
+    assert.equal(coreCommandRegistry.find("command").entrypoint, publicCommandEntrypoint);
+    assert.ok(publicCommandEntrypoint instanceof CommandEntrypoint);
+    for (const argv of [["command", "--", "tool", "--help"], ["command", "--", "tool", "", "two words"], ["command"]]) {
+      const before = [...argv];
+      assert.equal(publicCommandEntrypoint.accepts(argv), true);
+      assert.deepEqual(argv, before, "route selection preserves literal arguments");
+    }
+    for (const argv of [["command", "--help"], ["command", "-h"], ["help", "command"], ["flow", "query"]]) {
+      assert.equal(publicCommandEntrypoint.accepts(argv), false);
+    }
+  });
+
+  for (const [name, english, japanese] of [
+    ["docs", "Documentation commands", "ドキュメント生成・管理コマンド"],
+    ["flow", "Spec-Driven Development flow commands", "Spec-Driven Development フローコマンド"],
+    ["metrics", "Metrics commands", "メトリクスコマンド"],
+    ["presets", "Preset commands", "プリセットコマンド"],
+  ]) {
+    it(`localizes the ${name} namespace description independently of its children`, async () => {
+      const { buildCoreHelpModel } = await import("../../../src/help.js");
+      for (const [lang, expected] of [["en", english], ["ja", japanese]]) {
+        const command = buildCoreHelpModel({ lang }).findCommand(name);
+        assert.equal(command.summary, expected, `${name} in ${lang}`);
+        assert.ok(command.subcommands.length > 0);
+        assert.ok(command.subcommands.every((child) => child.summary !== command.summary),
+          "a namespace and its operations have distinct descriptions");
+      }
+    });
+  }
+
   it("exposes flow/docs/check/metrics subtrees individually without loading other domains eagerly", async () => {
     const mod = await import("../../../src/lib/command-registry.js");
     assert.ok(mod.flowCommands, "flowCommands subtree must be exported");

@@ -8,6 +8,7 @@ import {
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 const TASK = {
   id: "T-1",
@@ -48,22 +49,23 @@ describe("canonical Flow and Task Attempt scope", () => {
     assert.equal(state.currentTaskId, "T-1");
   });
 
-  it("completes a flow-level leaf without reopening a terminal Task", () => {
-    root = createTmpDir("canonical-flow-post-scope-");
+  it("completes a flow-level leaf without reopening a terminal Task", async () => {
+    root = fixtureRepository("canonical-flow-post-scope-");
     const flowManager = makeFlowManager(root);
-    const fixture = new FlowAtStepFixture({
+    const fixture = await new FlowAtStepFixture({
       flowManager,
       specId: "001-test",
       runId: "run-flow-scope",
       request: "Complete a flow-level producer.",
+      execution: { mode: "direct", baseBranch: "main" },
       taskDocuments: [TASK],
       targetStep: "test-execute",
-    }).create();
+    }).createWithProducers();
 
     const before = flowManager.loadReadOnly("001-test");
     assert.equal(before.tasks[0].status, "done");
     assert.equal(before.currentTaskId, null);
-    fixture.flow.flow.settle("test-execute");
+    await fixture.flow.flow.produce("test-execute");
 
     const after = flowManager.loadReadOnly("001-test");
     assert.equal(findStepById(after.steps, "test-execute").status, "done");

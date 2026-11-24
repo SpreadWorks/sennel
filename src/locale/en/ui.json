@@ -30,8 +30,14 @@
         "ja": "ja (Japanese)"
       },
       "outputLang": [
-        { "key": "en", "label": "English" },
-        { "key": "ja", "label": "Japanese" }
+        {
+          "key": "en",
+          "label": "English"
+        },
+        {
+          "key": "ja",
+          "label": "Japanese"
+        }
       ],
       "outputDefault": {
         "en": "English",
@@ -97,11 +103,19 @@
     "usage": "Usage: sennel <command> [options]",
     "runHelp": "Run \u001b[1msennel <command> --help\u001b[0m for details.",
     "commands": {
+      "command": {
+        "usage": "Usage: sennel command -- <executable> [argument ...]",
+        "desc": "Run literal arguments in the inherited execution context"
+      },
       "help": "Show this help",
       "setup": "Register project + generate config (interactive)",
       "upgrade": "Update template-derived files to latest version",
       "migrate": "Migrate project layout or Flow specifications to a revision",
       "plugin": "Manage plugin sources, packages, commands, and presets",
+      "docs": "Documentation commands",
+      "flow": "Spec-Driven Development flow commands",
+      "metrics": "Metrics commands",
+      "presets": "Preset commands",
       "docs build": "Generate docs (scan → enrich → init → data → text → readme)",
       "docs init": "Initialize docs/ from templates",
       "docs forge": "Iterative docs improvement (AI agent)",
@@ -181,7 +195,7 @@
           "promptFile": "--prompt-file <path>   Initial prompt file",
           "spec": "--spec <path>          Input specification (directory / spec.json / legacy spec.md)",
           "maxRuns": "--max-runs <n>         Iteration count (default: 3)",
-          "reviewCmd": "--review-cmd <cmd>     Docs review command (default: sennel docs review)",
+          "reviewCmd": "--review-cmd <json>    Invocation JSON with kind, executable/script and args (default: sennel docs review)",
           "agent": "--agent <name>         AI agent: codex|claude (default: config.json defaultAgent)",
           "mode": "--mode <mode>          Execution mode: local|assist|agent (default: local)",
           "dryRun": "--dry-run              Skip file writes, review, and agent calls (1 round)",

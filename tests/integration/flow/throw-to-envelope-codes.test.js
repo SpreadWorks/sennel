@@ -3,17 +3,14 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   CanonicalFlowFixture,
   makeFlowManager,
   removeCatalogedArtifactForCorruptionFixture,
 } from "../../support/infrastructure/flow-setup.js";
 import { writeStubAgentScript, stubAgentConfig } from "../../support/fakes/stub-agent.js";
-import {
-  FlowArtifactAttemptHistory,
-  FlowArtifactAttemptRecord,
-} from "../../../src/lib/flow-artifact-contract.js";
+import { initGitRepo, commitAll, checkoutNewBranch } from "../../support/infrastructure/git-repo.js";
 
 const SENNEL = path.resolve("src/sennel.js");
 
@@ -38,8 +35,8 @@ function createTmpProject(agentResponse) {
   const tmp = createTestDirectory("throw-env-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   fs.mkdirSync(path.join(tmp, "specs", "001-test"), { recursive: true });
-  execFileSync("git", ["init", tmp], { stdio: "ignore" });
-  execFileSync("git", ["-C", tmp, "commit", "--allow-empty", "-m", "init"], { stdio: "ignore" });
+  initGitRepo(tmp);
+  commitAll(tmp, "initial envelope fixture");
 
   const stubPath = agentResponse
     ? writeStubAgentScript(tmp, ".stub-agent.js", agentResponse)
@@ -58,7 +55,7 @@ function createTmpProject(agentResponse) {
 }
 
 function createFlowState(tmp, extra = {}) {
-  const { requirements = [], activeStep = null, ...unsupported } = extra;
+  const { requirements = [], ...unsupported } = extra;
   const fields = Object.keys(unsupported);
   if (fields.length > 0) {
     throw new Error(`createFlowState accepts only canonical Spec requirements: ${fields.join(", ")}`);
@@ -86,7 +83,6 @@ function createFlowState(tmp, extra = {}) {
     added_round: 0,
     status: "pending",
   });
-  if (activeStep !== null) fixture.activate(activeStep);
   return fixture.registerActive().state();
 }
 
@@ -131,32 +127,6 @@ describe("R1a: set auto on → AUTO_CHECK_INELIGIBLE on reject", () => {
 // R2a/R2b: canonical retro input preconditions
 // ---------------------------------------------------------------------------
 
-/** Publish one producer-owned canonical attempts[] artifact for this scenario. */
-function publishCanonicalAttemptArtifact(tmp, { nodeId, logicalKey, payload }) {
-  const manager = makeFlowManager(tmp);
-  const state = manager.load();
-  const history = new FlowArtifactAttemptHistory([
-    new FlowArtifactAttemptRecord({
-      attempt: 1,
-      payload: {
-        nodeId,
-        outcome: "completed",
-        result: { result: "ok" },
-        artifact: { logicalKey, payload },
-      },
-    }),
-  ]);
-  manager.publishArtifacts({
-    specId: state.specId,
-    nodeId,
-    artifactWrites: [{
-      logicalKey,
-      mediaType: "application/json",
-      bytes: Buffer.from(`${JSON.stringify(history.toJSON(), null, 2)}\n`, "utf8"),
-    }],
-  });
-}
-
 describe("R2: run retro → upstream-artifact preconditions (spec 251)", () => {
   let tmp;
   afterEach(() => tmp && fs.rmSync(tmp, { recursive: true, force: true }));
@@ -178,24 +148,16 @@ describe("R2: run retro → upstream-artifact preconditions (spec 251)", () => {
     );
   });
 
-  it("R2b: returns TEST_EXECUTE_RESULT_MISSING when only test-result-review.json exists", () => {
+  it("R2b: returns TEST_EXECUTE_RESULT_MISSING when only test-result-review.json exists", async () => {
     tmp = createTmpProject();
+    checkoutNewBranch(tmp, "feature/001-test");
     createFlowState(tmp, {
-      requirements: [{ id: "R1", desc: "x", priority: "must" }],
-      activeStep: "test-result-review",
+      requirements: [{ id: "R1", desc: "Keep Retro evidence complete.", priority: "must", testable: false }],
     });
     const manager = makeFlowManager(tmp);
-    const location = manager.specLocation("001-test");
-    publishCanonicalAttemptArtifact(tmp, {
-      nodeId: "test-result-review",
-      logicalKey: "test.result.review",
-      payload: {
-        verdict: "pass",
-        checked_items: [{ check: "project_regression_verification", result: "pass" }],
-        result_file_path: location.relativeArtifact("test.execute"),
-        raw_output_path: location.relativeArtifact("test.execute.raw-log"),
-      },
-    });
+    const fixture = CanonicalFlowFixture.fromExisting({ flowManager: manager, specId: "001-test" });
+    await fixture.activateWithProducers("test-result-review");
+    await fixture.produce("test-result-review");
     removeCatalogedArtifactForCorruptionFixture(manager, "001-test", "test.execute");
     const res = run(tmp, ["flow", "run", "retro"]);
     assert.notEqual(res.status, 0);

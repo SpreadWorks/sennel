@@ -1,3 +1,4 @@
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -63,7 +64,7 @@ test("original child Source save capture rejects changed provenance, bytes and b
       root, mainRoot: root, executionRoot: root, specId: process.env.CAPTURE_SPEC, flowManager: manager } });
     if (result?.completed !== true) throw new Error('actual Source repair did not complete');
   `;
-  const produced = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
+  const produced = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], {
     encoding: "utf8", env: { ...process.env, CAPTURE_FILE: filePath, CAPTURE_NONCE: nonce,
       CAPTURE_ROOT: scenario.root, CAPTURE_SPEC: scenario.specId },
   });

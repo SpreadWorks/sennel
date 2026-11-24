@@ -7,6 +7,7 @@ import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from 
 import { specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { SpecGateRepairProgressReader, SPEC_GATE_REPAIR_PROGRESS_VERSION, REPAIR_BUDGET_LIMIT } from "./spec-gate-repair-progress-reader.js";
+import { readExecutionContractFromView, readStoredExecutionContractFromView } from "./canonical-prompt-execution.js";
 export { SPEC_GATE_REPAIR_PROGRESS_VERSION } from "./spec-gate-repair-progress-reader.js";
 
 /** Read only the progress artifact belonging to the active canonical lifecycle. */
@@ -14,7 +15,16 @@ export function readSpecGateRepairExecutionProgress({ flowManager, state, lifecy
   const reader = new SpecGateRepairProgressReader({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, consumerNodeId: "spec-gate-repair" });
   const progress = reader.read(lifecycle.executionGeneration, lifecycle.phase);
-  flowManager.readExecutionContract({ executionContract: progress.executionContract });
+  flowManager.readCanonicalTransitionView({ specId: state.specId, read: (view) => {
+    if (lifecycle.phase === "publication") {
+      const stored = readStoredExecutionContractFromView(view, { binding: {
+        runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+      }, generation: lifecycle.executionGeneration });
+      progress.executionContract.assertMatches(stored);
+    } else {
+      readExecutionContractFromView(view, progress.executionContract);
+    }
+  } });
   if (progress.document.runId !== state.runId || progress.document.attemptSequence !== state.attempt.sequence
     || progress.document.inputDigest !== lifecycle.binding.inputDigest
     || progress.document.inputRevision !== lifecycle.binding.inputRevision) {

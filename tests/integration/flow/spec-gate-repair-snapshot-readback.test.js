@@ -83,6 +83,7 @@ async function archivedCheckpoint(t) {
   const document = { version: SPEC_GATE_REPAIR_PROGRESS_VERSION, runId: request.runId, specId: value.specId,
     attemptId: state.attempt.id, attemptSequence: state.attempt.sequence, phase: "checkpoint", generation: executionBinding.executionGeneration,
     inputDigest: request.inputDigest, inputRevision: request.inputRevision, requestDigest: request.requestDigest,
+    executionContract: request.executionContract.toJSON(), executionContractId: request.executionContract.id,
     executionLocator: new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
       generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest }).toJSON(),
     actionFileDigest: request.actionRequestDigest, actionRepositoryFingerprint: request.invocation.action.repositoryFingerprint ?? null,
@@ -91,6 +92,7 @@ async function archivedCheckpoint(t) {
     callCost: call.callCost.toJSON(), responseAllowance: call.responseAllowance.toJSON(),
     physicalPromptFootprint: call.physicalPromptFootprint.toJSON(), deliveryMode: call.deliveryMode };
   manager.checkpointDraftStepExecution({ binding, stepResult, settlement: settleSpecStepResult(binding.stepId, stepResult), executionBinding,
+    executionContract: request.executionContract,
     artifactWrites: [...publication.artifactWrites(), new CanonicalFlowArtifactWrite({ logicalKey: "spec.gate.repair.progress",
       parameters: { attemptId: state.attempt.id, generation: String(document.generation), phase: "checkpoint" },
       mediaType: "application/json", bytes: `${JSON.stringify(document, null, 2)}\n` })] });

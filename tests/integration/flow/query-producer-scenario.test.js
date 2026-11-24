@@ -411,15 +411,21 @@ test("two production Task Gate publications at sequence one resolve their own ca
   let manager = managerAt(root, specId);
   const tasks = ["T1", "T2"].map((id) => ({ id, title: `Gate ${id}`, goal: `Save ${id} Gate evidence`,
     parent: null, origin: "plan", added_round: 0, status: "pending" }));
-  let flow = new CanonicalFlowFixture({ flowManager: manager, specId, specRecord: {
+  let flow = new CanonicalFlowFixture({ flowManager: manager, specId,
+    execution: { mode: "direct", baseBranch: "main" }, specRecord: {
     goal: "Preserve Task scope", requirements: [{ id: "R1", desc: "Each Task owns its Gate", task_ids: tasks.map((entry) => entry.id) }],
-  } }).create().addTasks(tasks);
+  } }).create().addTasks(tasks).registerActive();
   const sourceMutations = new Map(tasks.map((task) => [`${task.id}-impl`, () => {
     fs.appendFileSync(path.join(root, "README.md"), `Implemented ${task.id} behavior.\n`);
   }]));
   for (const task of tasks) {
     await flow.activateWithProducers(`${task.id}-gate`, { sourceMutations });
-    flow.settle(`${task.id}-gate`);
+    await flow.produce(`${task.id}-gate`);
+    const saved = manager.readCurrentStepSettlement({ specId,
+      stepId: "task-gate", taskId: task.id, completed: true });
+    assert.ok(saved);
+    assert.equal(saved.result.kind, "task-gate-passed");
+    assert.equal(saved.receipt.binding.attemptSequence, 1);
   }
   manager = null;
   flow = null;

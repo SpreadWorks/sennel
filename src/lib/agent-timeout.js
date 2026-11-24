@@ -6,7 +6,7 @@
  */
 
 export const DEFAULT_AGENT_TIMEOUT_SECONDS = 1_800;
-export const DEFAULT_AGENT_PROCESS_TREE_GRACE_MS = 100;
+export const DEFAULT_REGISTERED_CHILD_GRACE_MS = 100;
 
 export class AgentTimeout {
   constructor(seconds = DEFAULT_AGENT_TIMEOUT_SECONDS) {

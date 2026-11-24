@@ -222,6 +222,9 @@ export function createTmpDir(prefix = "sennel-test-", { parent = testTemporaryRo
 }
 
 export function removeTmpDir(dir) {
+  // The owning runner retains this entire root while execution is unconfirmed.
+  // Nested fixture teardown must preserve the same evidence and authority.
+  if (testTemporaryRoot().retained) return;
   rmSync(dir, { recursive: true, force: true });
 }
 

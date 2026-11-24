@@ -1,211 +1,175 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
-import path from "node:path";
+import { after, mock, test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { test } from "node:test";
-
+import { fileURLToPath } from "node:url";
+import { ImplPhaseScenario } from "../../../support/impl-phase-scenario.js";
+import { SpecPhaseScenario } from "../../../support/spec-phase-scenario.js";
+import { SeedWorkRoot } from "../../../support/builders/seed-work-root.js";
 import { FlowManager } from "../../../../src/lib/flow-manager.js";
-import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../../src/lib/flow-artifact-contract.js";
-import { CanonicalFlowFixture } from "../../../support/infrastructure/flow-setup.js";
-import {
-  decisionContextForActiveFlow,
-  recordEligibleNonblockingAttempt,
-} from "../../../../src/flow/lib/nonblocking.js";
+import { canonicalSourceFindings } from "../../../../src/flow/lib/flow-finding-source.js";
+import { CanonicalCommandAttemptArtifactHistory } from "../../../../src/flow/lib/canonical-command-result.js";
+import { SeedCleanupScope } from "../../../support/builders/seed-work-root.js";
+import { CanonicalPersistenceSnapshot } from "../../../support/assertions/canonical-persistence.js";
+import { RuntimeChildExecution } from "../../../../src/lib/runtime-package.js";
+import { decisionContextForActiveFlow, definitionNonblockingEligibilityForActiveFlow,
+  recordEligibleNonblockingAttempt } from "../../../../src/flow/lib/nonblocking.js";
 import { recordNonBlockingDecision } from "../../../../src/flow/lib/nonblocking-decision.js";
-import { createTmpDir, removeTmpDir, writeJson } from "../../../support/builders/tmp-dir.js";
-import { commitAll, initGitRepo } from "../../../support/infrastructure/git-repo.js";
 
-const SENNEL = path.resolve("src/sennel.js");
+const SENNEL = fileURLToPath(new URL("../../../../src/cli-main.js", import.meta.url));
+const seedScope = new SeedCleanupScope(after, mock);
+let unavailableReviewSeed;
+let qualityGateSeed;
 
 function invoke(root, args) {
-  const result = spawnSync(process.execPath, [SENNEL, "flow", ...args], {
-    cwd: root,
-    encoding: "utf8",
+  const result = RuntimeChildExecution.runSync(SENNEL, ["flow", ...args], {
+    cwd: root, encoding: "utf8",
     env: { ...process.env, SENNEL_WORK_ROOT: root, SENNEL_SOURCE_ROOT: root },
-  });
+  }, spawnSync);
   return { ...result, envelope: JSON.parse(result.stdout) };
 }
 
-function history(nodeId, logicalKey, payload, attempt = 1, prefix = []) {
-  return Buffer.from(`${JSON.stringify(new FlowArtifactAttemptHistory([
-    ...prefix,
-    new FlowArtifactAttemptRecord({ attempt, payload: {
-      nodeId, outcome: "completed", result: { result: "block" }, artifact: { logicalKey, payload },
-    } }),
-  ]).toJSON(), null, 2)}\n`, "utf8");
+async function produceUnavailableReview(flow) {
+  await flow.advanceTo("impl-review");
+  const result = await flow.executeCurrent();
+  flow.reload();
+  const eligibility = definitionNonblockingEligibilityForActiveFlow(flow.root,
+    flow.manager.loadReadOnly(flow.specId), flow.manager);
+  assert.ok(eligibility, `the actual bounded Review stop must be eligible: ${JSON.stringify(result)}`);
+  assert.equal(eligibility.sourceStep, "impl-review");
+  assert.equal(eligibility.resultKind, "tooling");
+  assert.equal(flow.current(), "impl-review");
+  const saved = flow.manager.readCurrentStepSettlement({ specId: flow.specId, stepId: "impl-review" });
+  assert.equal(saved.result.kind, "impl-review-tooling");
+  assert.equal(saved.settlement.kind, "await");
+  assert.ok(saved.result.evidence.toolingObservation);
 }
 
-function rejectedReviewPayload(summary, fingerprint = "a".repeat(64)) {
-  const finding = {
-    fingerprint,
-    disposition: "deferred",
-    rationale: "Acceptance must retain this canonical semantic finding.",
-  };
-  return {
-    version: 1,
-    phase: "impl",
-    verdict: "REJECTED",
-    summary,
-    blockingFindings: [finding],
-    nonBlockingImprovements: [],
-    canonicalEvidence: {
-      phase: "impl",
-      disposition: "REJECTED",
-      identity: { evidenceDigest: "b".repeat(64) },
-      blockingFindings: [finding],
-      advisoryFindings: [],
+async function canonicalCliScenario(t) {
+  unavailableReviewSeed ??= ImplPhaseScenario.seed(seedScope, { frontier: "impl-review",
+    config: { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" } },
+    reviewProcessResult(stage, _ordinal, options) {
+      const child = RuntimeChildExecution.runSync(stage === "impl-review"
+        ? fileURLToPath(new URL("../../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url))
+        : fileURLToPath(new URL("../../../support/impl-phase-review-worker.js", import.meta.url)), [],
+      stage === "impl-review" ? options : { ...options, env: { ...options.env,
+        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) } }, spawnSync);
+      return { ...child, ok: child.status === 0 };
     },
-  };
+    prepare: produceUnavailableReview,
+  });
+  const flow = ImplPhaseScenario.fromSeed(t, await unavailableReviewSeed);
+  const state = flow.manager.loadReadOnly(flow.specId);
+  return { flow, root: flow.root, manager: flow.manager, specId: flow.specId,
+    guards: ["--expect-run-id", state.runId, "--expect-no-issue", "--expect-spec", flow.specId] };
 }
 
-function canonicalCliScenario({ specId, runId, step, logicalKey, payload }) {
-  const root = createTmpDir("sennel-canonical-nonblocking-e2e-");
-  writeJson(root, ".sennel/config.json", {
-    lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" }, commands: { gh: "disable" },
-  });
-  initGitRepo(root);
-  commitAll(root, "initial canonical fixture");
-  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
-  const fixture = new CanonicalFlowFixture({ flowManager: manager, specId, runId })
-    .create().registerActive().activate(step);
-  manager.publishArtifacts({
-    specId: fixture.specId, nodeId: step,
-    artifactWrites: [{ logicalKey, mediaType: "application/json", bytes: history(step, logicalKey, payload) }],
-  });
-  if (step === "impl-review") {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
-    }
+test("nonblocking policy reads cataloged V1 evidence and persists no legacy state fields", async (t) => {
+  const scenario = await canonicalCliScenario(t);
+  const { root, manager, specId, guards } = scenario;
+  const activated = invoke(root, ["set", "policy", "nonblocking", "--reason", "Explicit acceptance disposition is required.", ...guards]);
+  assert.equal(activated.status, 0, activated.stderr);
+  assert.equal(activated.envelope.data.activatedStep, "impl-review");
+  const persisted = manager.canonicalState(specId).toJSON();
+  const activities = manager.activityLedger(specId);
+  assert.equal(persisted.policy.nonblocking.enabled, true);
+  assert.equal(Object.hasOwn(persisted, "nonblocking"), false);
+  assert.equal(Object.hasOwn(persisted, "stepAttempts"), false);
+  assert.equal(activities.at(-1).transition.nonblocking.kind, "observation");
+  const decision = decisionContextForActiveFlow(root, manager.loadReadOnly(specId), manager);
+  assert.equal(decision.resultKind, "tooling");
+  const continued = invoke(root, ["set", "nonblocking-decision", "--choice", "continue",
+    "--reason", "Continue with the exact unavailable Review obligation retained.",
+    "--remaining-risk", "Acceptance must hold until complete implementation Review evidence is regenerated.",
+    "--expect-evidence-digest", decision.evidenceDigest, ...guards]);
+  assert.equal(continued.status, 0, continued.stderr);
+  const after = manager.canonicalState(specId);
+  assert.equal(after.findNode("impl-review").status, "done");
+  assert.equal(after.findNode("impl-triage").status, "skipped");
+  assert.equal(Object.hasOwn(manager.loadReadOnly(specId), "stepAttempts"), false);
+});
+
+test("CLI rejects a stale nonblocking digest while retaining the catalog observation", async (t) => {
+  const scenario = await canonicalCliScenario(t);
+  const activated = invoke(scenario.root, ["set", "policy", "nonblocking", "--reason", "Evidence needs a guarded decision.", ...scenario.guards]);
+  assert.equal(activated.status, 0, activated.stderr);
+  const before = new CanonicalPersistenceSnapshot(scenario.manager, scenario.specId);
+  const stale = invoke(scenario.root, ["set", "nonblocking-decision", "--choice", "continue",
+    "--reason", "This must remain guarded.", "--remaining-risk", "The evidence is durable.",
+    "--expect-evidence-digest", "b".repeat(64), ...scenario.guards]);
+  assert.notEqual(stale.status, 0);
+  assert.equal(stale.envelope.errors[0].code, "NONBLOCKING_STALE_EVIDENCE");
+  before.assertUnchanged(scenario.manager, scenario.specId, "stale decision");
+  assert.equal(scenario.manager.activityLedger(scenario.specId)
+    .filter((activity) => activity.transition.nonblocking?.kind === "observation").length, 1);
+});
+
+test("CLI target guards reject a mismatched canonical Flow before policy mutation", async (t) => {
+  const scenario = await canonicalCliScenario(t);
+  const before = new CanonicalPersistenceSnapshot(scenario.manager, scenario.specId);
+  const rejected = invoke(scenario.root, ["set", "policy", "nonblocking", "--reason", "Wrong target must not mutate.",
+    "--expect-run-id", "other-run", "--expect-no-issue", "--expect-spec", scenario.specId]);
+  assert.notEqual(rejected.status, 0);
+  assert.equal(scenario.manager.loadReadOnly(scenario.specId).policy.nonblocking, null);
+  before.assertUnchanged(scenario.manager, scenario.specId, "wrong Flow guard");
+});
+
+test("CLI activation records refreshed canonical review evidence from the current producer Attempt", async (t) => {
+  const scenario = await canonicalCliScenario(t);
+  const activated = invoke(scenario.root, ["set", "policy", "nonblocking", "--reason", "The bounded Review evaluator is unavailable.", ...scenario.guards]);
+  assert.equal(activated.status, 0, activated.stderr);
+  const context = decisionContextForActiveFlow(scenario.root, scenario.manager.loadReadOnly(scenario.specId), scenario.manager);
+  recordNonBlockingDecision({ root: scenario.root, flowManager: scenario.manager, choice: "retry",
+    reason: "Open a fresh producer Attempt for the corrected review.",
+    expectEvidenceDigest: context.evidenceDigest, expectIdentity: context.identity().toJSON() });
+  await produceUnavailableReview(scenario.flow);
+  recordEligibleNonblockingAttempt({ root: scenario.root, flowManager: scenario.manager,
+    flowState: scenario.manager.loadReadOnly(scenario.specId) }, "impl-review");
+  const observations = scenario.manager.activityLedger(scenario.specId)
+    .map((activity) => activity.transition.nonblocking).filter((record) => record?.kind === "observation");
+  assert.equal(observations.length, 2);
+  assert.equal(observations.at(-1).sourceAttempt,
+    scenario.manager.canonicalState(scenario.specId).findNode("impl-review").attemptSequence);
+  assert.ok(observations.at(-1).sourceAttempt > observations[0].sourceAttempt);
+  assert.notEqual(observations.at(-1).evidenceDigest, observations[0].evidenceDigest);
+});
+
+
+test("CLI quality continuation retains exact findings from the normally exhausted Spec Gate", async (t) => {
+  qualityGateSeed ??= SpecPhaseScenario.seed(seedScope);
+  const seed = await qualityGateSeed;
+  const clone = new SeedWorkRoot(seed.root, { prefix: "sennel-cli-quality-gate-" });
+  t.after(() => clone.cleanup());
+  const root = clone.root;
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: seed.specId });
+  seed.assertClone(manager);
+  const state = manager.loadReadOnly(seed.specId);
+  const guards = ["--expect-run-id", state.runId, "--expect-no-issue", "--expect-spec", seed.specId];
+  const source = manager.readProducerArtifact({ specId: seed.specId, nodeId: "spec-gate", logicalKey: "spec.gate" });
+  const payload = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "spec.gate", bytes: source.bytes }).current.payload;
+  const findings = canonicalSourceFindings({ artifact: payload, sourceStep: "spec-gate", sourceArtifact: source.relativePath });
+  assert.ok(findings.length > 0);
+  const activated = invoke(root, ["set", "policy", "nonblocking", "--reason", "Retain the bounded quality findings for Acceptance.", ...guards]);
+  assert.equal(activated.status, 0, activated.stderr);
+  assert.equal(activated.envelope.data.activatedStep, "spec-gate");
+  const context = decisionContextForActiveFlow(root, manager.loadReadOnly(seed.specId), manager);
+  assert.equal(context.resultKind, "quality");
+  const continued = invoke(root, ["set", "nonblocking-decision", "--choice", "continue",
+    "--reason", "Carry the actual Spec Gate quality findings to Acceptance.",
+    "--remaining-risk", "Acceptance must dispose of the unresolved specification finding.",
+    "--expect-evidence-digest", context.evidenceDigest, ...guards]);
+  assert.equal(continued.status, 0, continued.stderr);
+  assert.equal(manager.canonicalState(seed.specId).findNode("spec-gate").status, "done");
+  const retained = JSON.parse(manager.readArtifact({ specId: seed.specId,
+    logicalKey: "flow.findings", consumerNodeId: "acceptance-review" }).bytes.toString("utf8"));
+  const selected = retained.entries.filter(entry => entry.sourceStep === "spec-gate");
+  assert.equal(selected.length, findings.length);
+  for (const entry of selected) {
+    const original = findings.find(finding => finding.identity.sourceFindingId === entry.sourceFindingId);
+    assert.ok(original);
+    assert.equal(entry.sourceArtifact, source.relativePath);
+    assert.equal(entry.fingerprint, original.identity.fingerprint);
+    assert.equal(entry.retryExhausted, true);
   }
-  return { root, manager, fixture, guards: ["--expect-run-id", runId, "--expect-no-issue", "--expect-spec", specId] };
-}
-
-test("nonblocking policy reads cataloged V1 evidence and persists no legacy state fields", () => {
-  const root = createTmpDir("sennel-canonical-nonblocking-e2e-");
-  try {
-    writeJson(root, ".sennel/config.json", {
-      lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" }, commands: { gh: "disable" },
-    });
-    initGitRepo(root);
-    commitAll(root, "initial canonical fixture");
-    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
-    const fixture = new CanonicalFlowFixture({ flowManager: manager, specId: "477-nonblocking-e2e", runId: "run-477" })
-      .create().registerActive().activate("impl-review");
-    manager.publishArtifacts({
-      specId: fixture.specId,
-      nodeId: "impl-review",
-      artifactWrites: [{
-        logicalKey: "impl.review",
-        mediaType: "application/json",
-        bytes: history("impl-review", "impl.review", rejectedReviewPayload("Cataloged rejected review.")),
-      }],
-    });
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
-    }
-
-    const guards = ["--expect-run-id", "run-477", "--expect-no-issue", "--expect-spec", fixture.specId];
-    const activated = invoke(root, ["set", "policy", "nonblocking", "--reason", "Explicit acceptance disposition is required.", ...guards]);
-    assert.equal(activated.status, 0, activated.stderr);
-    assert.equal(activated.envelope.data.activatedStep, "impl-review");
-    const persisted = manager.canonicalState(fixture.specId).toJSON();
-    const activities = manager.activityLedger(fixture.specId);
-    assert.equal(persisted.policy.nonblocking.enabled, true);
-    assert.equal(Object.hasOwn(persisted, "nonblocking"), false);
-    assert.equal(Object.hasOwn(persisted, "stepAttempts"), false);
-    assert.equal(activities.at(-1).transition.nonblocking.kind, "observation");
-    const decisionPayload = rejectedReviewPayload("Cataloged rejected review.");
-    const continued = invoke(root, [
-      "set", "nonblocking-decision", "--choice", "continue",
-      "--reason", "The requested behavior is complete despite the review finding.",
-      "--remaining-risk", "The rejected review remains in the acceptance evidence.",
-      "--expect-evidence-digest", crypto.createHash("sha256").update(`${JSON.stringify(decisionPayload, null, 2)}\n`).digest("hex"),
-      ...guards,
-    ]);
-    assert.equal(continued.status, 0, continued.stderr);
-    const after = manager.load(fixture.specId);
-    assert.equal(after.steps.flatMap((entry) => entry.children || [entry]).find((entry) => entry.id === "impl-review").status, "done");
-    assert.equal(after.steps.flatMap((entry) => entry.children || [entry]).find((entry) => entry.id === "impl-triage").status, "skipped");
-    assert.equal(Object.hasOwn(after, "stepAttempts"), false);
-  } finally {
-    removeTmpDir(root);
-  }
-});
-
-test("CLI rejects a stale nonblocking digest while retaining the catalog observation", () => {
-  const scenario = canonicalCliScenario({
-    specId: "478-nonblocking-stale", runId: "run-478", step: "impl-review", logicalKey: "impl.review",
-    payload: rejectedReviewPayload("Canonical review evidence remains guarded."),
-  });
-  try {
-    const activated = invoke(scenario.root, ["set", "policy", "nonblocking", "--reason", "Evidence needs a guarded decision.", ...scenario.guards]);
-    assert.equal(activated.status, 0, activated.stderr);
-    const stale = invoke(scenario.root, [
-      "set", "nonblocking-decision", "--choice", "continue", "--reason", "This must remain guarded.",
-      "--remaining-risk", "The evidence is durable.", "--expect-evidence-digest", "b".repeat(64), ...scenario.guards,
-    ]);
-    assert.notEqual(stale.status, 0);
-    assert.equal(stale.envelope.errors[0].code, "NONBLOCKING_STALE_EVIDENCE");
-    assert.equal(scenario.manager.activityLedger(scenario.fixture.specId).filter((activity) => activity.transition.nonblocking?.kind === "observation").length, 1);
-  } finally { removeTmpDir(scenario.root); }
-});
-
-test("CLI target guards reject a mismatched canonical Flow before policy mutation", () => {
-  const scenario = canonicalCliScenario({
-    specId: "479-nonblocking-guard", runId: "run-479", step: "impl-review", logicalKey: "impl.review",
-    payload: rejectedReviewPayload("Canonical review evidence remains guarded."),
-  });
-  try {
-    const rejected = invoke(scenario.root, [
-      "set", "policy", "nonblocking", "--reason", "Wrong target must not mutate.",
-      "--expect-run-id", "other-run", "--expect-no-issue", "--expect-spec", scenario.fixture.specId,
-    ]);
-    assert.notEqual(rejected.status, 0);
-    assert.equal(scenario.manager.load(scenario.fixture.specId).policy.nonblocking, null);
-  } finally { removeTmpDir(scenario.root); }
-});
-test("CLI activation records refreshed canonical review evidence from the current producer Attempt", () => {
-  const firstPayload = rejectedReviewPayload("First canonical review.");
-  const scenario = canonicalCliScenario({
-    specId: "480-nonblocking-review", runId: "run-480", step: "impl-review", logicalKey: "impl.review",
-    payload: firstPayload,
-  });
-  try {
-    const activated = invoke(scenario.root, ["set", "policy", "nonblocking", "--reason", "Review recovery is exhausted.", ...scenario.guards]);
-    assert.equal(activated.status, 0, activated.stderr);
-    const context = decisionContextForActiveFlow(
-      scenario.root,
-      scenario.manager.load(scenario.fixture.specId),
-      scenario.manager,
-    );
-    recordNonBlockingDecision({
-      root: scenario.root,
-      flowManager: scenario.manager,
-      choice: "repair",
-      reason: "Open a fresh producer Attempt for the corrected review.",
-      expectEvidenceDigest: context.evidenceDigest,
-      expectIdentity: context.identity().toJSON(),
-    });
-    const refreshedPayload = {
-      ...firstPayload,
-      summary: "Refreshed canonical review.",
-    };
-    scenario.manager.publishArtifacts({
-      specId: scenario.fixture.specId, nodeId: "impl-review",
-      artifactWrites: [{ logicalKey: "impl.review", mediaType: "application/json", bytes: history(
-        "impl-review", "impl.review", refreshedPayload, 2,
-        [new FlowArtifactAttemptRecord({ attempt: 1, payload: {
-          nodeId: "impl-review", outcome: "completed", result: { result: "block" },
-          artifact: { logicalKey: "impl.review", payload: firstPayload },
-        } })],
-      ) }],
-    });
-    recordEligibleNonblockingAttempt({ root: scenario.root, flowManager: scenario.manager, flowState: scenario.manager.load(scenario.fixture.specId) }, "impl-review");
-    const observations = scenario.manager.activityLedger(scenario.fixture.specId)
-      .map((activity) => activity.transition.nonblocking)
-      .filter((record) => record?.kind === "observation");
-    assert.equal(observations.length, 2);
-    assert.equal(observations.at(-1).sourceAttempt, 2);
-    assert.notEqual(observations.at(-1).evidenceDigest, observations[0].evidenceDigest);
-  } finally { removeTmpDir(scenario.root); }
+  assert.equal(manager.readArtifact({ specId: seed.specId, consumerNodeId: "approval",
+    logicalKey: "spec.gate" }).descriptor.hash, source.descriptor.hash);
 });

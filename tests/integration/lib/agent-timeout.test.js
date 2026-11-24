@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   AgentTimeout,
   DEFAULT_AGENT_TIMEOUT_SECONDS,
-  DEFAULT_AGENT_PROCESS_TREE_GRACE_MS,
+  DEFAULT_REGISTERED_CHILD_GRACE_MS,
 } from "../../../src/lib/agent-timeout.js";
 
 describe("AgentTimeout", () => {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
+import { readOnlyCodexProfile, withReadOnlyAgentControlScope } from "../support/infrastructure/readonly-agent-profile.js";
 import { AgentFileReference } from "../../src/lib/agent-file-reference.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
@@ -14,67 +16,87 @@ import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
 import { TestTemporaryRoot } from "../test-temporary-root.js";
+import { executionValueDigest } from "../../src/lib/process-execution-values.js";
 
 test("real repair model resolves existing evidence and returns only missing choices to Draft", { timeout: 600_000 }, async (t) => {
   const owner = TestTemporaryRoot.createOnRepository();
   const release = owner.activate();
   t.after(release);
   const root = owner.path;
-  const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
-  const config = { agent: { default: "repair-quality", timeout: 240, retryCount: 0,
-    providers: { "repair-quality": { command: "codex",
-      args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "{{PROMPT}}"],
-      jsonOutputFlag: "--json" } } } };
-  const agent = new Agent({ config, paths: { root, agentWorkDir: root },
-    registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
-  const prompt = getStepInstructions("plan.spec-gate-repair");
-  assert.match(prompt, /explore and read the execution checkout yourself/);
-  assert.match(prompt, /State shared conditions once/);
-  assert.doesNotMatch(prompt, /<!--\s*include\(/);
-  for (const known of [true, false]) {
-    const spec = validWorkerHandoffTaskSpec();
-    spec.requirements[0].desc = known
-      ? "Determine later whether the shared help consumers require regression checks."
-      : "Choose the data retention duration later.";
-    const baseRevision = `sha256:${"a".repeat(64)}`;
-    const finding = { identity: { sourceArtifact: "steps/spec-gate/result.json", sourceStep: "spec-gate",
-      sourceFindingId: "unresolved-plan", fingerprint: "b".repeat(64) },
-      requirementRef: "complete-plan", observed: "The requirement leaves a decision unresolved.",
-      targets: [{ entity: "requirement", id: "R1", field: "desc" }],
-      allowedTargets: [{ target: { entity: "requirement", id: "R1", field: "desc" }, operationKinds: ["edit-text-field"] }] };
-    const ctx = new SpecGateRepairContext({ spec, baseRevision, findings: [finding],
-      guardrails: [{ id: "complete-plan", title: "Complete plan", body: "Resolve the stated decision using the authorized request; never invent a missing user policy." }],
-      sources: [new SpecGateRepairSource({ id: "issue", origin: "issue.md", revision: "original-request",
-        content: known ? "The user explicitly requires regression checks for every direct shared help renderer consumer. Source investigation confirms docs, core and plugin import the shared renderer. Preserve their command semantics."
-          : "Retention is a user policy choice between 30 and 365 days. Both are technically supported. The user has not selected a duration; neither project rules nor source defines a default." })] });
-    const selected = ctx.select(ctx.units()[0].id);
-    const selection = selected.toJSON();
-    const contextPath = path.join(root, "spec-gate-repair-context.json");
-    const contextBytes = Buffer.from(JSON.stringify({ version: 2, mode: "repair", baseRevision,
-      bundle: SpecGateRepairBundle.fromSelections([selected]).toJSON() }), "utf8");
-    fs.writeFileSync(contextPath, contextBytes);
-    const reference = AgentFileReference.resolve({ projectRoot: root, filePath: contextPath,
-      label: "Spec Gate repair quality context", maxBytes: contextBytes.length });
-    const text = await agent.call(`${prompt}\nRead the complete canonical context from the exact absolute file path below. Resolve its relative path only against the stated project root. Return only the JSON response as your final output; do not write files.\n${reference.toPromptText()}`,
-      { commandId: "flow.spec-gate-repair", executionWorkDir: root, cacheMode: "bypass" });
-    reference.assertUnchanged({ label: "Spec Gate repair quality context", maxBytes: reference.byteLength });
-    const response = JSON.parse(text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
-    assert.equal(response.baseRevision, baseRevision);
-    if (known) {
-      assert.equal(response.stage, "spec-gate-repair", JSON.stringify(response));
-      const authority = new SpecGateRepairAuthority({ spec, baseRevision, findings: [finding],
-        expectedUnits: [{ findingIdentities: [finding.identity] }] });
-      const applied = applySpecGateRepairOperations({ validator: readSpecJsonValidator(), spec, authority, repair: response,
-        inputRevision: baseRevision.slice(7) });
-      assert.equal(applied.audit.acceptedGroups.length, 1, JSON.stringify({ response, audit: applied.audit }));
-      assert.match(applied.spec.requirements[0].desc, /regression/i);
-      assert.doesNotMatch(applied.spec.requirements[0].desc, /determine later/i);
-    } else {
-      assert.equal(response.stage, "spec-gate-repair-draft-return", JSON.stringify(response));
-      assert.equal(response.unitId, selection.unit.id);
-      for (const field of ["decision", "evidence", "unresolvedBecause"]) assert.equal(typeof response[field], "string");
-      assert.match(JSON.stringify(response), /30|365/);
+  await withReadOnlyAgentControlScope(root, async () => {
+    const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
+    const config = { agent: { default: "repair-quality", timeout: 240, retryCount: 0,
+      providers: { "repair-quality": readOnlyCodexProfile({ command: "codex",
+        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "{{PROMPT}}"],
+        jsonOutputFlag: "--json" }) } } };
+    const agent = new Agent({ config, paths: { root, agentWorkDir: root },
+      registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
+    const prompt = getStepInstructions("plan.spec-gate-repair");
+    assert.match(prompt, /explore and read the execution checkout yourself/);
+    assert.match(prompt, /State shared conditions once/);
+    assert.doesNotMatch(prompt, /<!--\s*include\(/);
+    for (const known of [true, false]) {
+      const spec = validWorkerHandoffTaskSpec();
+      spec.requirements[0].desc = known
+        ? "Determine later whether the shared help consumers require regression checks."
+        : "Choose the data retention duration later.";
+      const baseRevision = `sha256:${"a".repeat(64)}`;
+      const finding = { identity: { sourceArtifact: "steps/spec-gate/result.json", sourceStep: "spec-gate",
+        sourceFindingId: "unresolved-plan", fingerprint: "b".repeat(64) },
+        requirementRef: "complete-plan", observed: "The requirement leaves a decision unresolved.",
+        targets: [{ entity: "requirement", id: "R1", field: "desc" }],
+        allowedTargets: [{ target: { entity: "requirement", id: "R1", field: "desc" }, operationKinds: ["edit-text-field"] }] };
+      const ctx = new SpecGateRepairContext({ spec, baseRevision, findings: [finding],
+        guardrails: [{ id: "complete-plan", title: "Complete plan", body: "Resolve the stated decision using the authorized request; never invent a missing user policy." }],
+        sources: [new SpecGateRepairSource({ id: "issue", origin: "issue.md", revision: "original-request",
+          content: known ? "The user explicitly requires regression checks for every direct shared help renderer consumer. Source investigation confirms docs, core and plugin import the shared renderer. Preserve their command semantics."
+            : "Retention is a user policy choice between 30 and 365 days. Both are technically supported. The user has not selected a duration; neither project rules nor source defines a default." })] });
+      const selected = ctx.select(ctx.units()[0].id);
+      const selection = selected.toJSON();
+      const contextPath = path.join(root, "spec-gate-repair-context.json");
+      const contextBytes = Buffer.from(JSON.stringify({ version: 2, mode: "repair", baseRevision,
+        bundle: SpecGateRepairBundle.fromSelections([selected]).toJSON() }), "utf8");
+      fs.writeFileSync(contextPath, contextBytes);
+      const reference = AgentFileReference.resolve({ projectRoot: root, filePath: contextPath,
+        label: "Spec Gate repair quality context", maxBytes: contextBytes.length });
+      let text = null;
+      const receipts = [];
+      try {
+        text = await agent.call(`${prompt}\nRead the complete canonical context from the exact absolute file path below. Resolve its relative path only against the stated project root. Return only the JSON response as your final output; do not write files.\n${reference.toPromptText()}`,
+          { commandId: "flow.spec-gate-repair", executionWorkDir: root, cacheMode: "bypass",
+            onProcessExecutionStop(receipt) {
+              const saved = receipt.toJSON();
+              receipts.push({ executionId: saved.executionId, callId: saved.callId, ownerEpoch: saved.ownerEpoch,
+                receiptDigest: executionValueDigest(saved), invocationDigest: saved.invocationDigest, binding: saved.binding,
+                observation: { kind: saved.observation.kind, code: saved.observation.code,
+                  signal: saved.observation.signal, observedAt: saved.observation.observedAt }, output: saved.output });
+            } });
+        reference.assertUnchanged({ label: "Spec Gate repair quality context", maxBytes: reference.byteLength });
+        const response = JSON.parse(text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
+        assert.equal(response.baseRevision, baseRevision);
+        if (known) {
+          assert.equal(response.stage, "spec-gate-repair", JSON.stringify(response));
+          const authority = new SpecGateRepairAuthority({ spec, baseRevision, findings: [finding],
+            expectedUnits: [{ findingIdentities: [finding.identity] }] });
+          const applied = applySpecGateRepairOperations({ validator: readSpecJsonValidator(), spec, authority, repair: response,
+            inputRevision: baseRevision.slice(7) });
+          assert.equal(applied.audit.acceptedGroups.length, 1, JSON.stringify({ response, audit: applied.audit }));
+          assert.match(applied.spec.requirements[0].desc, /regression/i);
+          assert.doesNotMatch(applied.spec.requirements[0].desc, /determine later/i);
+        } else {
+          assert.equal(response.stage, "spec-gate-repair-draft-return", JSON.stringify(response));
+          assert.equal(response.unitId, selection.unit.id);
+          for (const field of ["decision", "evidence", "unresolvedBecause"]) assert.equal(typeof response[field], "string");
+          assert.match(JSON.stringify(response), /30|365/);
+        }
+        t.diagnostic(`${model}: ${known ? "existing evidence repaired" : "missing choice returned to Draft"}`);
+      } catch (error) {
+        t.diagnostic(JSON.stringify({ evidence: "spec-gate-repair-decision-failure", known,
+          contextBase64: contextBytes.toString("base64"),
+          contextDigest: createHash("sha256").update(contextBytes).digest("hex"),
+          returnedText: text, receipts }));
+        throw error;
+      }
     }
-    t.diagnostic(`${model}: ${known ? "existing evidence repaired" : "missing choice returned to Draft"}`);
-  }
+  }, owner);
 });

@@ -132,7 +132,7 @@ test("DraftRefineStep alone selects wait, execution, or completion from typed fa
   assert.equal(decision([new AwaitingUserAnswer({ id: "q1", question: "Awaiting?", revision: 0, ...base })], true), "draft-refine-worker-required");
 });
 
-test("DraftRefineStep rejects a fact-read failure without selecting or persisting a Result", async () => {
+test("Draft refinement input acquisition rejects a fact-read failure without selecting or persisting a Result", async () => {
   const root = createTmpDir("draft-refine-error-result-");
   try {
     const specId = "001-draft-refine-error-result";
@@ -167,12 +167,10 @@ test("DraftRefineStep rejects a fact-read failure without selecting or persistin
       readAttempts += 1;
       throw readFailure;
     };
-    const service = await prepareDraftService({
+    await assert.rejects(() => prepareDraftService({
       flowManager: manager,
       binding,
-    });
-
-    await assert.rejects(new DraftRefineStep(service).execute(), (error) => error === readFailure);
+    }), (error) => error === readFailure);
     assert.equal(readAttempts, 1);
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before.state);

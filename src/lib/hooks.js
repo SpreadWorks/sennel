@@ -1,4 +1,5 @@
-import childProcess from "node:child_process";
+import { runCmdAsync } from "./process.js";
+import { CommandInvocation } from "./command-invocation.js";
 import { loadConfig } from "./config.js";
 import { repoRoot } from "./cli.js";
 
@@ -52,17 +53,20 @@ export async function onHook(hookName, context = {}) {
   const rawCommand = hooks[hookName];
   if (rawCommand == null || rawCommand === "") return successfulNoop();
 
-  const { command, missing } = replaceHookPlaceholders(rawCommand, context);
-  if (missing.length > 0) {
-    warn(`hook ${hookName} has unresolved placeholder(s): ${missing.map((key) => `{{${key}}}`).join(", ")}`);
-  }
-
-  const result = childProcess.spawnSync(command, [], {
-    cwd: context.CWD,
-    shell: true,
-    timeout: HOOK_TIMEOUT_MS,
-    encoding: "utf8",
-  });
+  const stored = CommandInvocation.fromStored(rawCommand, { source: `flow.hooks.${hookName}` }).toJSON();
+  const missing = new Set();
+  const render = (value) => {
+    const result = replaceHookPlaceholders(value, context);
+    result.missing.forEach((key) => missing.add(key));
+    return result.command;
+  };
+  stored.args = stored.args.map(render);
+  if (stored.cwd !== null) stored.cwd = render(stored.cwd);
+  else stored.cwd = context.CWD ?? null;
+  if (stored.env !== null) stored.env = Object.fromEntries(Object.entries(stored.env).map(([key, value]) => [key, render(value)]));
+  if (missing.size) warn(`hook ${hookName} has unresolved placeholders: ${[...missing].join(", ")}`);
+  const command = CommandInvocation.fromStored(stored);
+  const result = await runCmdAsync(command, [], { timeout: HOOK_TIMEOUT_MS, encoding: "utf8" });
   const status = result.status == null ? 1 : result.status;
   const envelope = {
     ok: !result.error && status === 0,

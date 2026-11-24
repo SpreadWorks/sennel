@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { seedSpecGateRepairScenario, createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { planSpecGateRepairWorkerExecution } from "../../../src/flow/lib/spec-gate-repair-execution.js";
@@ -68,7 +67,7 @@ describe("Spec Gate repair durable handoff", () => {
       assert.equal(restored.activityLedger(value.specId).filter((entry) => (
         entry.nodeId === "spec-gate-repair" && entry.result?.stepResult?.kind === result.kind
       )).length, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("retains a claimed provider call budget after a manager restart", async () => {
@@ -106,6 +105,6 @@ describe("Spec Gate repair durable handoff", () => {
       }, before);
       assert.deepEqual(currentProgress(restored, value.specId, request, "claimed"), claimed);
       assert.equal(currentProgress(restored, value.specId, request, "claimed").budget.providerCallCount, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 });

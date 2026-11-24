@@ -91,6 +91,7 @@ async function taskGateFixture(root, sourceText = "export const currentTaskBehav
 }
 
 const seedScope = new SeedCleanupScope(after);
+const seedCloneScope = new SeedCleanupScope(afterEach);
 let taskGateSeed;
 async function standardTaskGateFixture() {
   if (!taskGateSeed) {
@@ -104,6 +105,7 @@ async function standardTaskGateFixture() {
     } finally { removeTmpDir(producerRoot); }
   }
   const copy = new SeedWorkRoot(taskGateSeed.root, { prefix: "sennel-task-gate-case-" });
+  seedCloneScope.after(() => copy.cleanup());
   try {
     const started = performance.now();
     const flowManager = makeFlowManager(copy.root);

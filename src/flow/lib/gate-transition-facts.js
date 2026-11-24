@@ -29,6 +29,7 @@ import {
 } from "./canonical-gate-artifacts.js";
 import { inspectCanonicalPlanGateRepair, inspectProspectivePlanGateRepair } from "./plan-gate-repair.js";
 import { evaluateReviewFindingGateReadiness } from "./review-finding-gate-readiness.js";
+import { readFlowReviewSemanticHandoff } from "./flow-review-semantic-handoff.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import {
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
@@ -332,6 +333,7 @@ function sameMembers(left, right) {
 
 /** Read review, triage and repair lineage once, before Definition classifies integration. */
 export function integrationReviewReadiness({ flowManager, state }) {
+  const semanticHandoff = readFlowReviewSemanticHandoff({ flowManager, state, consumerNodeId: "impl-gate" });
   const activities = flowManager.activityLedger(state.specId);
   const reviewSource = flowManager.readArtifact({
     specId: state.specId, logicalKey: "impl.review", consumerNodeId: "impl-gate", optional: true,
@@ -357,7 +359,7 @@ export function integrationReviewReadiness({ flowManager, state }) {
   if (!Array.isArray(dispositions)) throw new Error("canonical impl.triage dispositions must be an array");
   const staleTriageKeys = dispositions.map((entry) => entry?.findingKey)
     .filter((key) => typeof key === "string" && currentFindings.has(key));
-  if (!triageCurrent && staleTriageKeys.length > 0) {
+  if (!triageCurrent && staleTriageKeys.length > 0 && semanticHandoff === null) {
     throw new Error("canonical impl.triage lineage is stale for the current review finding identity");
   }
   const triageItems = triageCurrent
@@ -400,6 +402,7 @@ export function integrationReviewReadiness({ flowManager, state }) {
     triageFingerprint: triage?.fingerprint ?? null,
     repairFingerprint: repair?.fingerprint ?? null,
     resolvedFindingIds,
+    semanticHandoff,
     // impl.review attempts are ordered canonical publications. A changed
     // repair fingerprint is the authoritative current-review boundary; an
     // unchanged fingerprint deliberately retains prior unresolved findings.

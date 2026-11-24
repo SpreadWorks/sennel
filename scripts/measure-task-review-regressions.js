@@ -8,10 +8,17 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+await import("../src/sennel.js");
+const { runCmd, assertOk } = await import("../src/lib/process.js");
+const { runGit } = await import("../src/lib/git-helpers.js");
+const { NativeExecutableInvocation, NodeScriptInvocation } = await import("../src/lib/command-invocation.js");
 import { fileURLToPath } from "node:url";
-import { TestTemporaryRoot } from "../tests/test-temporary-root.js";
-import { TemporaryPaths } from "../src/lib/temporary-paths.js";
+const { TestTemporaryRoot } = await import("../tests/test-temporary-root.js");
+const { TemporaryPaths } = await import("../src/lib/temporary-paths.js");
+const { AtomicFile } = await import("../src/lib/atomic-file.js");
+const { AtomicJsonFile } = await import("../src/lib/atomic-json-file.js");
+const { RealDirectoryAuthority } = await import("../src/lib/real-directory-authority.js");
+const { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } = await import("../src/lib/regular-file-snapshot.js");
 
 const authorRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const revisions = ["5cf1d97e0", "39148ea56", "9e839d1dc", "4dab68ee2", "857c2a64c"];
@@ -19,28 +26,43 @@ const testFile = "tests/integration/flow/task-review-causal-scenarios.test.js";
 const supportFile = "tests/support/builders/task-review-scenario.js";
 
 function git(root, args, options = {}) {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  const result = runGit(["-C", root, ...args], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  assertOk(result, "measurement Git command failed");
+  return result.stdout;
 }
 
 function digestTree(root) {
   const entries = [];
-  function visit(directory) {
-    for (const name of fs.readdirSync(directory).sort()) {
+  const rootAuthority = new RealDirectoryAuthority(root);
+  function visit(authority) {
+    const directory = authority.directory;
+    for (const name of authority.entries().sort()) {
       const absolute = path.join(directory, name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
-      const stat = fs.lstatSync(absolute);
-      if (stat.isDirectory()) visit(absolute);
+      const stat = fs.lstatSync(absolute, { bigint: true });
+      if (stat.isDirectory()) visit(authority.descendant(absolute));
       else if (stat.isSymbolicLink()) entries.push([relative, "symlink", fs.readlinkSync(absolute)]);
-      else if (stat.isFile()) entries.push([relative, stat.mode & 0o777, crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")]);
+      else if (stat.isFile()) {
+        const receipt = visitRegularFileChunks(absolute, {
+          label: "measurement source file", maxBytes: Number.MAX_SAFE_INTEGER - 1,
+          expectedIdentity: stat, directoryAuthority: authority, visit() {},
+        });
+        // Permission bits describe the measured source checkout, never I/O authority.
+        entries.push([relative, Number(stat.mode & 0o777n), receipt.digest]);
+      }
       else throw new Error(`Cannot snapshot non-file: ${absolute}`);
     }
+    authority.assertStable();
   }
-  visit(root);
+  visit(rootAuthority);
+  rootAuthority.assertStable();
   return { digest: crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex"), entries };
 }
 
 function copy(source, target) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  RealDirectoryAuthority.resolve(path.dirname(target), { create: true }).assertStable();
+  // This fixture copy preserves source-checkout symlinks and metadata as measured
+  // payload; it is not publication of a managed regular-file target set.
   fs.cpSync(source, target, { recursive: true, dereference: false, preserveTimestamps: true });
 }
 
@@ -50,12 +72,13 @@ class ReviewRegressionMeasurement {
     this.specDirectory = fs.realpathSync(specDirectory);
     const paths = new TemporaryPaths(this.worktree);
     this.output = paths.create(paths.operator(), "sennel-review-measurement-");
+    this.outputAuthority = new RealDirectoryAuthority(this.output);
     this.seed = path.join(this.output, "immutable-seed");
     this.rows = [];
     this.before = null;
   }
   write(name, value) {
-    fs.writeFileSync(path.join(this.output, name), `${JSON.stringify(value, null, 2)}\n`);
+    new AtomicJsonFile(path.join(this.output, name), { directoryAuthority: this.outputAuthority }).write(value);
   }
   originalSnapshot() {
     return {
@@ -77,7 +100,9 @@ class ReviewRegressionMeasurement {
       if (fs.existsSync(source)) copy(source, path.join(this.seed, file));
     }
     copy(path.join(this.worktree, ".sennel"), path.join(this.seed, ".sennel"));
-    const state = JSON.parse(fs.readFileSync(path.join(this.specDirectory, "flow.json"), "utf8"));
+    const state = JSON.parse(captureRegularFile(path.join(this.specDirectory, "flow.json"), {
+      label: "measurement seed Flow state", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+    }).text());
     this.specId = state.specId;
     const destination = path.join(this.seed, "specs", this.specId, path.basename(this.specDirectory));
     copy(this.specDirectory, destination);
@@ -95,39 +120,47 @@ class ReviewRegressionMeasurement {
     // Apply product deltas only. The same new tests are frozen for every run.
     for (const revision of removed) {
       const patch = git(this.worktree, ["diff", `${revision}^`, revision, "--", "src/"]);
-      execFileSync("git", ["apply", "--reverse", "--check", "-"], { cwd: root, input: patch });
-      execFileSync("git", ["apply", "--reverse", "-"], { cwd: root, input: patch });
+      git(root, ["apply", "--reverse", "--check", "-"], { input: patch });
+      git(root, ["apply", "--reverse", "-"], { input: patch });
     }
     const environment = { ...process.env };
     for (const key of Object.keys(environment)) {
       if (key.startsWith("SENNEL_") || key.startsWith("GIT_")) delete environment[key];
     }
     const logPath = path.join(this.output, `${name}.tap`);
-    const fd = fs.openSync(logPath, "w");
+    const logFile = new AtomicFile(logPath, {
+      directoryAuthority: this.outputAuthority, maxBytes: Number.MAX_SAFE_INTEGER - 1,
+    });
     const temporary = TestTemporaryRoot.select({ repositoryRoot: root, environment });
     const release = temporary.activate({ environment });
     let result;
     try {
-      result = spawnSync(process.execPath, ["--test", "--test-reporter=tap", testFile], {
-        cwd: root, env: environment, stdio: ["ignore", fd, fd], timeout: 600_000,
+      const stage = logFile.createOutputStage((fd) => {
+        result = runCmd(new NativeExecutableInvocation({ executable: process.execPath, args: ["--test", "--test-reporter=tap", testFile],
+          cwd: root, env: environment, stdio: ["ignore", fd, fd] }), [], { timeout: 600_000 });
       });
+      logFile.publishStage(stage);
     } finally {
-      fs.closeSync(fd);
       release();
     }
-    if (result.error) throw result.error;
-    const log = fs.readFileSync(logPath, "utf8");
-    const snapshot = spawnSync(process.execPath, ["scripts/task-review-snapshot-probe.js", root, this.specId], {
-      cwd: root, env: environment, encoding: "utf8", timeout: 30_000,
-    });
-    fs.writeFileSync(path.join(this.output, `${name}-snapshot.log`), snapshot.stdout + snapshot.stderr);
-    if (snapshot.error) throw snapshot.error;
+    if (result.errorCode) throw new Error(`measurement command failed: ${result.errorCode}: ${result.stderr}`);
+    const log = captureRegularFile(logPath, {
+      label: "measurement TAP output", maxBytes: MAX_IN_MEMORY_FILE_BYTES, directoryAuthority: this.outputAuthority,
+    }).text();
+    const snapshot = runCmd(new NodeScriptInvocation({ script: "scripts/task-review-snapshot-probe.js", args: [root, this.specId],
+      cwd: root, env: environment }), [], { encoding: "utf8", timeout: 30_000 });
+    new AtomicFile(path.join(this.output, `${name}-snapshot.log`), {
+      directoryAuthority: this.outputAuthority,
+    }).write(snapshot.stdout + snapshot.stderr);
+    if (snapshot.errorCode) throw new Error(`measurement snapshot failed: ${snapshot.errorCode}: ${snapshot.stderr}`);
     const row = {
       name, removed, exitCode: result.status, signal: result.signal,
       passed: [...log.matchAll(/^ok \d+ - (.+)$/gm)].map((entry) => entry[1]),
       failed: [...log.matchAll(/^not ok \d+ - (.+)$/gm)].map((entry) => entry[1]),
       snapshotExitCode: snapshot.status,
-      testDigest: crypto.createHash("sha256").update(fs.readFileSync(path.join(root, testFile))).digest("hex"),
+      testDigest: visitRegularFileChunks(path.join(root, testFile), {
+        label: "measurement frozen test", maxBytes: Number.MAX_SAFE_INTEGER - 1, visit() {},
+      }).digest,
     };
     const names = [...row.passed, ...row.failed].sort();
     assert.ok(names.length > 1, "runner must execute individual scenario contracts, not just fail loading a file");

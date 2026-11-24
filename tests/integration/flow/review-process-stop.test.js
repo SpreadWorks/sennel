@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { TaskStepBinding } from "../../../src/flow/engine/connectors/task/task-step-binding.js";
 import assert from "node:assert/strict";
@@ -55,7 +56,7 @@ for (const phase of ["draft-questions", "spec"]) {
       ReviewWorkUnit.fromEnvironment({SENNEL_REVIEW_WORK_UNIT_MANIFEST:${JSON.stringify(surface.manifestPath)}}).seal();`);
     runtime = await ProcessExecutionRuntime.acquire({ mainRoot, executionRoot: root, ...state });
     const binding = new ProcessExecutionBinding({ ...FlowProcessExecutionBinding.forContract(contract).toJSON(), workUnitId: surface.manifestPath });
-    const completed = await runtime.enter(() => runManagedCmdAsync(process.execPath, [script], {
+    const completed = await runtime.enter(() => runManagedCmdAsync(process.execPath, ["--import", SENNEL_BOOTSTRAP, script], {
       cwd: root, timeout: 15000, processExecutionBinding: binding,
     }));
     assert.equal(completed.ok, true, completed.stderr);

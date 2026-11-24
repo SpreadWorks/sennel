@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { testTemporaryRoot } from "../../test-environment.js";
 import { FinalizationWorktreeScenario } from "../../support/infrastructure/finalization-worktree-scenario.js";
 import { installCommandProcessFake } from "../../support/infrastructure/command-process-fake.js";
 import RunFinalizeCleanupCommand from "../../../src/flow/lib/run-finalize-cleanup.js";
 import { captureFinalizationProcessAuthority } from "../../../src/flow/lib/finalization-process-authority.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
-import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionFinalizationBarrier } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
+import { FlowProcessQueryReadback } from "../../support/infrastructure/flow-process-query-readback.js";
 import { runManagedCmdAsync } from "../../../src/lib/process.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -36,7 +39,7 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
   });
   t.after(async () => { if (!retained) for (const callback of cleanup) await callback(); });
   try {
-  flow = await FinalizationWorktreeScenario.prepare(producerContext);
+  flow = await FinalizationWorktreeScenario.prepareProcessBoundary(producerContext);
   assert.equal(flow.current(), "finalize-commit");
   const runId = flow.state().runId;
   const specId = flow.specId;
@@ -57,7 +60,7 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
     assert.equal(old.slot, null);
     assert.ok(old.executions.length > 0);
     assert.ok(old.executions.every((execution) => execution.status === "closed"
-      && execution.calls.every((call) => call.receipt?.stopEvidence.status === "confirmed")));
+      && execution.calls.every((call) => call.receipt !== null && new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed")));
     const busy = (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY";
     await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: flow.mainRoot, executionRoot: originalRoot }), busy);
     await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: flow.mainRoot }), busy);
@@ -86,7 +89,7 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
   assert.equal(main.slot, null);
   const calls = main.executions.flatMap((execution) => execution.calls);
   assert.ok(calls.some((call) => call.parentCallId !== null));
-  assert.ok(calls.every((call) => call.receipt?.stopEvidence.status === "confirmed"));
+  assert.ok(calls.every((call) => call.receipt !== null && new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed"));
   const old = ProcessExecutionRuntime.inspectRetainedClosedCheckout({ mainRoot: flow.mainRoot,
     executionRoot: originalRoot, runId, specId });
   assert.equal(old.slot, null);
@@ -98,14 +101,46 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
   assert.equal(authority.sourceRoot, originalRoot);
   assert.equal(authority.sourceRemoval.cleanupReceiptId, completedCleanup.receipt.id);
   const activities = manager.activityLedger(specId);
+  const finalized = [...main.executions, ...old.executions].flatMap(execution =>
+    execution.finalizationFences.filter(fence => fence.selection.runId === runId
+      && fence.selection.specId === specId).map(fence => ({ execution, fence })));
+  assert.ok(finalized.length > 0, "whole-dispatch finalization must retain its selected audit cutoff");
+  const cutoffEvents = finalized.flatMap(({ fence }) => ProcessExecutionFinalizationBarrier.fromStored(fence.barrier).events);
+  const query = await FlowProcessQueryReadback.readCutoff(flow.mainRoot, specId, { events: cutoffEvents, activities });
+  for (const { execution, fence } of finalized) {
+    const barrier = ProcessExecutionFinalizationBarrier.fromStored(fence.barrier);
+    assert.equal(barrier.executionId, execution.executionId);
+    assert.equal(barrier.evidenceDigest, fence.cutoff.evidenceDigest);
+    assert.deepEqual(barrier.events.map(event => event.toJSON()), fence.cutoff.events);
+    for (const closure of barrier.callClosures) {
+      const call = execution.calls.find(entry => entry.callId === closure.callId);
+      assert.ok(call);
+      const receipt = new ProcessExecutionStopReceipt(call.receipt);
+      assert.equal(receipt.stopEvidence.confirmed, true);
+      assert.equal(closure.closureDigest, receipt.evidenceDigest);
+    }
+    for (const event of barrier.events) {
+      const acknowledgements = execution.eventAcknowledgements.filter(ack => ack.eventId === event.eventId);
+      assert.equal(acknowledgements.length, 1);
+      assert.equal(acknowledgements[0].eventDigest, event.eventDigest);
+      const published = activities.filter(activity => activity.processEvent?.eventId === event.eventId);
+      assert.equal(published.length, 1, "every cutoff event has exactly one catalog-backed Activity");
+      query.assertActivity(published[0]);
+    }
+  }
+  assert.deepEqual(manager.activityLedger(specId), activities, "finalized proof queries remain read-only");
   const replay = await new RunFinalizeCleanupCommand().execute(replayContext);
   assert.equal(replay.ok, true, JSON.stringify(replay));
   assert.deepEqual(manager.activityLedger(specId), activities);
   assert.equal(fs.existsSync(originalRoot), false);
   } catch (error) {
+    if (error instanceof ProcessExecutionControlFailure || flow) {
+      retained = true;
+      testTemporaryRoot().retainOnUnconfirmedExecution();
+    }
     if (flow) {
       retained = true;
-      fs.writeFileSync(".tmp/c2f6/finalization-checkout-whole-dispatch-failure.json", JSON.stringify({
+      fs.writeFileSync(path.join(testTemporaryRoot().path, "finalization-checkout-whole-dispatch-failure.json"), JSON.stringify({
         root: flow.root, mainRoot: flow.mainRoot, worktreePath: flow.worktreePath, specId: flow.specId,
         state: flow.state().toJSON(), operations, error: { message: error.message, stack: error.stack },
       }, null, 2));

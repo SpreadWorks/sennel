@@ -182,3 +182,18 @@ test("current wire readback binds guidance to the restored directive and rejects
   const failedWire = JSON.parse(JSON.stringify(failure.toJSON()));
   assert.deepEqual(JSON.parse(JSON.stringify(new Envelope(failedWire))), failedWire);
 });
+
+
+test("pending process facts explain finalization cutoff in both locales without asserting stop", () => {
+  for (const reason of ["observation-save-failed", "finalization-pending", "activity-pending"]) {
+    const error = new ProcessExecutionControlFailure(reason, "private internal origin");
+    const english = buildFlowStopGuidance({ error, t: en }).toJSON();
+    const japanese = buildFlowStopGuidance({ error, t: localize("ja") }).toJSON();
+    assert.match(english.explanation, /Flow finalization/);
+    assert.match(japanese.explanation, /最終化/);
+    assert.equal(english.currentState.stop, "unconfirmed");
+    assert.equal(english.currentState.persistence, "unconfirmed");
+    assert.equal(english.cause.code, error.code);
+    assert.doesNotMatch(JSON.stringify(english), /private internal/);
+  }
+});

@@ -1,0 +1,20 @@
+{
+  "id": "genuine-old-producer-start",
+  "sourceId": "cb5f5bf5fa3f1d04fd6448b6d49a769209f5a89b2881dc28cd8bc90c69b161c5",
+  "kind": "agent-started",
+  "entityId": "old-prompt-provider",
+  "recordedAt": "2026-11-03T11:40:43.208Z",
+  "binding": {
+    "flowVersionId": "flow-v1-stop-run",
+    "runId": "stop-run",
+    "specId": "001-stop-contract",
+    "nodeId": "draft-refine",
+    "attemptId": "attempt-draft-refine-7eaa85b8-7626-46d2-a9f2-8a41f4de653c",
+    "taskId": null,
+    "attemptSequence": 1,
+    "executionContractId": "b32da0d46a6eebc64b92cff0db7141752d6e893bca1ec6d2527e70f67e40d656",
+    "executionGeneration": 0,
+    "outboxAttemptId": null
+  },
+  "data": {}
+}

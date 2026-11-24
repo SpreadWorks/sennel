@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceRevision": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "producer": "SpecsMigrationTransaction.apply",
+  "interruption": "journal-written",
+  "sourceContract": "specs-journal/schema-1",
+  "capturedWith": "v22.22.0",
+  "producerFiles": [
+    {
+      "path": "src/lib/specs-migration.js",
+      "sha256": "cb273a2839acca85668371a3b07322fd9e684caab63654808ea9a39fdffa8919"
+    },
+    {
+      "path": "src/lib/flow-schema-revision.js",
+      "sha256": "13e1b4af243d4028d3cd345e8ce4be7090129a272c696e029ba4fd3879c88ba7"
+    }
+  ],
+  "journalSha256": "1891d2322fb8b71b32857610b323dbffc0eeff167e6a84466eb7d645bc1192d8"
+}

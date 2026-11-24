@@ -1,0 +1,71 @@
+{
+  "contractId": "b32da0d46a6eebc64b92cff0db7141752d6e893bca1ec6d2527e70f67e40d656",
+  "sequence": 1,
+  "previousDigest": null,
+  "eventId": "c1713f3e-638e-4750-9ef0-4009d7b83298",
+  "digest": "09a62146956979a5808abf19bf89deead5411fdf09d125b87f1213952ff1d816",
+  "record": {
+    "scope": {
+      "stage": "map",
+      "round": 0
+    },
+    "event": "planned",
+    "snapshot": {
+      "scope": {
+        "stage": "map",
+        "round": 0
+      },
+      "plan": {
+        "digest": "67edd2b101b0727553b96f7d8eeefe6f3f4ca26c72d3ff85a12c684df7ee2a63",
+        "collectionDigest": "c2702064a8423715847a00c2180dc904f0d48f6c83cba2d3f69c5d7f1fea2479",
+        "batches": [
+          {
+            "digest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "input",
+                "sourceRevision": "revision",
+                "start": 0,
+                "end": 7,
+                "sourceLength": 7,
+                "status": "present"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 0,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 0,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 0
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+          "batchCalls": 0,
+          "transportOrdinal": 0,
+          "claim": null,
+          "responses": [],
+          "transportFailures": [],
+          "completion": null
+        }
+      ]
+    }
+  }
+}

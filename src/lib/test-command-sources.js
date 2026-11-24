@@ -1,11 +1,14 @@
+import { CommandInvocation, NativeExecutableInvocation } from "./command-invocation.js";
 export class TestCommandSource {
-  constructor({ priority, kind, source, command, script = null, target = null }) {
+  constructor({ priority, kind, source, command, invocation = null, script = null, target = null }) {
     this.priority = priority;
     this.kind = kind;
     this.source = source;
-    this.command = command;
+    this.invocation = kind === "config" ? CommandInvocation.fromStored(command, { source }) : invocation;
+    this.command = kind === "config" ? this.invocation.toString() : command;
     this.script = script;
     this.target = target;
+    Object.freeze(this);
   }
 }
 
@@ -31,6 +34,7 @@ export function collectTestCommandSources({
       kind: "package",
       source: "package.json:scripts.test",
       command: "npm test --",
+      invocation: new NativeExecutableInvocation({ executable: "npm", args: ["test", "--"] }),
       script: scripts.test,
     }));
   }
@@ -40,6 +44,7 @@ export function collectTestCommandSources({
       kind: "composer",
       source: "composer.json:scripts.test",
       command: "composer run-script test --",
+      invocation: new NativeExecutableInvocation({ executable: "composer", args: ["run-script", "test", "--"] }),
       script: composerScripts.test,
     }));
   }
@@ -49,6 +54,7 @@ export function collectTestCommandSources({
       kind: "makefile",
       source: "Makefile:test",
       command: "make test",
+      invocation: new NativeExecutableInvocation({ executable: "make", args: ["test"] }),
       target: makefileTestTarget,
     }));
   }

@@ -32,6 +32,7 @@ import {
 } from "../../../src/flow/lib/flow-artifact-authority.js";
 import { collectFlowLeafIds, collectTaskLeafIds } from "../../../src/flow/definition.js";
 import { workerArtifactHandoffPolicy } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { PortablePathError } from "../../../src/lib/portable-path.js";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -96,7 +97,7 @@ describe("Flow artifact contract registry", () => {
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
         "task.triage", "task.repair",
         "task.review", "task.mutation.lineage", "activity.evidence", "test.requirement.gate.raw-log",
-        "gate.observation.recurrence", "runtime.step-metadata",
+        "gate.observation.recurrence", "runtime.step-metadata", "finalize.cleanup.publication",
       ],
     );
     assert.equal(paths.get("draft.gate.source"), "steps/draft-gate/source.json");
@@ -120,6 +121,7 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.get("final.regression.raw-log"), "steps/final-regression/attempt-:{attempt}.log");
     assert.equal(paths.get("finalize.cleanup.agent-metrics"), "steps/finalize-cleanup/agent-metrics.json");
     assert.equal(paths.get("finalize.cleanup.runtime-log"), ".runtime/finalize-cleanup/runtime-log.json");
+    assert.equal(paths.get("finalize.cleanup.publication"), "artifacts/finalize-cleanup/publication.json");
     assert.equal(paths.get("runtime.lock.artifact-catalog"), ".runtime/locks/artifact-catalog.lock");
     assert.deepEqual(FLOW_ARTIFACT_LEGACY_SWITCH_TARGETS.map(String), ["flow-version.json", "artifacts", "review-evidence"]);
     for (const target of FLOW_ARTIFACT_LEGACY_SWITCH_TARGETS) assert.equal(FLOW_ARTIFACT_CONTRACTS.isLegacyTarget(target.toString()), true);
@@ -413,7 +415,10 @@ describe("Flow artifact contract registry", () => {
     assert.throws(() => FLOW_ARTIFACT_CONTRACTS.reviewEvidence({ reviewStep: "impl-review", taskId: "T-1", digest: DIGEST_A }), /exactly one/);
     assert.throws(() => FLOW_ARTIFACT_CONTRACTS.resolve("tests.source", { testPath: ".raw/output.log" }), /diagnostic/);
     assert.throws(() => FLOW_ARTIFACT_CONTRACTS.resolve("plugin.lifecycle.artifact", { pluginArtifactPath: "workflow/ideas.json" }), /canonical ideas/);
-    assert.throws(() => new FlowArtifactCanonicalPath("steps/../escape.json"), /normalized/);
+    assert.throws(
+      () => new FlowArtifactCanonicalPath("steps/../escape.json"),
+      (error) => error instanceof PortablePathError && error.code === "PORTABLE_PATH_INVALID",
+    );
   });
 
   it("derives collection authority members from resolved paths", () => {
@@ -464,6 +469,21 @@ describe("Flow artifact contract registry", () => {
     assert.equal(repairOutcome.retention.toString(), "permanent");
     assert.equal(repairOutcome.mutationPolicy.toString(), "immutable");
     assert.equal(repairOutcome.cataloged, true);
+    const cleanupPublication = FLOW_ARTIFACT_CONTRACTS.require("finalize.cleanup.publication");
+    assert.equal(cleanupPublication.placement.toString(), "independent-deliverable");
+    assert.equal(cleanupPublication.retention.toString(), "permanent");
+    assert.equal(cleanupPublication.mutationPolicy.toString(), "immutable");
+    assert.equal(cleanupPublication.cataloged, true);
+    assert.deepEqual(cleanupPublication.ownership.producers, ["finalize-cleanup"]);
+    assert.deepEqual(cleanupPublication.ownership.updaters, ["finalize-cleanup"]);
+    assert.deepEqual(cleanupPublication.ownership.consumers, ["finalize-cleanup"]);
+    const cleanupSlot = FLOW_ARTIFACT_CONTRACTS.resolve("finalize.cleanup.publication").authoritySlot();
+    assert.equal(cleanupSlot.kind, "finalize-cleanup-publication");
+    assert.equal(cleanupSlot.authority.toString(), "canonical-flow-artifacts");
+    assert.equal(cleanupSlot.cardinality.toString(), "singleton");
+    assert.equal(cleanupSlot.publicationStep, "finalize-cleanup");
+    assert.throws(() => cleanupPublication.authoritySlotFor("finalize-commit"), /not authorized/);
+    assert.throws(() => cleanupPublication.authoritySlotFor("system"), /not authorized/);
     const recurrence = FLOW_ARTIFACT_CONTRACTS.require("gate.observation.recurrence");
     assert.equal(recurrence.retention.toString(), "transient");
     assert.equal(recurrence.cataloged, false);

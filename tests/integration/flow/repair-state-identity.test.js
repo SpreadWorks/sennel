@@ -192,3 +192,31 @@ describe("bounded acceptance payloads", () => {
     assert.throws(() => parseAcceptanceResponse("x".repeat(900_001)), AcceptanceBudgetError);
   });
 });
+
+import crypto from "node:crypto";
+import { RepairFingerprintManifest } from "../../../src/flow/lib/repair-state-identity.js";
+import { GitRepositoryPolicy } from "../../../src/lib/git-repository-environment.js";
+
+it("retains actual native repair HEAD, filter configuration and source identity through serialized readback", () => {
+  initializeRepository();
+  write("app/value.js", "export const value = 2;\n");
+  const manifest = fingerprint();
+  assert.equal(manifest.headOid, git("rev-parse", "HEAD"));
+  assert.equal(manifest.headTreeOid, git("rev-parse", "HEAD^{tree}"));
+  const nativeConfiguration = execFileSync("git", ["config", "--null", "--get-regexp",
+    "^(core\\.(autocrlf|eol|symlinks|filemode|ignorecase|precomposeunicode)|filter\\..*\\.(clean|smudge|process|required))$"],
+  { cwd: root, encoding: "utf8", env: new GitRepositoryPolicy({ repositoryRoot: root }).environment(process.env) });
+  const hash = crypto.createHash("sha256");
+  for (const value of [nativeConfiguration, "sparse-checkout:disabled"]) { hash.update(value); hash.update("\0"); }
+  assert.equal(manifest.environmentHash, hash.digest("hex"));
+  const source = manifest.entries.find((entry) => entry.path === "app/value.js");
+  assert.deepEqual(source.statuses, ["worktree:M"]);
+  assert.equal(source.working.digest, crypto.createHash("sha256").update("export const value = 2;\n").digest("hex"));
+  const file = path.join(root, ".sennel", "saved-repair-evidence.json");
+  fs.writeFileSync(file, `${JSON.stringify(manifest.toJSON())}\n`);
+  const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+  const reopened = new RepairFingerprintManifest(stored);
+  assert.deepEqual(reopened.toJSON(), manifest.toJSON());
+  assert.equal(reopened.hash, manifest.hash);
+  assert.throws(() => new RepairFingerprintManifest({ ...stored, environmentHash: "0".repeat(64) }), /hash does not match its canonical state/);
+});

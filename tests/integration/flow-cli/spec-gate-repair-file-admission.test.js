@@ -298,11 +298,26 @@ test("completes the known unique-input plan above one million aggregate characte
 });
 
 test("refuses an indivisible file overflow before provider, claim, retry or canonical mutation", async () => {
-  const specRecord = validWorkerHandoffSpec();
-  // The allowed entity field is indivisible mandatory input; unrelated overview bodies are not.
-  specRecord.requirements[0].desc = "決".repeat(710_000);
-  const value = await createSpecGateRepairScenario({ specRecord });
+  const specRecord = independentRepairSpec({ uniqueCharacters: 108_000 });
+  // One observation connects individually valid fields into one indivisible
+  // repair unit; the preceding Spec validator still admits every Requirement.
+  const targets = specRecord.requirements.slice(1).map(({ id }) => ({
+    entity: "requirement", id, field: "desc",
+  }));
+  const value = await createSpecGateRepairScenario({ specRecord,
+    locator: "requirements[R2].desc", target: targets[0],
+    additionalObservations: [{ failureMode: "guardrail-violation", requirementRef: "R1",
+      where: { file: "spec.json", locator: "requirements[R2].desc" },
+      observed: "These linked descriptions require one consistent atomic correction.",
+      targets, allowedTargets: targets.map((target) => ({ target, operationKinds: ["edit-text-field"] })),
+    }],
+  });
   try {
+    const saved = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
+      logicalKey: "spec.record", consumerNodeId: "spec-gate-repair" }).bytes.toString("utf8"));
+    readSpecJsonValidator().validate(saved);
+    assert.ok(saved.requirements.every(({ desc }) => desc.length < 120_000));
+    assert.ok(Buffer.byteLength(saved.requirements.slice(1).map(({ desc }) => desc).join("")) > 2 * 1024 * 1024);
     initGitRepo(value.root);
     fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
     commitAll(value.root, "Create isolated indivisible file admission repository");

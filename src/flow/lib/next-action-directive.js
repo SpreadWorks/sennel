@@ -90,7 +90,7 @@ export class NextActionDirective {
     if (value.kind === "execute_command") return ExecuteCommandDirective.fromStored(value);
     if (value.kind === "execute_continuation") return new ExecuteContinuationDirective(value);
     if (value.kind === "single_user_action") return new SingleUserActionDirective(value);
-    if (value.kind === "repair_evidence") return new RepairEvidenceDirective(value);
+    if (value.kind === "repair_evidence") return RepairEvidenceDirective.fromStored(value);
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
     if (value.kind === "await_task_review_filter") return new AwaitTaskReviewFilterDirective(value);
@@ -196,7 +196,8 @@ export class RepairEvidenceDirective extends NextActionDirective {
     phase,
     instruction,
     reason,
-    nextAction,
+    nextAction = null,
+    command = null,
   } = {}) {
     super({ kind: "repair_evidence", terminal: false, requiresUserAction: false });
     this.actionId = requireActionId(actionId, "directive.actionId");
@@ -204,7 +205,9 @@ export class RepairEvidenceDirective extends NextActionDirective {
     this.phase = requireString(phase, "directive.phase", 100);
     this.instruction = requireString(instruction, "directive.instruction");
     this.reason = requireString(reason, "directive.reason");
-    this.nextAction = requireString(nextAction, "directive.nextAction");
+    if (command !== null && !(command instanceof FlowExecutionCommand)) throw new TypeError("repair command requires FlowExecutionCommand");
+    this.command = command;
+    this.nextAction = command === null ? requireString(nextAction, "directive.nextAction") : command.toString();
     Object.freeze(this);
   }
 
@@ -217,7 +220,15 @@ export class RepairEvidenceDirective extends NextActionDirective {
       instruction: this.instruction,
       reason: this.reason,
       nextAction: this.nextAction,
+      command: this.command?.toJSON() ?? null,
     };
+  }
+
+  static fromStored(value) {
+    if (!Object.hasOwn(value, "command")) throw new Error("stored repair directive requires explicit command authority or null");
+    const command = value.command === null ? null : FlowExecutionCommand.fromStored(value.command);
+    if (command !== null && value.nextAction !== command.toString()) throw new Error("stored repair nextAction does not match command");
+    return new RepairEvidenceDirective({ ...value, command });
   }
 }
 
@@ -549,7 +560,7 @@ export class NextActionDirectiveResolver {
         phase: this.planGateRepairRoute.phase,
         instruction: "Run the guarded plan-gate repair transition. It freezes the canonical blocking observations and rewinds to the mapped worker-artifact handoff step; do not edit canonical spec artifacts directly.",
         reason: this.planGateRepairReason,
-        nextAction: guardedCommand("sennel flow run repair-plan-gate", this.state, this.binding),
+        command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "repair-plan-gate" }), this.state, this.binding),
       });
     }
     if (["start", "recover", "resume", "retry"].includes(this.descriptor.operation)) {

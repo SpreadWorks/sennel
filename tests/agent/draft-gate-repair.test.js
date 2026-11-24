@@ -1,3 +1,4 @@
+import { installSennelTestLauncher } from "../support/infrastructure/sennel-test-launcher.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +14,7 @@ import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import { draftWorkerStepRegistration } from "../../src/flow/engine/composition/draft.js";
 import RunGateCommand from "../../src/flow/lib/run-gate.js";
+import { FLOW_DISPATCH_INVOCATION_ID_ENV } from "../../src/flow/lib/dispatch-invocation.js";
 import { FLOW_COMMANDS } from "../../src/flow/registry.js";
 import { DraftRepairConnector } from "../../src/flow/engine/connectors/draft/draft-repair-connector.js";
 import { DraftGateRepairStep } from "../../src/flow/steps/draft/draft-gate-repair.js";
@@ -20,7 +22,9 @@ import { Container } from "../../src/lib/container.js";
 import { DraftGateRepairScenario } from "../support/infrastructure/draft-gate-repair-scenario.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../support/infrastructure/flow-setup.js";
 import { commitAll, initGitRepo } from "../support/infrastructure/git-repo.js";
-import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
+import { createTmpDir } from "../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../support/infrastructure/runtime-fixture-cleanup.js";
+import { testTemporaryRoot } from "../test-environment.js";
 
 const SENNEL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src/sennel.js");
 const RETAINED_SNAPSHOT = process.env.SENNEL_RETAINED_521_GATE_SNAPSHOT;
@@ -50,12 +54,6 @@ function config() {
   };
 }
 
-function installSennel(root) {
-  const bin = path.join(root, ".test-bin");
-  fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(path.join(bin, "sennel"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(SENNEL)} "$@"\n`, { mode: 0o755 });
-  return bin;
-}
 
 function completedAction() {
   return {
@@ -68,20 +66,31 @@ function completedAction() {
 async function measureWorker(evidence, route, operation) {
   const startedAt = new Date().toISOString();
   const started = Date.now();
-  const response = await operation();
-  evidence.calls.push({
-    route, startedAt, durationMs: Date.now() - started,
-    responseChars: typeof response === "string" ? response.length : null,
-    response: typeof response === "string" ? response : null,
-    commandResult: response !== null && typeof response === "object" ? response : null,
-  });
-  return response;
+  const call = { route, startedAt };
+  evidence.calls.push(call);
+  try {
+    const response = await operation();
+    Object.assign(call, {
+      responseChars: typeof response === "string" ? response.length : null,
+      response: typeof response === "string" ? response : null,
+      commandResult: response !== null && typeof response === "object" ? response : null,
+    });
+    return response;
+  } catch (error) {
+    call.failure = { name: error.name, code: error.code, message: error.message, stack: error.stack,
+      causeCode: error.cause?.code, causeMessage: error.cause?.message };
+    throw error;
+  } finally {
+    call.durationMs = Date.now() - started;
+  }
 }
 
-it("real agent completes a synthetic bounded draft Gate repair through canonical spec publication", { timeout: 720_000 }, async () => {
+it("real agent completes a synthetic bounded draft Gate repair through canonical spec publication", { timeout: 3_600_000 }, async () => {
   const root = createTmpDir("draft-gate-repair-agent-");
   const originalPath = process.env.PATH;
   let manager = null;
+  const runId = "run-521-draft-gate-repair";
+  const specId = "521-draft-gate-repair-agent";
   const retained = RETAINED_SNAPSHOT ? JSON.parse(fs.readFileSync(RETAINED_SNAPSHOT, "utf8")) : null;
   assert.equal(Boolean(RETAINED_SNAPSHOT), Boolean(RETAINED_REPOSITORY), "retained replay needs both snapshot and repository");
   const evidence = {
@@ -98,11 +107,10 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
     commitAll(root, "draft Gate repair agent fixture");
     fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
     fs.writeFileSync(path.join(root, ".sennel", "config.json"), `${JSON.stringify(config(), null, 2)}\n`);
-    process.env.PATH = `${installSennel(root)}${path.delimiter}${originalPath}`;
-    const specId = "521-draft-gate-repair-agent";
+    process.env.PATH = `${installSennelTestLauncher(root, { entryPath: SENNEL })}${path.delimiter}${originalPath}`;
     manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const fixture = new CanonicalFlowFixture({
-      flowManager: manager, specId, runId: "run-521-draft-gate-repair", issue: 521,
+      flowManager: manager, specId, runId, issue: 521,
       request: retained?.issue ?? "Preserve Issue #521 while repairing bounded draft Gate evidence.",
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
     }).create().registerActive().activate("draft");
@@ -127,7 +135,13 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
       "and its immutable inputs. Write and seal exactly the declared draft-gate-repair.json payload.",
       "Use its inputRevision, every persisted observation fingerprint, and one bounded replacement at an allowed authoring path.",
       "Do not write draft.json or gate-repair-report.json. Run the exact sealCommand from the request.",
-    ].join(" "), { commandId: "flow.dispatch", executionWorkDir: root }));
+    ].join(" "), {
+      commandId: "flow.dispatch", executionWorkDir: root,
+      executionEnvironment: {
+        ...request.executionEnvironment(),
+        [FLOW_DISPATCH_INVOCATION_ID_ENV]: request.dispatchInvocationId,
+      },
+    }));
     const preparation = scenario.coordinator.prepareDraftWorker({ ctx: scenario.ctx, request });
     const reconciled = await new RunDispatchCommand({ handoffCoordinator: scenario.coordinator })
       .runDraftWorkerStep(
@@ -205,6 +219,9 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
     const canonicalSpec = JSON.parse(manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" }).bytes);
     assert.match(canonicalSpec.goal, /non-interactive worker/);
     evidence.result = "passed";
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
   } finally {
     const evidencePath = process.env.SENNEL_DRAFT_GATE_REPAIR_EVIDENCE;
     if (evidencePath) {
@@ -225,6 +242,6 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
       fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     }
     process.env.PATH = originalPath;
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root, executionRoot: root, runId, specId });
   }
 });

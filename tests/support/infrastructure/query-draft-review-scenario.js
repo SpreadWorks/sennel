@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowVersionReader, QueryRequest } from "../../../src/flow/query.js";
+import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -22,9 +22,9 @@ import { fixtureRepository, installGateProviderFake } from "./flow-dispatch-scen
 import { completeDraftWorkerThroughStep, prepareConditionalDraftWorkerThroughStep } from "./draft-worker-step.js";
 import { completeSpecGateRepairHandoff } from "./spec-gate-repair-scenario.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./worker-artifact.js";
-import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
+import { removeTmpDir } from "../builders/tmp-dir.js";
 
-const PACKAGE_ROOT = new URL("../../../", import.meta.url).pathname;
+const PACKAGE_ENTRY = fileURLToPath(new URL("../../../src/cli-main.js", import.meta.url));
 
 /** Public details belonging to one saved Activity and its response closure. */
 class QueryActivityObservation {
@@ -117,21 +117,6 @@ export class QueryDraftReviewScenario {
   constructor(t, specId) {
     this.root = fixtureRepository("query-draft-review-producer-");
     t.after(() => removeTmpDir(this.root));
-    // Query snapshot IDs bind the executable's source signature. Freeze this
-    // package per scenario so concurrent development cannot change a cursor.
-    this.cliPackage = createTmpDir("query-draft-review-cli-");
-    t.after(() => removeTmpDir(this.cliPackage));
-    fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(this.cliPackage, "src"), { recursive: true });
-    fs.copyFileSync(path.join(PACKAGE_ROOT, "package.json"), path.join(this.cliPackage, "package.json"));
-    if (process.env.SENNEL_QUERY_HISTORY_DEBUG === "1") {
-      const helperPath = "src/flow/query-spec-gate-repair-details.js";
-      const hash = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-      const sourceHash = hash(path.join(PACKAGE_ROOT, helperPath));
-      const copiedHash = hash(path.join(this.cliPackage, helperPath));
-      process.stdout.write(`# ${JSON.stringify({ diagnostic: "query-helper-source-copy", helperPath,
-        sourceHash, copiedHash, equal: sourceHash === copiedHash, copiedPath: path.join(this.cliPackage, helperPath) })}\n`);
-      assert.equal(copiedHash, sourceHash, "the query helper's actual copied bytes match the fixed source");
-    }
     this.specId = specId;
     setupFlowConfig(this.root, "en");
     this.reload();
@@ -170,7 +155,7 @@ export class QueryDraftReviewScenario {
     this.manager.beginNextAction(this.specId);
     assert.equal(this.manager.canonicalState(this.specId).current.at(-1), "draft-refine");
     const result = await prepareConditionalDraftWorkerThroughStep({ coordinator: this.coordinator, ctx: this.ctx,
-      state: this.manager.loadReadOnly(this.specId), invocation: this.invocation("draft-refine") });
+      state: this.manager.loadReadOnly(this.specId), invocationId: "query-draft-refine" });
     assert.equal(result.stepResult.kind, "draft-refine-completed");
     this.reload();
     this.manager.beginNextAction(this.specId);
@@ -322,9 +307,11 @@ export class QueryDraftReviewScenario {
   }
 
   cli(request) {
-    return spawnSync(process.execPath, [path.join(this.cliPackage, "src", "sennel.js"), "flow", "query"], { cwd: this.root,
+    // The reader and CLI share the bootstrap's immutable package bytes, which
+    // keeps query source signatures and cursor identities stable across reads.
+    return RuntimeChildExecution.runSync(PACKAGE_ENTRY, ["flow", "query"], { cwd: this.root,
       env: { ...process.env, SENNEL_WORK_ROOT: this.root, SENNEL_SOURCE_ROOT: this.root },
-      input: JSON.stringify(request), encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+      input: JSON.stringify(request), encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, spawnSync);
   }
 
   async query(input) {
@@ -333,12 +320,10 @@ export class QueryDraftReviewScenario {
     return read.version.response;
   }
 
-  async captureQuery(input, { fixedSource = false } = {}) {
-    const api = fixedSource ? await import(pathToFileURL(path.join(this.cliPackage, "src", "flow", "query.js")).href)
-      : { CanonicalFlowVersionReader, QueryRequest };
-    const captured = await new api.CanonicalFlowVersionReader({ repositoryRoot: this.root })
-      .read(this.specId, 1, new api.QueryRequest(input));
-    if (fixedSource) await this.diagnoseQueryCapture(captured);
+  async captureQuery(input) {
+    const captured = await new CanonicalFlowVersionReader({ repositoryRoot: this.root })
+      .read(this.specId, 1, new QueryRequest(input));
+    await this.diagnoseQueryCapture(captured);
     return captured;
   }
 
@@ -348,8 +333,8 @@ export class QueryDraftReviewScenario {
     const error = version.projectionError;
     const activity = version.activities.find((entry) => entry.id === error.referenceId && entry.nodeId === "spec-gate-repair");
     if (!activity) return;
-    const api = await import(pathToFileURL(path.join(this.cliPackage, "src", "lib", "flow-artifact-contract.js")).href);
-    const operationApi = await import(pathToFileURL(path.join(this.cliPackage, "src", "flow", "lib", "spec-repair-operations.js")).href);
+    const api = await import("../../../src/lib/flow-artifact-contract.js");
+    const operationApi = await import("../../../src/flow/lib/spec-repair-operations.js");
     const auditPath = api.FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.audit", { attemptId: activity.attemptId }).relativePath;
     const auditBytes = version.artifactBytes.get(auditPath);
     if (!auditBytes) {

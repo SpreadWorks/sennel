@@ -95,7 +95,11 @@ test("a conditional sealed claim with no OS invocation keeps its existing zero-p
   const value = fixture(t);
   fs.writeFileSync(value.request.payloadPath("draft-gate-repair.json"), JSON.stringify(value.payload));
   sealWorkerArtifactHandoff({ requestPath: value.request.requestPath, invocationId: value.request.dispatchInvocationId });
-  assert.equal(ProcessExecutionRuntime.inspect({ mainRoot: value.root }), null);
+  const inventory = ProcessExecutionRuntime.inspect({ mainRoot: value.root });
+  const workerBinding = FlowProcessExecutionBinding.forContract(value.request.executionContract);
+  const selectedCalls = (inventory?.executions ?? []).flatMap((execution) => execution.calls)
+    .filter((call) => new ProcessExecutionBinding(call.binding).includes(workerBinding));
+  assert.equal(selectedCalls.length, 0);
   const before = value.snapshot(value.manager), manager = value.reload();
   assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: value.context(manager), processStops: [] }), null);
   assert.deepEqual(value.snapshot(value.reload()), before);

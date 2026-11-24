@@ -19,6 +19,7 @@ import { UnknownProviderFailure } from "../../../src/lib/agent-failure.js";
 import { runCmd } from "../../../src/lib/process.js";
 import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-acceptance-review.js";
 import { PromptExecutionLimit, PromptRequestLimit } from "../../../src/lib/prompt-batching.js";
+import { container as runtimeContainer } from "../../../src/lib/container.js";
 import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
 import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import * as definition from "../../../src/flow/definition.js";
@@ -434,8 +435,9 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
     const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: limit.maxCharacters,
       maxProviderCallCount: 100, maxProtocolRetryCount: 0, maxSynthesisCallCount: 32 });
     const lost = new UnknownProviderFailure({ message: "The second Acceptance provider response was lost before publication." });
+    let acceptanceActive = false;
     const scenario = AcceptancePhaseScenario.fromSeed(t, await acceptanceRetroSeed(), { providerOptions: {
-      promptCharacterLimit: () => scenario.current() === "acceptance-review" ? limit.maxCharacters : null },
+      promptCharacterLimit: () => acceptanceActive ? limit.maxCharacters : null },
       acceptanceProvider: (prompt, invocation, active) => {
         active.reload();
         calls.push({ prompt, schema: invocation.jsonSchema,
@@ -455,6 +457,8 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
     scenario.reload();
     assert.equal(scenario.current(), "test-execute");
     await scenario.advanceTo("acceptance-review");
+    acceptanceActive = true;
+    assert.equal(runtimeContainer.get("agent").promptCharacterLimit, 16_000);
     scenario.reload();
     const acquired = await scenario.observeAcceptanceInput();
     assert.deepEqual(acquired.mechanicalBlockers, []);
@@ -485,6 +489,7 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
     const contract = scenario.manager.readStoredExecutionContract({ binding: claim.result.evidence.identity,
       generation: claim.result.evidence.executionGeneration });
     const episode = scenario.manager.readPromptExecutionEpisode({ executionContract: contract });
+    assert.equal(episode.executionLimit.maxRequestCharacters, 16_000);
     const map = episode.scopes.find((scope) => scope.scope.stage === "map");
     assert.ok(map, "the real map producer must save its scope frontier");
     assert.ok(map.batches[0].completion);

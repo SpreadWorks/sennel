@@ -1,3 +1,7 @@
+import { runGit as runGitCommand, runGitToFile } from "./git-helpers.js";
+import { GitPluginArchive } from "./git-plugin-archive.js";
+import { retainPluginDirectory } from "./plugin-directory-authority.js";
+import { GitRepositoryPolicy } from "./git-repository-environment.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -22,8 +26,14 @@ import {
   PluginInstallation,
   PluginInstaller,
 } from "./plugin-installer.js";
-import { runCmd, assertOk } from "./process.js";
+import { assertOk } from "./process.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecLocation } from "./flow-workspace.js";
+import { NativeAbsolutePath } from "./native-path.js";
+import { AtomicFile } from "./atomic-file.js";
+import { AtomicJsonFile } from "./atomic-json-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { LogicalRelativePath, LogicalPathSet, isNativePathWithin } from "./portable-path.js";
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -46,28 +56,17 @@ const MAX_PLUGIN_JSON_BYTES = 1024 * 1024;
 const MAX_PLUGIN_RELATIVE_PATH_BYTES = 300;
 const FLOW_COMMANDS = new Set(["prepare", "gate", "review", "test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report", "finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"]);
 const FLOW_COMMAND_HOOKS = new Set(["pre", "post", "onError", "finally"]);
-const CORE_COMMANDS = new Set(["docs", "flow", "check", "metrics", "spec", "hook", "setup", "upgrade", "presets", "plugin", "help"]);
+const CORE_COMMANDS = new Set(["docs", "flow", "check", "metrics", "spec", "hook", "setup", "upgrade", "presets", "plugin", "help", "command"]);
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return JSON.parse(captureRegularFile(file, { label: "plugin JSON", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
 }
 
 function readPluginJson(file, root) {
-  const lstat = fs.lstatSync(file);
-  if (lstat.isSymbolicLink()) throw new Error(`unsafe package metadata: symlink not allowed: ${file}`);
-  const stat = fs.statSync(file);
-  if (!stat.isFile()) throw new Error(`unsafe package metadata: not a file: ${file}`);
-  if (stat.size > MAX_PLUGIN_JSON_BYTES) {
-    throw new Error(`unsafe package metadata: JSON file exceeds ${MAX_PLUGIN_JSON_BYTES} bytes: ${file}`);
-  }
   if (root) {
-    const rootRealPath = fs.realpathSync(root);
-    const fileRealPath = fs.realpathSync(file);
-    if (!isUnderPath(fileRealPath, rootRealPath)) {
-      throw new Error(`unsafe package metadata: path escapes plugin root: ${file}`);
-    }
+    new NativeAbsolutePath(path.resolve(file)).toLogical(new RealDirectoryAuthority(root));
   }
-  return readJson(file);
+  return JSON.parse(captureRegularFile(file, { label: "unsafe package metadata: symlink or non-regular file not allowed", maxBytes: MAX_PLUGIN_JSON_BYTES }).text());
 }
 
 function pluginMetadataPath(root, rel, label = "plugin metadata") {
@@ -79,8 +78,8 @@ function pluginMetadataPath(root, rel, label = "plugin metadata") {
 }
 
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf8");
+  RealDirectoryAuthority.resolve(path.dirname(file), { create: true });
+  new AtomicJsonFile(file).write(value);
 }
 
 function ensurePluginConfig(config) {
@@ -191,21 +190,19 @@ function normalizeRel(rel, label = "path") {
   if (typeof rel !== "string" || rel.trim() === "") {
     throw new Error(`unsafe ${label}: must be a non-empty string`);
   }
-  const value = rel.replace(/\\/g, "/");
-  if (path.isAbsolute(value) || value === "." || value === ".." || value.startsWith("../") || value.includes("/../") || value.endsWith("/..")) {
-    throw new Error(`unsafe ${label}: parent traversal or absolute path is not allowed`);
-  }
+  const converted = rel.replaceAll("\\", "/");
+  const directoryMarker = converted.endsWith("/");
+  const value = new LogicalRelativePath(directoryMarker ? converted.slice(0, -1) : converted, `unsafe ${label}`).toString();
   const parts = value.split("/");
   if (parts.includes(".git")) throw new Error(`unsafe ${label}: .git content is not allowed`);
   if (parts.includes("node_modules")) throw new Error(`unsafe ${label}: node_modules content is not allowed`);
   if (parts.length > MAX_PLUGIN_PATH_DEPTH) throw new Error(`unsafe ${label}: path depth exceeds ${MAX_PLUGIN_PATH_DEPTH}`);
   if (Buffer.byteLength(value) > MAX_PLUGIN_RELATIVE_PATH_BYTES) throw new Error(`unsafe ${label}: relative path exceeds ${MAX_PLUGIN_RELATIVE_PATH_BYTES} bytes`);
-  return value;
+  return directoryMarker ? `${value}/` : value;
 }
 
 function isUnderPath(child, parent) {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return isNativePathWithin(path.resolve(parent), path.resolve(child));
 }
 
 function importSpecifiers(source) {
@@ -237,7 +234,7 @@ function resolveImportPath(specifier, moduleDir) {
 
 function assertNoCoreInternalImports(root, pluginId, pluginRoot, rel, label = "plugin hook") {
   const modulePath = path.join(pluginRoot, normalizeRel(rel, label));
-  const source = fs.readFileSync(modulePath, "utf8");
+  const source = captureRegularFile(modulePath, { label, maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
   const moduleDir = path.dirname(modulePath);
   const coreRoots = [
     path.resolve(root, "src"),
@@ -266,22 +263,29 @@ function isUnderFileAllowlist(rel, files) {
   });
 }
 
-function walkFiles(root, rel = "") {
-  const current = path.join(root, rel);
+function walkFiles(root, rel = "", directories = null, { packageRules = true, directoryAuthorities = null } = {}) {
+  rel = rel.replace(/\/$/, "");
+  const current = path.resolve(root, rel);
+  const parent = directoryAuthorities === null ? null : retainPluginDirectory(
+    rel === "" ? current : path.dirname(current), directoryAuthorities);
   const stat = fs.lstatSync(current);
   if (stat.isSymbolicLink()) throw new Error(`unsafe package: symlink not allowed: ${rel || "."}`);
   if (stat.isDirectory()) {
+    if (rel !== "") directories?.add(rel);
     const out = [];
-    for (const entry of fs.readdirSync(current)) {
+    const authority = parent === null ? null : retainPluginDirectory(current, directoryAuthorities);
+    for (const entry of authority === null ? fs.readdirSync(current) : authority.entries()) {
       const childRel = rel ? `${rel}/${entry}` : entry;
-      normalizeRel(childRel, "package path");
-      out.push(...walkFiles(root, childRel));
+      if (packageRules) normalizeRel(childRel, "package path");
+      else new LogicalRelativePath(childRel, "plugin runtime path");
+      out.push(...walkFiles(root, childRel, directories, { packageRules, directoryAuthorities }));
     }
     return out;
   }
   if (!stat.isFile()) return [];
-  normalizeRel(rel, "package path");
-  if (/\.json$/i.test(rel) && stat.size > MAX_PLUGIN_JSON_BYTES) {
+  if (packageRules) normalizeRel(rel, "package path");
+  else new LogicalRelativePath(rel, "plugin runtime path");
+  if (packageRules && /\.json$/i.test(rel) && stat.size > MAX_PLUGIN_JSON_BYTES) {
     throw new Error(`unsafe package metadata: JSON file exceeds ${MAX_PLUGIN_JSON_BYTES} bytes: ${rel}`);
   }
   return [rel];
@@ -579,8 +583,9 @@ export function isGitUrl(source) {
   return /^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(source);
 }
 
-function runGit(cwd, args, context) {
-  const result = runCmd("git", args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+function runGit(cwd, args, context, { readOnly = false, repositoryRoot = cwd } = {}) {
+  const result = runGitCommand(args, { cwd, repositoryRoot, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly }) });
   assertOk(result, context);
   return result.stdout.trim();
 }
@@ -593,10 +598,10 @@ function localRepoHead(source) {
     validateSourceTree(root);
     return { root, commit: hashPackageTree(root), materialized: true };
   }
-  runGit(root, ["rev-parse", "--is-inside-work-tree"], "plugin source must be a Git worktree");
-  const status = runGit(root, ["status", "--porcelain"], "failed to inspect plugin source status");
+  runGit(root, ["rev-parse", "--is-inside-work-tree"], "plugin source must be a Git worktree", { readOnly: true });
+  const status = runGit(root, ["status", "--porcelain"], "failed to inspect plugin source status", { readOnly: true });
   if (status.trim() !== "") throw new Error("dirty local plugin source rejected: commit or clean uncommitted changes first");
-  const commit = runGit(root, ["rev-parse", "HEAD"], "plugin source must have HEAD");
+  const commit = runGit(root, ["rev-parse", "HEAD"], "plugin source must have HEAD", { readOnly: true });
   return { root, commit, materialized: false };
 }
 
@@ -652,7 +657,8 @@ function hasConfinedGitMetadata(dest) {
   if (!isUnderPath(realGit, realDest)) {
     throw new Error(`unsafe plugin source cache path: .git escapes cache root: ${dest}`);
   }
-  const result = runCmd("git", ["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: dest, readOnly: true }) });
   if (!result.ok) return false;
   let realTopLevel;
   try {
@@ -667,29 +673,30 @@ function hasConfinedGitMetadata(dest) {
   return true;
 }
 
-function cloneGitUrlSource(dest, source) {
+function cloneGitUrlSource(dest, source, root) {
   fs.rmSync(dest, { recursive: true, force: true });
-  const result = runCmd("git", ["clone", sourceLocation(source), dest], { maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["clone", "--no-checkout", sourceLocation(source), dest], { cwd: root, repositoryRoot: root, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to clone ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
-function fetchGitUrlSource(dest, source) {
-  const result = runCmd("git", ["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+function fetchGitUrlSource(dest, source, root) {
+  const result = runGitCommand(["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, repositoryRoot: root, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to update ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
 function hasGitUrlSourceRemote(dest, source) {
-  const result = runCmd("git", ["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: dest, readOnly: true }) });
   return result.ok && result.stdout.trim() === sourceLocation(source);
 }
 
 function resolveGitCommit(cwd, ref, context) {
-  return runGit(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], context);
+  return runGit(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], context, { readOnly: true });
 }
 
-function resolveRemoteDefaultCommit(dest) {
-  runGit(dest, ["remote", "set-head", "origin", "--auto"], "failed to resolve plugin remote default branch");
-  const remoteHead = runGit(dest, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], "failed to read plugin remote default branch");
+function resolveRemoteDefaultCommit(dest, root) {
+  runGit(dest, ["remote", "set-head", "origin", "--auto"], "failed to resolve plugin remote default branch", { repositoryRoot: root });
+  const remoteHead = runGit(dest, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], "failed to read plugin remote default branch", { readOnly: true });
   return resolveGitCommit(dest, remoteHead, "failed to resolve plugin remote default branch commit");
 }
 
@@ -700,7 +707,8 @@ function assertSafeGitRef(ref) {
 }
 
 function tryResolveGitCommit(cwd, ref) {
-  const result = runCmd("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly: true }) });
   return result.ok ? result.stdout.trim() : null;
 }
 
@@ -719,16 +727,17 @@ function resolveGitRefCommit(dest, ref) {
   throw new Error(`failed to resolve plugin source ref: ${ref}`);
 }
 
-function resolveGitUrlSourceCommit(dest, source) {
-  return source.ref ? resolveGitRefCommit(dest, source.ref) : resolveRemoteDefaultCommit(dest);
+function resolveGitUrlSourceCommit(dest, source, root) {
+  return source.ref ? resolveGitRefCommit(dest, source.ref) : resolveRemoteDefaultCommit(dest, root);
 }
 
-function cleanGitUrlSourceTree(dest, commit) {
-  runGit(dest, ["reset", "--hard"], "failed to reset plugin source cache");
-  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache");
-  runGit(dest, ["checkout", "--detach", commit], "failed to checkout plugin source commit");
-  runGit(dest, ["reset", "--hard", commit], "failed to reset plugin source commit");
-  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache");
+function cleanGitUrlSourceTree(dest, commit, root) {
+  const control = { repositoryRoot: root };
+  runGit(dest, ["reset", "--hard"], "failed to reset plugin source cache", control);
+  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache", control);
+  runGit(dest, ["checkout", "--detach", commit], "failed to checkout plugin source commit", control);
+  runGit(dest, ["reset", "--hard", commit], "failed to reset plugin source commit", control);
+  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache", control);
 }
 
 function syncGitUrlSource(root, source) {
@@ -737,22 +746,17 @@ function syncGitUrlSource(root, source) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   assertManagedGitCachePath(root, dest, source);
   if (!hasConfinedGitMetadata(dest)) {
-    cloneGitUrlSource(dest, source);
+    cloneGitUrlSource(dest, source, root);
   } else if (!hasGitUrlSourceRemote(dest, source)) {
-    cloneGitUrlSource(dest, source);
+    cloneGitUrlSource(dest, source, root);
   }
-  fetchGitUrlSource(dest, source);
-  const commit = resolveGitUrlSourceCommit(dest, source);
-  try {
-    cleanGitUrlSourceTree(dest, commit);
-    return { root: dest, commit, materialized: false };
-  } catch (_) {
-    cloneGitUrlSource(dest, source);
-    fetchGitUrlSource(dest, source);
-    const reclonedCommit = resolveGitUrlSourceCommit(dest, source);
-    cleanGitUrlSourceTree(dest, reclonedCommit);
-    return { root: dest, commit: reclonedCommit, materialized: false };
-  }
+  // Configure only this owned cache before its first checkout. Git for Windows
+  // otherwise rejects valid long plugin paths beneath the managed cache root.
+  runGit(dest, ["config", "core.longpaths", "true"], "failed to configure plugin source cache paths", { repositoryRoot: root });
+  fetchGitUrlSource(dest, source, root);
+  const commit = resolveGitUrlSourceCommit(dest, source, root);
+  cleanGitUrlSourceTree(dest, commit, root);
+  return { root: dest, commit, materialized: false };
 }
 
 export class PluginSourceStore {
@@ -818,23 +822,57 @@ export function findPluginCandidates(root) {
   return results;
 }
 
-function materializeCommit(sourceRoot, commit, root) {
+class PluginPackageMaterialization {
+  #temporaryPaths;
+  #directory;
+  #faultInjector;
+  #package;
+  #cleanupAttempted = false;
+  constructor(temporaryPaths, directory, faultInjector) {
+    this.#temporaryPaths = temporaryPaths;
+    this.#directory = directory;
+    this.#faultInjector = faultInjector;
+    Object.freeze(this);
+  }
+  get packageRoot() { return this.#package.path; }
+  extract(archive) {
+    this.#package = this.#temporaryPaths.createOwnedDirectory(this.#directory, "package-");
+    archive.extractTo(this.#package.path, { directoryAuthority: this.#package.authority });
+  }
+  cleanup(primaryError = null) {
+    if (this.#cleanupAttempted) return;
+    this.#cleanupAttempted = true;
+    // Retaining the package root cannot authorize deleting a descendant whose
+    // identity was rejected during extraction or copying.
+    if (RealDirectoryAuthority.isAuthorityFailure(primaryError)) return;
+    try {
+      this.#faultInjector({ phase: "materialization-cleanup", directory: this.#directory, packageRoot: this.#package?.path ?? null });
+      this.#temporaryPaths.cleanup(this.#directory);
+    } catch (cleanupError) {
+      if (primaryError !== null) {
+        throw new AggregateError([primaryError, cleanupError], "plugin materialization failed and cleanup was incomplete", { cause: primaryError });
+      }
+      throw cleanupError;
+    }
+  }
+}
+
+function materializeCommit(sourceRoot, commit, root, faultInjector) {
   const temporaryPaths = new TemporaryPaths(root);
-  const tmp = temporaryPaths.create(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
-  const archivePath = path.join(tmp, "package.tar");
-  const archive = runCmd("git", ["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
-  if (!archive.ok) {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
+  const owned = temporaryPaths.createOwnedDirectory(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
+  const tmp = owned.path;
+  const materialized = new PluginPackageMaterialization(temporaryPaths, tmp, faultInjector);
+  try {
+    const archivePath = path.join(tmp, "package.tar");
+    const archive = runGitToFile(["archive", "--format=tar", commit], { cwd: sourceRoot, outputPath: archivePath });
+    if (!archive.ok) throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
+    const contents = GitPluginArchive.fromFile(archivePath, { directoryAuthority: owned.authority });
+    materialized.extract(contents);
+    return materialized;
+  } catch (error) {
+    materialized.cleanup(error);
+    throw error;
   }
-  const packageRoot = path.join(tmp, "package");
-  fs.mkdirSync(packageRoot, { recursive: true });
-  const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { maxBuffer: 50 * 1024 * 1024 });
-  if (!tar.ok) {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    throw new Error(`failed to extract plugin package: ${tar.stderr || tar.stdout}`);
-  }
-  return { tmp, packageRoot };
 }
 
 function hashPackageTree(sourceRoot) {
@@ -843,7 +881,7 @@ function hashPackageTree(sourceRoot) {
     for (const file of walkFiles(sourceRoot, normalizeRel(entry, "files entry")).sort()) {
       hash.update(file);
       hash.update("\0");
-      hash.update(fs.readFileSync(path.join(sourceRoot, file)));
+      hash.update(captureRegularFile(path.join(sourceRoot, file), { label: "plugin package file", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).bytes);
       hash.update("\0");
     }
   }
@@ -854,22 +892,70 @@ function existingKnownPluginPaths(sourceRoot) {
   return KNOWN_PLUGIN_PACKAGE_PATHS.filter((entry) => fs.existsSync(path.join(sourceRoot, entry.replace(/\/$/, ""))));
 }
 
+class PluginFileCopyPlan {
+  constructor(sourceRoot, files, directories, maxFiles, sourceAuthorities) {
+    this.sourceRoot = path.resolve(sourceRoot);
+    this.sourceAuthorities = sourceAuthorities;
+    this.files = new LogicalPathSet([...new Set(files)]);
+    this.directories = new LogicalPathSet([...new Set(directories)], { allowDirectoryPrefixes: true });
+    if (this.files.paths.length > maxFiles) throw new Error(`unsafe package: copied file count exceeds ${maxFiles}`);
+    new LogicalPathSet([...this.files.toStrings(), ...this.directories.toStrings()], { allowDirectoryPrefixes: true });
+    const fileNames = new Set(this.files.toStrings());
+    for (const directory of this.directories.toStrings()) {
+      let current = directory;
+      while (current !== ".") {
+        if (fileNames.has(current)) throw new Error(`plugin copy target directory is a file: ${current}`);
+        current = path.posix.dirname(current);
+      }
+    }
+    Object.freeze(this);
+  }
+
+  copyTo(destinationRoot) {
+    destinationRoot = path.resolve(destinationRoot);
+    const destinationParent = RealDirectoryAuthority.resolve(path.dirname(destinationRoot), { create: true });
+    destinationParent.assertStable();
+    fs.rmSync(destinationRoot, { recursive: true, force: true });
+    const destinationAuthority = destinationParent.descendant(destinationRoot, { create: true });
+    const destinationAuthorities = new Map([[destinationRoot, destinationAuthority]]);
+    for (const directory of this.directories.toStrings().sort()) {
+      retainPluginDirectory(path.join(destinationRoot, directory), destinationAuthorities, { create: true });
+    }
+    for (const file of this.files.toStrings()) {
+      const sourcePath = path.join(this.sourceRoot, file);
+      const sourceParent = retainPluginDirectory(path.dirname(sourcePath), this.sourceAuthorities);
+      const source = captureRegularFile(sourcePath, { label: "plugin package file", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        directoryAuthority: sourceParent });
+      const dest = path.join(destinationRoot, file);
+      const directoryAuthority = retainPluginDirectory(path.dirname(dest), destinationAuthorities, { create: true });
+      new AtomicFile(dest, { permissionHint: source.permissionHint, directoryAuthority }).write(source.bytes);
+    }
+  }
+}
+
+/** Installed plugin runtime copy, preserving empty directories and exact bytes. */
+export function copyPluginRuntimeDirectory(sourceRoot, destinationRoot, { maxFiles = MAX_PLUGIN_COPY_FILES } = {}) {
+  const directories = new Set();
+  const sourceAuthority = RealDirectoryAuthority.resolve(sourceRoot);
+  const sourceAuthorities = new Map([[sourceAuthority.directory, sourceAuthority]]);
+  const files = walkFiles(sourceRoot, "", directories, { packageRules: false, directoryAuthorities: sourceAuthorities });
+  new PluginFileCopyPlan(sourceRoot, files, [...directories], maxFiles, sourceAuthorities).copyTo(destinationRoot);
+}
+
 function copyAllowlistedFiles(sourceRoot, destRoot, files) {
-  fs.rmSync(destRoot, { recursive: true, force: true });
-  fs.mkdirSync(destRoot, { recursive: true });
-  let copied = 0;
+  const selected = new Set();
+  const sourceAuthority = RealDirectoryAuthority.resolve(sourceRoot);
+  const sourceAuthorities = new Map([[sourceAuthority.directory, sourceAuthority]]);
   for (const entry of files) {
     const rel = normalizeRel(entry, "files entry");
     const src = path.join(sourceRoot, rel);
     if (!fs.existsSync(src)) throw new Error(`unsafe files entry missing: ${rel}`);
-    for (const file of walkFiles(sourceRoot, rel)) {
-      copied += 1;
-      if (copied > MAX_PLUGIN_COPY_FILES) throw new Error(`unsafe package: copied file count exceeds ${MAX_PLUGIN_COPY_FILES}`);
-      const dest = path.join(destRoot, file);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(path.join(sourceRoot, file), dest);
+    for (const file of walkFiles(sourceRoot, rel, null, { directoryAuthorities: sourceAuthorities })) {
+      selected.add(file);
+      if (selected.size > MAX_PLUGIN_COPY_FILES) throw new Error(`unsafe package: copied file count exceeds ${MAX_PLUGIN_COPY_FILES}`);
     }
   }
+  new PluginFileCopyPlan(sourceRoot, [...selected], [], MAX_PLUGIN_COPY_FILES, sourceAuthorities).copyTo(destRoot);
 }
 
 function validateSourceTree(sourceRoot) {
@@ -929,7 +1015,8 @@ function installFromSource(root, source, sourceRoot, commit, {
   faultInjector = () => {},
 } = {}) {
   validateSourceTree(sourceRoot);
-  const materialized = sourceMaterialized ? null : materializeCommit(sourceRoot, commit, root);
+  const materialized = sourceMaterialized ? null : materializeCommit(sourceRoot, commit, root, faultInjector);
+  let primaryError = null;
   try {
     const packageRoot = materialized?.packageRoot || sourceRoot;
     const manifest = PluginManifest.fromRoot(packageRoot);
@@ -946,6 +1033,9 @@ function installFromSource(root, source, sourceRoot, commit, {
       pluginId: manifest.name,
       stagePackage(staging) {
         copyAllowlistedFiles(packageRoot, staging, existingKnownPluginPaths(packageRoot));
+        // The copied stage owns all remaining input. Dispose before publication
+        // so a materialization cleanup failure stays inside the install transaction.
+        materialized?.cleanup();
       },
       validateStaging(staging) {
         validateSourceTree(staging);
@@ -960,8 +1050,11 @@ function installFromSource(root, source, sourceRoot, commit, {
       configTransaction,
       faultInjector,
     }));
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    if (materialized) fs.rmSync(materialized.tmp, { recursive: true, force: true });
+    materialized?.cleanup(primaryError);
   }
 }
 
@@ -1196,7 +1289,7 @@ function validateHookClass(HookClass, label) {
 }
 
 function hookModuleCacheKey(modulePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(modulePath)).digest("hex");
+  return captureRegularFile(modulePath, { label: "plugin hook module", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).digest;
 }
 
 export async function discoverFlowCommandHooks(root = repoRoot()) {
@@ -1338,8 +1431,8 @@ function artifactHelpers(root, pluginId, flow = {}, options = {}) {
     },
     async writeText(rel, value) {
       const file = path.join(dir, normalizeRel(rel, "artifact path"));
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, String(value), "utf8");
+      RealDirectoryAuthority.resolve(path.dirname(file), { create: true });
+      new AtomicFile(file).write(String(value));
     },
   };
 }

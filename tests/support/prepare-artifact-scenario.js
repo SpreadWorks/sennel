@@ -6,21 +6,35 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { NativeExecutableInvocation } from "../../src/lib/command-invocation.js";
+import { ProcessExecutionControlFailure } from "../../src/lib/process-execution-values.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import SetInitCommand from "../../src/flow/lib/set-init.js";
 import RunPrepareSpecCommand from "../../src/flow/lib/run-prepare-spec.js";
 import { fixtureRepository } from "./infrastructure/flow-dispatch-scenario.js";
 import { commitAll } from "./infrastructure/git-repo.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "./infrastructure/runtime-fixture-cleanup.js";
 import { PrepareProcess } from "./infrastructure/prepare-process.js";
 
 const cliPath = fileURLToPath(new URL("../../src/sennel.js", import.meta.url));
 
 /** An owned Git repository; every Flow fact is produced by the public commands. */
 export class PrepareArtifactScenario {
-  static create(t, options = {}) {
-    const root = fixtureRepository("prepare-artifact-scenario-");
-    t.after(() => removeTmpDir(root));
-    return new PrepareArtifactScenario(root, options);
+  static create(t, { projectDirectory = null, ...options } = {}) {
+    const repositoryRoot = fixtureRepository("prepare-artifact-scenario-");
+    const root = projectDirectory === null ? repositoryRoot : path.join(repositoryRoot, projectDirectory);
+    let scenario;
+    t.after(() => {
+      if (scenario?.unconfirmedExecution) return;
+      removeQuiescentRuntimeFixture({ mainRoot: root, executionRoot: scenario?.executionRoot ?? root,
+        runId: scenario?.runId ?? null, specId: scenario?.specId ?? null,
+        cleanup: () => removeTmpDir(repositoryRoot) });
+    });
+    if (projectDirectory !== null) fs.mkdirSync(root, { recursive: true });
+    scenario = new PrepareArtifactScenario(root, options);
+    scenario.repositoryRoot = repositoryRoot;
+    return scenario;
   }
 
   constructor(root, { mode = "no-branch", issue = null,
@@ -56,7 +70,10 @@ export class PrepareArtifactScenario {
   }
 
   git(args, root = this.root) {
-    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+    const invocation = new NativeExecutableInvocation({ executable: "git", args: ["-C", root, ...args] });
+    const result = spawnSync(invocation.executable, invocation.args, {
+      ...invocation.processOptions(), shell: false, encoding: "utf8",
+    });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   }
@@ -109,6 +126,10 @@ export class PrepareArtifactScenario {
     for (const key of Object.keys(process.env)) if (!(key in scoped)) delete process.env[key];
     Object.assign(process.env, scoped);
     try { return await action(); }
+    catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) this.retainUnconfirmedExecution();
+      throw error;
+    }
     finally {
       for (const key of Object.keys(process.env)) if (!(key in prior)) delete process.env[key];
       Object.assign(process.env, prior);
@@ -116,8 +137,10 @@ export class PrepareArtifactScenario {
   }
 
   cli(args, root = this.executionRoot) {
-    const result = spawnSync(process.execPath, [cliPath, "flow", ...args], {
-      cwd: root, encoding: "utf8", env: this.environment(root), timeout: 30_000,
+    const invocation = new NativeExecutableInvocation({ executable: process.execPath,
+      args: [cliPath, "flow", ...args], cwd: root, env: this.environment(root) });
+    const result = spawnSync(invocation.executable, invocation.args, {
+      ...invocation.processOptions(), shell: false, encoding: "utf8", timeout: 30_000,
     });
     const text = result.stdout?.trim() ?? "";
     return { ...result, envelope: text.startsWith("{") ? JSON.parse(text) : null };
@@ -167,9 +190,19 @@ export class PrepareArtifactScenario {
       noBranch: this.mode === "no-branch", worktree: this.mode === "worktree", ...overrides };
   }
 
+  retainUnconfirmedExecution() {
+    this.unconfirmedExecution = true;
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+  }
+
   interruptAfterWorktreeAdd() {
-    return new PrepareProcess({ input: this.prepareInput(),
-      environment: this.environment(this.root) }).interruptAfterWorktreeAdd();
+    try {
+      return new PrepareProcess({ input: this.prepareInput(),
+        environment: this.environment(this.root) }).interruptAfterWorktreeAdd();
+    } catch (error) {
+      this.retainUnconfirmedExecution();
+      throw error;
+    }
   }
 
   reload() {

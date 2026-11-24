@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 function invalidSpecRevisionIdentity(message) {
   const error = new Error(message);
   error.code = "SPEC_REVIEW_ARTIFACT_INVALID";
@@ -31,6 +33,11 @@ class SpecRevisionNumber {
 
 /** Cycle-free identity of one immutable canonical Spec revision. */
 export class SpecRevisionIdentity {
+  static fromBytes({ specId, revision, bytes }) {
+    if (!Buffer.isBuffer(bytes)) throw invalidSpecRevisionIdentity("Spec revision requires Buffer bytes");
+    return new this({ specId, revision, digest: crypto.createHash("sha256").update(bytes).digest("hex"),
+      byteLength: bytes.length });
+  }
   constructor(value) {
     exactKeys(value, ["specId", "revision", "digest", "byteLength"], "spec revision identity");
     if (typeof value.specId !== "string" || value.specId.trim() === "") {

@@ -257,7 +257,7 @@ export class PromptCoverageEntry {
     this.end = safeInteger(end, "Prompt coverage end");
     this.sourceLength = safeInteger(sourceLength, "Prompt coverage source length");
     if (this.end < this.start || this.end > this.sourceLength) throw new PromptCoverageInvalidFailure("Prompt coverage range is invalid", { elementId });
-    if (!new Set(["present", "empty", "deleted", "reference", "atomic"]).has(status)) {
+    if (!new Set(["present", "empty", "deleted", "directory", "reference", "atomic"]).has(status)) {
       throw new PromptCoverageInvalidFailure("Prompt coverage status is invalid", { elementId, status });
     }
     this.status = status;
@@ -370,9 +370,9 @@ export class RangedTextPromptElement extends PromptInputElement {
       throw new PromptCoverageInvalidFailure("Ranged prompt element text and range are inconsistent", { elementId: this.id });
     }
     this.status = status || (this.sourceLength === 0 ? "empty" : "present");
-    if (!new Set(["present", "empty", "deleted"]).has(this.status)) throw new TypeError("Ranged prompt element status is invalid");
-    if ((this.status === "empty" || this.status === "deleted") && (this.sourceLength !== 0 || text.length !== 0)) {
-      throw new PromptCoverageInvalidFailure("Empty and deleted ranged elements must have a zero-width source", { elementId: this.id });
+    if (!new Set(["present", "empty", "deleted", "directory"]).has(this.status)) throw new TypeError("Ranged prompt element status is invalid");
+    if ((this.status === "empty" || this.status === "deleted" || this.status === "directory") && (this.sourceLength !== 0 || text.length !== 0)) {
+      throw new PromptCoverageInvalidFailure("Non-text ranged elements must have a zero-width source", { elementId: this.id });
     }
     this.text = text;
     if (new.target === RangedTextPromptElement) Object.freeze(this);

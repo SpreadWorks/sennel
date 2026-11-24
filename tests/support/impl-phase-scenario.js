@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCmd } from "../../src/lib/process.js";
+import { runManagedCmdAsync } from "../../src/lib/process.js";
+import { NodeScriptInvocation } from "../../src/lib/command-invocation.js";
 import { RequirementTestPhaseScenario } from "./requirement-test-phase-scenario.js";
 import RunFilterTaskReviewCommand from "../../src/flow/lib/run-filter-task-review.js";
 import RunRetroCommand from "../../src/flow/lib/run-retro.js";
@@ -160,7 +161,7 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
     this.phaseWorkers = [];
   }
 
-  runReviewProcess(command, args, options) {
+  async runReviewProcess(command, args, options) {
     if (!(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
       return super.runReviewProcess(command, args, options);
     }
@@ -173,9 +174,11 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
     this.phaseReviews.push({ stage, taskId: task?.taskId ?? null, ordinal, environment: structuredClone(options.env), response });
     this.options.beforeImplReview?.(options.env, this);
     if (this.options.reviewProcessResult) return this.options.reviewProcessResult(stage, ordinal, options, this, { command, args });
-    const processResult = runCmd(process.execPath, [fileURLToPath(new URL("./impl-phase-review-worker.js", import.meta.url))], {
-      ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify(response) },
-    });
+    const { cwd, env, stdio, ...executionOptions } = options;
+    const processResult = await runManagedCmdAsync(new NodeScriptInvocation({
+      script: fileURLToPath(new URL("./impl-phase-review-worker.js", import.meta.url)),
+      cwd, stdio, env: { ...env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify(response) },
+    }), executionOptions);
     this.phaseReviews.at(-1).process = { status: processResult.status, stderr: processResult.stderr };
     return processResult;
   }
@@ -234,8 +237,9 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
         `IMPL_PHASE_ENTRY_BLOCKED: normal producer cannot reach ${stepId}; current=${this.current()}; ${JSON.stringify({
           directive: next.directive, outcome, attempt: this.state().attempt?.toJSON() ?? null,
         })}`);
-      assert.ok(outcome.ok !== false || outcome.errors?.every((entry) => entry.code === "FLOW_DISPATCH_LIMIT_REACHED"),
-        `normal producer must reach ${stepId}; current=${this.current()}; errors=${JSON.stringify(outcome.errors)}`);
+      const accepted = outcome.ok !== false || outcome.errors?.every((entry) => entry.code === "FLOW_DISPATCH_LIMIT_REACHED");
+      assert.ok(accepted, accepted ? undefined
+        : `normal producer must reach ${stepId}; current=${this.current()}; outcome=${JSON.stringify(outcome)}`);
     }
     assert.fail(`normal dispatcher did not reach ${stepId}; current=${this.current()}`);
   }

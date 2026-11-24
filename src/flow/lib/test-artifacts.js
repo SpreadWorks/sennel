@@ -6,11 +6,15 @@ import path from "path";
 import crypto from "crypto";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "child_process";
 import { globToRegex } from "../../lib/glob.js";
-import { listChangedFilesDetailed, runGitToFile } from "../../lib/git-helpers.js";
+import { listChangedFilesDetailed, runGitToFile, withGitOutputCleanup } from "../../lib/git-helpers.js";
+import { runGit } from "../../lib/git-command-execution.js";
+import { withReadOnlyManagedProcessScopeSync } from "../../lib/managed-process.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { captureRegularFile, visitRegularFileChunks, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { LogicalRelativePath, isNativePathWithin } from "../../lib/portable-path.js";
 import { assertOk } from "../../lib/process.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
@@ -132,7 +136,7 @@ export function matchUpgradeRequiredSourcePaths(filePaths = []) {
 
 export function listUpgradeRequiredChangedPaths({ root, baseBranch }) {
   if (!baseBranch) return [];
-  const files = listChangedFilesDetailed({ cwd: root, baseBranch })
+  const files = listChangedFilesDetailed({ cwd: root, repositoryRoot: root, baseBranch })
     .flatMap((entry) => [entry.path, entry.old_path].filter(Boolean));
   return matchUpgradeRequiredSourcePaths(files);
 }
@@ -243,16 +247,9 @@ export class IntegrationArtifactFingerprintAuthority {
 
 export function readJsonStrict(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return JSON.parse(captureRegularFile(filePath, { label: path.basename(filePath), maxBytes: DEFAULT_MAX_FILE_BYTES }).text());
   } catch (err) {
     throw new Error(`${path.basename(filePath)} is not valid JSON: ${err.message}`);
-  }
-}
-
-function assertFileSizeWithinLimit(filePath, label, maxBytes) {
-  const size = fs.statSync(filePath).size;
-  if (size > maxBytes) {
-    throw new Error(`${label} exceeds max size ${maxBytes} bytes`);
   }
 }
 
@@ -263,8 +260,7 @@ function assertMaxItems(label, items, maxItems) {
 }
 
 function readBoundedText(filePath, label, maxBytes) {
-  assertFileSizeWithinLimit(filePath, label, maxBytes);
-  return fs.readFileSync(filePath, "utf8");
+  return captureRegularFile(filePath, { label, maxBytes }).text();
 }
 
 function resolveRepoRelativePathInside({ root, allowedBaseDir, relPath, label, mustExist = true }) {
@@ -274,9 +270,9 @@ function resolveRepoRelativePathInside({ root, allowedBaseDir, relPath, label, m
   if (path.isAbsolute(relPath)) {
     throw new Error(`${label} must be relative: ${relPath}`);
   }
+  LogicalRelativePath.from(relPath, label);
   const resolved = path.resolve(root, relPath);
-  const relToBase = path.relative(allowedBaseDir, resolved);
-  if (relToBase.startsWith("..") || path.isAbsolute(relToBase)) {
+  if (!isNativePathWithin(path.resolve(allowedBaseDir), resolved)) {
     throw new Error(`${label} escapes allowed root: ${relPath}`);
   }
   if (mustExist && !fs.existsSync(resolved)) {
@@ -795,26 +791,21 @@ export function finalRegressionTestCount(stdout) {
   return FinalRegressionTestSummary.parse(stdout).testCount;
 }
 
-function createFinalRegressionGitDirectory(root, { repositoryRoot = root, specId = null, runId = null } = {}) {
-  const temporaryPaths = new TemporaryPaths(repositoryRoot);
-  const directory = specId && runId
-    ? temporaryPaths.flow(specId, runId)
-    : temporaryPaths.runtime("final-regression-git");
-  return temporaryPaths.create(directory, PRODUCT.temporaryPrefix("final-regression-git"));
+class FinalRegressionGitWorkspace {
+  constructor(root, { repositoryRoot = root, specId = null, runId = null } = {}) {
+    this.paths = new TemporaryPaths(repositoryRoot);
+    const namespace = specId && runId
+      ? this.paths.flow(specId, runId)
+      : this.paths.runtime("final-regression-git");
+    this.directory = this.paths.create(namespace, PRODUCT.temporaryPrefix("final-regression-git"));
+  }
+
+  cleanup() { this.paths.cleanup(this.directory); }
 }
 
 function forEachFingerprintFileChunk(filePath, visit) {
-  const descriptor = fs.openSync(filePath, "r");
-  try {
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    for (;;) {
-      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytes === 0) break;
-      visit(buffer.subarray(0, bytes));
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  return visitRegularFileChunks(filePath, { label: "final-regression fingerprint input",
+    maxBytes: Number.MAX_SAFE_INTEGER - 1, visit });
 }
 
 function forEachFingerprintUtf8Chunk(filePath, visit) {
@@ -842,13 +833,14 @@ function readFingerprintUntrackedPaths(filePath) {
 // masquerade as a product mutation.
 export function finalRegressionWorktreeFingerprint(root, options = {}) {
   const { pathspecExcludes = [] } = options;
-  const directory = createFinalRegressionGitDirectory(root, options);
+  const workspace = new FinalRegressionGitWorkspace(root, options);
+  const { directory } = workspace;
   const scratchRelative = path.relative(fs.realpathSync(root), directory);
   const scratchExcludes = scratchRelative !== ".." && !scratchRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(scratchRelative)
     ? [`:(exclude,top,literal)${scratchRelative.split(path.sep).join("/")}`]
     : [];
   const pathspec = ["--", ".", ...pathspecExcludes, ...scratchExcludes];
-  try {
+  return withGitOutputCleanup(() => {
     const output = (name, args) => {
       const outputPath = path.join(directory, name);
       const result = runGitToFile(args, { cwd: root, outputPath, log: false });
@@ -860,18 +852,18 @@ export function finalRegressionWorktreeFingerprint(root, options = {}) {
       "diff", "--cached", "--no-ext-diff", "--binary", "HEAD", ...pathspec,
     ]);
     forEachFingerprintUtf8Chunk(staged, (chunk) => hash.update(chunk));
-    fs.unlinkSync(staged);
+    new AtomicFile(staged, { maxBytes: Number.MAX_SAFE_INTEGER - 1 }).remove({ streaming: true });
     hash.update("\0unstaged\0");
     const unstaged = output("unstaged.bin", [
       "diff", "--no-ext-diff", "--binary", ...pathspec,
     ]);
     forEachFingerprintUtf8Chunk(unstaged, (chunk) => hash.update(chunk));
-    fs.unlinkSync(unstaged);
+    new AtomicFile(unstaged, { maxBytes: Number.MAX_SAFE_INTEGER - 1 }).remove({ streaming: true });
     const untrackedOutput = output("untracked.bin", [
       "ls-files", "--others", "--exclude-standard", "-z", ...pathspec,
     ]);
     const untracked = readFingerprintUntrackedPaths(untrackedOutput);
-    fs.unlinkSync(untrackedOutput);
+    new AtomicFile(untrackedOutput, { maxBytes: Number.MAX_SAFE_INTEGER - 1 }).remove({ streaming: true });
     for (const relativePath of untracked) {
       const absolutePath = path.join(root, relativePath);
       const stat = fs.lstatSync(absolutePath);
@@ -880,9 +872,7 @@ export function finalRegressionWorktreeFingerprint(root, options = {}) {
       forEachFingerprintFileChunk(absolutePath, (chunk) => hash.update(chunk));
     }
     return hash.digest("hex");
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  }, () => workspace.cleanup());
 }
 
 // The three values must always describe the same repository instant.
@@ -898,10 +888,18 @@ export class FinalRegressionRepositoryBinding {
   }
 
   static capture(root, options = {}) {
-    return new FinalRegressionRepositoryBinding({
-      headSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
-      treeSha: execFileSync("git", ["write-tree"], { cwd: root, encoding: "utf8" }).trim(),
-      worktreeSha256: finalRegressionWorktreeFingerprint(root, options),
+    // Reuse a current scope, or keep standalone control records outside the
+    // checkout whose complete contents form this binding's own input.
+    return withReadOnlyManagedProcessScopeSync({ mainRoot: root, executionRoot: root }, () => {
+      const head = runGit(["rev-parse", "HEAD"], { cwd: root });
+      assertOk(head, "final-regression HEAD read failed");
+      const tree = runGit(["write-tree"], { cwd: root });
+      assertOk(tree, "final-regression tree capture failed");
+      return new FinalRegressionRepositoryBinding({
+        headSha: head.stdout.trim(),
+        treeSha: tree.stdout.trim(),
+        worktreeSha256: finalRegressionWorktreeFingerprint(root, options),
+      });
     });
   }
 
@@ -913,7 +911,7 @@ export class FinalRegressionRepositoryBinding {
   }
 }
 
-function resolveFinalRegressionRawOutputPath(root, rawOutputPath) {
+function readFinalRegressionRawOutputSnapshot(root, rawOutputPath) {
   const resolved = resolveRepoRelativePathInside({
     root,
     allowedBaseDir: path.resolve(root),
@@ -922,11 +920,7 @@ function resolveFinalRegressionRawOutputPath(root, rawOutputPath) {
     mustExist: false,
   });
   if (!fs.existsSync(resolved)) return null;
-  const stat = fs.lstatSync(resolved);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error("final-regression rawOutputPath must reference a regular repository file");
-  }
-  return resolved;
+  return captureRegularFile(resolved, { label: "final-regression rawOutputPath", maxBytes: DEFAULT_MAX_FILE_BYTES });
 }
 
 export function validateFinalRegressionEvidence({ root, artifact, repositoryBindingOptions = {}, requireCurrentRepository = false }) {
@@ -946,9 +940,9 @@ export function validateFinalRegressionEvidence({ root, artifact, repositoryBind
       if (recordedRepository.treeSha !== currentRepository.treeSha) throw new Error("execution binding tree is stale");
       if (recordedRepository.worktreeSha256 !== currentRepository.worktreeSha256) throw new Error("execution binding worktree is stale");
     }
-    const rawPath = resolveFinalRegressionRawOutputPath(root, binding.rawOutputPath || artifact.rawOutputPath);
-    if (rawPath === null) return { ok: true, rawEvidence: "absent" };
-    const rawText = fs.readFileSync(rawPath, "utf8");
+    const rawSnapshot = readFinalRegressionRawOutputSnapshot(root, binding.rawOutputPath || artifact.rawOutputPath);
+    if (rawSnapshot === null) return { ok: true, rawEvidence: "absent" };
+    const rawText = rawSnapshot.text();
     const manifest = readFinalRegressionManifest(rawText);
     if (binding.command !== manifest.command) throw new Error("execution binding command mismatch");
     if (binding.parsedResult !== manifest.result) throw new Error("execution binding result mismatch");

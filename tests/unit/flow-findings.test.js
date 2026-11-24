@@ -245,6 +245,39 @@ describe("canonical flow finding source identity", () => {
     });
   });
 
+  it("resolves the newest exact finding repeatedly without reordering retained producer payloads", () => {
+    const latestFinding = {
+      sourceFindingId: "shared-observation", fingerprint: FIRST_FINGERPRINT,
+      severity: "blocking", issue: "The latest producer observation.",
+    };
+    const history = { attempts: [
+      { attempt: 1, artifact: { logicalKey: "draft.gate", payload: sourcePayload() } },
+      { attempt: 2, artifact: { logicalKey: "draft.gate", payload: { observations: [latestFinding] } } },
+    ] };
+    const bytes = Buffer.from(JSON.stringify(history), "utf8");
+    const source = CanonicalFlowFindingSourceArtifact.fromBytes({
+      logicalKey: "draft.gate", relativePath: SOURCE_PATH, bytes,
+    });
+    const retained = structuredClone(source.payloads);
+    const latestPayload = source.payload;
+    const identity = new FlowFindingSourceIdentity({
+      sourceArtifact: SOURCE_PATH, sourceStep: "draft-gate",
+      sourceFindingId: "shared-observation", fingerprint: FIRST_FINGERPRINT,
+    });
+
+    assert.equal(Object.isFrozen(source.payloads), true);
+    for (let read = 0; read < 2; read++) {
+      assert.deepEqual(source.resolveFinding(identity), latestFinding);
+      assert.equal(source.resolveFinding(new FlowFindingSourceIdentity({
+        sourceArtifact: SOURCE_PATH, sourceStep: "draft-gate",
+        sourceFindingId: "shared-observation", fingerprint: SECOND_FINGERPRINT,
+      })).issue, "The second observation.");
+      assert.deepEqual(source.payloads, retained);
+      assert.equal(source.payload, latestPayload);
+      assert.deepEqual(source.bytes, bytes);
+    }
+  });
+
   it("resolves only the exact id and fingerprint across retained producer attempts", () => {
     const history = {
       attempts: [

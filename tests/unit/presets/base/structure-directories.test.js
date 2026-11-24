@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import registerStructure from "../../../../src/presets/base/data/structure.js";
-import { container, initContainer } from "../../../../src/lib/container.js";
+import { container, registerPresetBaseDependencies } from "../../../../src/lib/container.js";
 
-initContainer();
+registerPresetBaseDependencies();
 const StructureSource = registerStructure(container);
 
 /** Helper: build a minimal enriched analysis from file paths with roles. */

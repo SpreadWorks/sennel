@@ -4,8 +4,11 @@ import path from "node:path";
 import { it } from "node:test";
 
 import { SourceWorkerCanonicalObservationAdvance, WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffError } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { selectWorkerExecutionAdmission } from "../../../src/flow/lib/worker-execution-admission.js";
+import { assertWorkerExecutionAdmission, selectWorkerExecutionAdmission } from "../../../src/flow/lib/worker-execution-admission.js";
+import { ArtifactWorkerRecoveryAuthorized, ArtifactWorkerRecoveryRequired } from "../../../src/flow/lib/artifact-worker-execution-continuation.js";
+import { DraftWorkerNewExecution } from "../../../src/flow/lib/draft-worker-execution-continuation.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/step-persistence-failure.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 import { Envelope } from "../../../src/lib/flow-envelope.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -14,7 +17,7 @@ import { dispatchRepositoryFingerprint } from "../../../src/flow/lib/run-dispatc
 import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
 import { PrepareArtifactScenario } from "../../support/prepare-artifact-scenario.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { configureManagedFixtureRepository, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { configureManagedFixtureRepository, createScenarioProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 
 class NestedRefineScenario extends RequirementTestPhaseScenario {
@@ -96,7 +99,10 @@ async function interruptRefinePublication(t, boundary, { beforeClaim = null, nes
 }
 
 for (const boundary of ["missing", "unsealed"]) {
-  it(`holds a real refine claim with a ${boundary} response after reload without another provider or state change`, async (t) => {
+  const name = boundary === "missing"
+    ? "reuses an unused refine claim after reload for exactly one original-generation provider call"
+    : "requires explicit recovery for an unsealed refine response before another provider call";
+  it(name, async (t) => {
     let invocation;
     const coordinator = new class extends WorkerArtifactHandoffCoordinator {
       createRequest(input) {
@@ -123,15 +129,15 @@ for (const boundary of ["missing", "unsealed"]) {
       assert.equal(interrupted.ok, false);
       assert.equal(interrupted.errors[0].code, "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED", JSON.stringify(interrupted));
     } else {
-      // The external producer writes its normal payload but is interrupted before
-      // sealing; stop the parent before it observes a terminal provider response.
-      scenario.agent.call = async (_prompt, options) => {
+      // Record real Prompt accounting while the external fake leaves an
+      // unsealed payload. This does not manufacture a managed worker stop.
+      scenario.agent.call = createScenarioProviderFake(async (_prompt, options) => {
         const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST, "utf8"));
         scenario.requests.push(request);
         fs.writeFileSync(requestPayloadPath(request, "draft.json"),
           workerArtifactJson(requestInput(request, "draft.json").document));
         return "unsealed interrupted response";
-      };
+      }).call;
       await assert.rejects(() => scenario.dispatch(1), /interrupt before reading unsealed refine response/);
     }
     scenario.reload();
@@ -146,19 +152,65 @@ for (const boundary of ["missing", "unsealed"]) {
     assert.equal(scenario.requests.filter((request) => request.stepId === "draft-refine").length,
       boundary === "missing" ? 0 : 1);
     const before = scenario.snapshot();
-    scenario.agent.call = async () => assert.fail("an unfinished refine claim cannot start another provider");
     const selection = selectWorkerExecutionAdmission({ ctx: scenario.context(), stepId: "draft-refine" });
-    assert.equal(selection.continuation.code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
+    const observations = coordinator.readArtifactWorkerExecutionContinuation({
+      ctx: scenario.context(), state: selection.state,
+    });
+    assert.equal(observations.response, "unsealed");
+    assert.equal(observations.physical, "unstarted");
+    assert.equal(observations.frontier.executionContract.generation, 0);
+    assert.equal(observations.frontier.recovery, null);
+    const contract = observations.frontier.executionContract;
+    const episode = scenario.manager.readStoredPromptExecutionEpisode({ executionContract: contract });
+    assert.equal(episode.budget.providerCallCount, boundary === "missing" ? 0 : 1);
     const next = await scenario.next();
-    assert.equal(next.directive.kind, "blocked", JSON.stringify(next));
-    assert.equal(next.directive.code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
-    const result = await scenario.dispatch(2);
-    assert.equal(result.dispatch.boundary, "blocked", JSON.stringify(result));
-    assert.equal(result.dispatch.dispatchCount, 0);
     assert.equal(scenario.requests.length, calls);
     assert.deepEqual(scenario.reload().snapshot(), before);
     assert.deepEqual(executionState(scenario).lifecycle.toJSON(), saved.lifecycle.toJSON());
     assert.equal(executionState(scenario).receiptId, saved.receiptId);
+
+    if (boundary === "unsealed") {
+      assert.equal(observations.unusedAuthorizationAvailable, false);
+      assert.equal(observations.recoveryBudgetAvailable, true);
+      assert.ok(selection.artifactContinuation instanceof ArtifactWorkerRecoveryRequired);
+      assert.equal(next.directive.kind, "execute_command", JSON.stringify(next));
+      assert.equal(next.directive.actionId, "RECOVER_ARTIFACT_EXECUTION");
+      assert.throws(() => assertWorkerExecutionAdmission(selection),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_WORKER_EXECUTION_NOT_ADMITTED");
+      assert.equal(scenario.requests.length, calls);
+      assert.deepEqual(scenario.reload().snapshot(), before);
+      return;
+    }
+
+    assert.equal(observations.frontier.status, "unconsumed");
+    assert.equal(observations.unusedAuthorizationAvailable, true);
+    assert.ok(selection.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized);
+    assert.ok(selection.continuation instanceof DraftWorkerNewExecution);
+    assert.equal(next.directive.kind, "execute_step", JSON.stringify(next));
+    const resumed = await scenario.dispatch(4);
+    assert.equal(resumed instanceof Envelope, false);
+    assert.equal(resumed.dispatch.boundary, "await_user_decision", JSON.stringify(resumed));
+    assert.equal(scenario.requests.length, calls + 1);
+    const request = scenario.requests.at(-1);
+    assert.equal(request.stepId, "draft-refine");
+    assert.equal(request.dispatchInvocationId, saved.lifecycle.claim.dispatchInvocationId);
+    assert.equal(request.executionContractId, contract.id);
+    const fresh = scenario.reload();
+    const state = fresh.manager.canonicalState(fresh.specId);
+    assert.equal(state.attempt.id, selectedAttempt.id);
+    assert.equal(state.attempt.sequence, selectedAttempt.sequence);
+    assert.deepEqual(state.attempt.consumption.toJSON(), selectedAttempt.consumption.toJSON());
+    const frontier = fresh.manager.artifactWorkerExecutionState({ binding: {
+      runId: state.runId, specId: fresh.specId, stepId: "draft-refine", attempt: state.attempt,
+    } });
+    assert.equal(frontier.contracts.length, 1);
+    assert.equal(frontier.executionContract.id, contract.id);
+    assert.equal(frontier.recovery, null);
+    assert.equal(fresh.manager.readStoredPromptExecutionEpisode({ executionContract: contract }).budget.providerCallCount, 1);
+    const awaited = await fresh.next();
+    assert.equal(awaited.directive.kind, "await_draft_question");
+    assert.equal(awaited.directive.questionId, "q1");
   });
 }
 
@@ -248,18 +300,19 @@ function publishChangedDraft(scenario) {
 }
 
 function assertRefineRefusal(refused, expectedCode) {
+  // captureAction wraps retained-fingerprint validation failures in a failure
+  // Envelope; a selected blocked directive remains an ordinary boundary.
   if (expectedCode === "FLOW_DISPATCH_REPOSITORY_FINGERPRINT_FAILED") {
-    const observed = refused instanceof Envelope ? refused.data : refused;
-    assert.ok(refused instanceof Envelope, JSON.stringify({
-      boundary: observed.dispatch.boundary,
-      directive: observed.nextAction?.directive?.kind,
-      code: observed.nextAction?.directive?.code,
-    }));
+    assert.ok(refused instanceof Envelope, JSON.stringify(refused));
     assert.equal(refused.ok, false);
-    assert.equal(refused.errors[0].code, expectedCode);
+    assert.equal(refused.type, "run");
+    assert.equal(refused.key, "dispatch");
+    assert.deepEqual(refused.errors.map(({ code, level }) => ({ code, level })),
+      [{ code: expectedCode, level: "fatal" }]);
     assert.equal(refused.data.dispatch.boundary, "blocked");
     assert.equal(refused.data.dispatch.dispatchCount, 0);
   } else {
+    assert.equal(refused instanceof Envelope, false, "a selected blocked directive is an ordinary dispatch boundary");
     assert.equal(refused.nextAction.directive.kind, "blocked");
     assert.equal(refused.nextAction.directive.code, expectedCode);
     assert.equal(refused.dispatch.boundary, "blocked");
@@ -303,7 +356,9 @@ const replayMutations = [
         reason: "A separate diagnostic publication is outside this saved execution.",
         trigger: "external producer", observations: [], timestamp: "2026-10-14T00:00:00.000Z" } });
   }],
-  ["stored request binding", "sealed", "FLOW_EXECUTION_CONTRACT_MISMATCH", (scenario) => {
+  // restoreClaimedDraftRequest compares the saved requestDigest with the
+  // canonical claim before a saved response can be adopted.
+  ["stored request binding", "sealed", "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH", (scenario) => {
     const request = scenario.requests.at(-1);
     const requestPath = path.join(path.dirname(path.dirname(requestPayloadPath(request, "draft.json"))), "request.json");
     const changed = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -327,9 +382,30 @@ for (const [changedInput, boundary, expectedCode, mutate, beforeClaim] of replay
     const calls = scenario.requests.length;
     const lifecycle = executionState(scenario);
     scenario.options.handoffCoordinator = new WorkerArtifactHandoffCoordinator();
+    let fingerprintCause = null;
+    if (["FLOW_EXECUTION_INPUT_BASELINE_CHANGED", "FLOW_ARTIFACT_HANDOFF_INVALID"].includes(expectedCode)) {
+      // Publication replay is selected from its saved receipt. Action capture
+      // then authenticates its retained contract and seal before any worker.
+      // Preserve the precise source refusal as well as the public wrapper.
+      assert.throws(() => scenario.options.handoffCoordinator.retainedDraftRepositoryFingerprint({
+        ctx: scenario.context(), stepId: "draft-refine",
+      }), (error) => {
+        assert.equal(error.constructor, expectedCode === "FLOW_EXECUTION_INPUT_BASELINE_CHANGED"
+          ? StepAdmissionRefusal : WorkerArtifactHandoffError);
+        assert.equal(error.code, expectedCode);
+        fingerprintCause = error;
+        return true;
+      });
+      assert.deepEqual(scenario.snapshot(), before, "retained authority refusal is read-only");
+      assert.equal(scenario.requests.length, calls);
+    }
     scenario.agent.call = async () => assert.fail("changed replay authority cannot start a provider");
     const refused = await scenario.dispatch(4);
-    assertRefineRefusal(refused, expectedCode);
+    assertRefineRefusal(refused, fingerprintCause === null ? expectedCode : "FLOW_DISPATCH_REPOSITORY_FINGERPRINT_FAILED");
+    if (fingerprintCause !== null) {
+      assert.equal(refused.data.fingerprintPhase, "action-capture");
+      assert.equal(refused.data.cause, fingerprintCause.message);
+    }
     assert.equal(scenario.requests.length, calls);
     assert.deepEqual(scenario.reload().snapshot(), before);
     assert.deepEqual(executionState(scenario).lifecycle.toJSON(), lifecycle.lifecycle.toJSON());

@@ -1,9 +1,8 @@
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { it, mock } from "node:test";
+import { it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -17,7 +16,7 @@ import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake,
-  requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+  requestInput, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 for (const { outcome, title } of [
   { outcome: "unavailable", title: "keeps a later Spec file evaluation failure across reload without publishing earlier findings" },
@@ -96,11 +95,7 @@ it(title, async () => {
         finalArgs: [], inlineArgvByteCount: 0, schemaMode: "file", usesStdin: true,
       });
     } });
-    const originalSpawnSync = childProcess.spawnSync;
-    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawnSync(command, args, options);
-      }
+    reviewProcess = installReviewProcessFake((_command, _args, options) => {
       assert.equal(manager.canonicalState(specId).current.at(-1), "spec-review");
       const work = ReviewWorkUnit.fromEnvironment(options.env);
       const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
@@ -111,9 +106,8 @@ it(title, async () => {
       fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"),
         workerArtifactJson(delta.toJSON()));
       work.seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     const worker = { async call(_prompt, options) {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
@@ -135,6 +129,7 @@ it(title, async () => {
       sealWorkerArtifactHandoff({ requestPath, invocationId });
       return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
     } };
+    withScenarioProviderAdmission(worker);
     const dispatcher = new RunDispatchCommand({ agent: worker, maxDispatches: outcome === "recovered" ? 1 : 64 });
     dispatcher.container = dispatchContainer({ root, flowManager: manager, agent: worker });
     let result;
@@ -206,7 +201,6 @@ it(title, async () => {
     assert.equal(next.directive.code, "CANONICAL_ATTEMPT_RECOVERY_REQUIRED");
   } finally {
     reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     gateAgentLookup?.mock.restore();
     removeTmpDir(root);
   }

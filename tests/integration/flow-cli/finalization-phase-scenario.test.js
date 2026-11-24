@@ -15,6 +15,13 @@ import { registerFinalizationRecoveryContracts } from "./finalization-phase-reco
 import { registerFinalizationCleanupContracts } from "./finalization-phase-cleanup.contract.js";
 import { registerFinalizationWorktreeContracts } from "./finalization-phase-worktree.contract.js";
 import { registerDispatcherFinalizationApprovalContracts } from "./dispatcher-finalization-approval.contract.js";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { testTemporaryRoot } from "../../test-environment.js";
+import {
+  assertCleanupPublicationRejectsCanonicalDrift,
+  assertCleanupPublicationRejectsJournalDrift,
+  assertCleanupPublicationRecoversCommittedResponse,
+} from "./finalize-cleanup-publication.contract.js";
 
 describe("Finalization phase: genuine Report / canonical reload / external effect / consumer", { concurrency: false }, () => {
   let seed;
@@ -289,5 +296,33 @@ describe("Finalization phase: genuine Report / canonical reload / external effec
     assert.equal(flow.state().lifecycle.state, "active");
     assert.equal(fs.existsSync(path.join(flow.root, POINTER_REL_PATH)), false);
     assert.equal(flow.report("finalize-cleanup").descriptor.activityId, sourceActivity);
+  });
+
+  test("F08 completed cleanup effects protect their source and journal and recover the exact committed receipt", async (t) => {
+    const retainUnknown = async (operation) => {
+      try { return await operation(); }
+      catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(error); throw error; }
+    };
+    await retainUnknown(async () => {
+      const cleanupSeed = await FinalizationPhaseScenario.seed(t, { frontier: "finalize-cleanup",
+        seedRoot: seed.root, seedSpecId: seed.specId });
+      const contracts = new Map([
+        ["canonical note drift refuses without rewriting evidence or registering a child", assertCleanupPublicationRejectsCanonicalDrift],
+        ["journal drift refuses without rewriting evidence or registering a child", assertCleanupPublicationRejectsJournalDrift],
+        ["uncertain committed response recovers the originally selected receipt", assertCleanupPublicationRecoversCommittedResponse],
+      ]);
+      for (const [name, assertOutcome] of contracts) {
+        assert.equal(testTemporaryRoot().retained, false, "retained unknowns forbid starting another child");
+        let completed = false;
+        await t.test(name, async (child) => retainUnknown(async () => {
+          const owner = new SeedCleanupScope((cleanup) => child.after(cleanup), child.mock);
+          await assertOutcome(owner, cleanupSeed);
+          await owner.cleanup();
+          assert.equal(testTemporaryRoot().retained, false, "child cleanup must be confirmed before the next child");
+          completed = true;
+        }));
+        if (!completed) return;
+      }
+    });
   });
 });

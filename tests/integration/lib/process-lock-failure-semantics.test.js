@@ -5,19 +5,13 @@ import { afterEach, describe, it } from "node:test";
 
 import { ProcessLock } from "../../../src/lib/process-lock.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { spawnSync } from "node:child_process";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-function identitySource(bootIdentity = "process-lock-boot", startFingerprint = "441") {
-  return new ProcessIdentitySource({
-    platform: "linux", pid: process.pid, readBootIdentity: () => bootIdentity, readProcessStartFingerprint: () => startFingerprint,
-  });
-}
-
-function makeLock(root, source = identitySource()) {
+function makeLock(root) {
   return new ProcessLock({
     directoryAuthority: new RealDirectoryAuthority(root), fileName: ".process-lock.test.lock", kind: "process-lock-test",
-    authority: { root: fs.realpathSync(root) }, processIdentitySource: source,
+    authority: { root: fs.realpathSync(root) },
   });
 }
 
@@ -25,77 +19,78 @@ describe("ProcessLock", () => {
   const roots = [];
   afterEach(() => { for (const root of roots.splice(0)) removeTmpDir(root); });
 
-  it("reclaims a conclusively stale owner without a caller option", () => {
-    const root = createTmpDir("process-lock-stale-");
+  it("publishes token/session ownership without querying an OS process identity", () => {
+    const root = createTmpDir("process-lock-session-");
     roots.push(root);
-    const stale = makeLock(root, identitySource("stale-boot"));
-    stale.acquire();
-    const current = makeLock(root, identitySource("current-boot"));
-    const token = current.acquire();
-    assert.notEqual(token, stale.processIdentity.ownerToken);
-    current.release();
+    const holder = makeLock(root);
+    const token = holder.acquire();
+    const owner = holder.inspect().owner;
+    assert.equal(owner.ownerToken, token);
+    assert.equal(owner.ownerSession, holder.ownerSession);
+    assert.equal(Object.hasOwn(owner.toJSON(), "processIdentity"), false);
+    assert.equal(holder.isOwnerCurrent(owner), true);
+    assert.throws(() => makeLock(root).acquire(), (error) => error.lockStatus === "busy");
+    holder.release();
+    assert.equal(holder.ownerToken, null);
+    assert.equal(fs.existsSync(holder.lockPath), false);
   });
 
-  it("reclaims an owner whose PID has been reused without a caller option", () => {
-    const root = createTmpDir("process-lock-pid-reuse-");
+  it("never exposes partial owner JSON to a competing normal observer", () => {
+    const root = createTmpDir("process-lock-publication-observer-");
     roots.push(root);
-    const reused = makeLock(root, identitySource("shared-boot", "440"));
-    reused.acquire();
-    const current = makeLock(root, identitySource("shared-boot", "441"));
-    const token = current.acquire();
-    assert.notEqual(token, reused.processIdentity.ownerToken);
-    current.release();
-  });
-
-  it("rejects unavailable requester identity before creating a lock artifact", () => {
-    const root = createTmpDir("process-lock-identity-unavailable-");
-    roots.push(root);
-    const lock = makeLock(root, new ProcessIdentitySource({
-      platform: "linux", pid: process.pid,
-      readBootIdentity: () => { throw new Error("boot unavailable"); },
-      readProcessStartFingerprint: () => "441",
-    }));
-    assert.throws(() => lock.acquire(), (error) => error.code === "PROCESS_IDENTITY_UNAVAILABLE");
+    const holder = makeLock(root);
+    const contender = makeLock(root);
+    const write = fs.writeSync;
+    let observed = false;
+    let observation = null;
+    let observationFailure = null;
+    fs.writeSync = (descriptor, bytes, offset, length, position) => {
+      if (observed) return write(descriptor, bytes, offset, length, position);
+      const written = write(descriptor, bytes, offset, 1, position);
+      observed = true;
+      try { observation = contender.inspect(); } catch (error) { observationFailure = error; }
+      return written;
+    };
+    let token;
+    try { token = holder.acquire(); } finally { fs.writeSync = write; }
+    try {
+      assert.equal(observed, true);
+      assert.equal(observationFailure, null);
+      if (observation !== null) assert.equal(observation.owner.ownerToken, token);
+      assert.equal(holder.inspect().owner.ownerToken, token);
+      assert.equal(holder.isOwnerCurrent(holder.inspect().owner), true);
+      assert.throws(() => contender.acquire(), (error) => error.lockStatus === "busy");
+    } finally { holder.release(); }
+    assert.equal(contender.inspect(), null);
     assert.deepEqual(fs.readdirSync(root), []);
   });
 
-  it("retains a proven stale owner when requester identity becomes unavailable before reclamation", () => {
-    const root = createTmpDir("process-lock-stale-identity-unavailable-");
+  it("never reclaims a complete record left by a child that exits without release", () => {
+    const root = createTmpDir("process-lock-exited-owner-");
     roots.push(root);
-    const stale = makeLock(root, identitySource("stale-boot"));
-    stale.acquire();
-    const before = fs.readFileSync(stale.lockPath);
-    const inode = fs.lstatSync(stale.lockPath).ino;
-    let bootReads = 0;
-    const candidate = makeLock(root, new ProcessIdentitySource({
-      platform: "linux", pid: process.pid,
-      readBootIdentity: () => {
-        bootReads += 1;
-        if (bootReads === 1) return "current-boot";
-        throw new Error("boot unavailable");
-      },
-      readProcessStartFingerprint: () => "441",
-    }));
-    assert.throws(() => candidate.acquire(), (error) => error.code === "PROCESS_IDENTITY_UNAVAILABLE");
-    assert.equal(bootReads, 2);
-    assert.deepEqual(fs.readFileSync(stale.lockPath), before);
-    assert.equal(fs.lstatSync(stale.lockPath).ino, inode);
-    stale.release();
+    const lock = makeLock(root);
+    const script = `import { ProcessLock } from ${JSON.stringify(new URL("../../../src/lib/process-lock.js", import.meta.url).href)};
+      import { RealDirectoryAuthority } from ${JSON.stringify(new URL("../../../src/lib/real-directory-authority.js", import.meta.url).href)};
+      const lock = new ProcessLock({ directoryAuthority: new RealDirectoryAuthority(${JSON.stringify(root)}),
+        fileName: ${JSON.stringify(path.basename(lock.lockPath))}, kind: ${JSON.stringify(lock.kind)}, authority: ${JSON.stringify(lock.authority)} });
+      process.stdout.write(lock.acquire());`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], { encoding: "utf8" });
+    assert.equal(child.status, 0, child.stderr);
+    const bytes = fs.readFileSync(lock.lockPath);
+    assert.equal(lock.inspect().owner.ownerToken, child.stdout);
+    assert.equal(lock.isOwnerCurrent(lock.inspect().owner), false);
+    assert.throws(() => lock.acquire(), (error) => error.lockStatus === "busy");
+    assert.deepEqual(fs.readFileSync(lock.lockPath), bytes);
   });
 
-  it("fails closed for an indeterminate owner without removing its lock", () => {
-    const root = createTmpDir("process-lock-unknown-");
+  it("retains a legacy process-identity record for explicit investigation", () => {
+    const root = createTmpDir("process-lock-legacy-");
     roots.push(root);
-    const holder = makeLock(root);
-    holder.acquire();
-    const candidate = makeLock(root, new ProcessIdentitySource({
-      platform: "linux", pid: process.pid,
-      readBootIdentity: () => { throw new Error("boot unavailable"); },
-      readProcessStartFingerprint: () => "441",
-    }));
-    assert.throws(() => candidate.acquire(), (error) => error.lockStatus === "unknown");
-    assert.equal(fs.existsSync(holder.lockPath), true);
-    holder.release();
+    const lock = makeLock(root);
+    const bytes = JSON.stringify({ version: 1, kind: "process-lock-test", processIdentity: { pid: process.pid } });
+    fs.writeFileSync(lock.lockPath, bytes);
+    assert.throws(() => lock.acquire(), (error) => error.lockStatus === "unknown");
+    assert.equal(fs.readFileSync(lock.lockPath, "utf8"), bytes);
   });
 
   it("re-observes an owner that releases between lstat and open, then acquires", () => {
@@ -195,10 +190,10 @@ describe("ProcessLock", () => {
       if (target === holder.lockPath) ownerDescriptor = descriptor;
       return descriptor;
     };
-    fs.fstatSync = (descriptor) => {
-      const stat = originalFstat(descriptor);
+    fs.fstatSync = (descriptor, ...options) => {
+      const stat = originalFstat(descriptor, ...options);
       if (descriptor !== ownerDescriptor) return stat;
-      return { dev: stat.dev, ino: stat.ino + 1, size: stat.size, isFile: () => true };
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: stat.ino + (typeof stat.ino === "bigint" ? 1n : 1) });
     };
     fs.closeSync = (descriptor) => {
       originalClose(descriptor);
@@ -262,7 +257,7 @@ describe("ProcessLock", () => {
     holder.acquire();
     const foreign = new ProcessLock({
       directoryAuthority: new RealDirectoryAuthority(root), fileName: ".process-lock.foreign.test.lock", kind: "process-lock-test",
-      authority: { root: fs.realpathSync(root) }, processIdentitySource: identitySource(),
+      authority: { root: fs.realpathSync(root) },
     });
     foreign.acquire();
     const inode = fs.lstatSync(holder.lockPath).ino;
@@ -273,6 +268,49 @@ describe("ProcessLock", () => {
     assert.deepEqual(fs.readFileSync(holder.lockPath), foreignBytes);
     assert.equal(fs.lstatSync(holder.lockPath).ino, inode);
     foreign.release();
+  });
+
+  it("revalidates the exact token after release starts before removing the file", () => {
+    const root = createTmpDir("process-lock-release-token-race-");
+    roots.push(root);
+    const holder = makeLock(root);
+    holder.acquire();
+    const record = holder.inspect().owner.toJSON();
+    record.ownerToken = "11111111-1111-4111-8111-111111111111";
+    const replacement = JSON.stringify(record);
+    const open = fs.openSync;
+    let reads = 0;
+    fs.openSync = (target, flags, ...args) => {
+      if (target === holder.lockPath && flags === "r" && ++reads === 2) fs.writeFileSync(holder.lockPath, replacement);
+      return open(target, flags, ...args);
+    };
+    try {
+      assert.throws(() => holder.release(), (error) => error.name === "ProcessLockTransitionError"
+        && error.cause.cause.lockStatus === "ownership-changed");
+    } finally { fs.openSync = open; }
+    assert.equal(fs.readFileSync(holder.lockPath, "utf8"), replacement);
+  });
+
+  it("read-only inspection of an absent namespace creates no directory", () => {
+    const root = createTmpDir("process-lock-absent-inspection-");
+    roots.push(root);
+    const lock = new ProcessLock({ directoryAuthority: new RealDirectoryAuthority(path.join(root, "missing"), { create: true }),
+      fileName: "owner.lock", kind: "inspection", authority: { root } });
+    assert.equal(lock.inspect(), null);
+    assert.deepEqual(fs.readdirSync(root), []);
+  });
+
+  it("a separate observer cannot release a holder using the persisted token", () => {
+    const root = createTmpDir("process-lock-observer-release-");
+    roots.push(root);
+    const holder = makeLock(root);
+    holder.acquire();
+    const observer = makeLock(root);
+    const before = fs.readFileSync(holder.lockPath);
+    observer.inspect();
+    observer.release();
+    assert.deepEqual(fs.readFileSync(holder.lockPath), before);
+    holder.release();
   });
 
   it("preserves owner-read and descriptor-close failures without changing the lock", () => {

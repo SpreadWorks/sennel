@@ -31,7 +31,7 @@ function digest(value, field) {
 }
 
 export function sameTaskReviewRepositorySnapshot(left, right) {
-  return JSON.stringify(left.toJSON()) === JSON.stringify(right.toJSON());
+  return left.sameObservation(right);
 }
 
 function sameAttempt(left, right) {
@@ -80,7 +80,8 @@ export class TaskReviewUnsealedCheckpoint {
     this.observed = value.observed instanceof WorkerArtifactRepositoryMutationSnapshot
       ? value.observed : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.observed, { root, runtimeLocks });
     if (!sameAttempt(this.attempt, this.baseline.attempt) || !sameTaskReviewRepositorySnapshot(this.baseline.snapshot, this.observed)) {
-      throw new Error("Task Review checkpoint does not prove a zero-effect worker boundary");
+      const changed = this.baseline.snapshot.observationChanges(this.observed);
+      throw new Error(`Task Review checkpoint does not prove a zero-effect worker boundary${changed.length === 0 ? "" : `: ${changed.slice(0, 20).join(", ")}`}`);
     }
     const unsigned = this.unsignedJSON();
     this.digest = sha(unsigned);

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "phase": "draft",
+  "generatedAt": "2026-11-04T03:31:56.296Z",
+  "result": "fail",
+  "evaluations": [],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "R-1",
+      "where": {
+        "file": "draft.json",
+        "locator": "goal"
+      },
+      "observed": "State the selected behavior precisely.",
+      "severity": "blocking",
+      "refs": [
+        "R-1"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "GATE_REJECTED"
+  },
+  "lineage": "67746892ed3c887045afe8fd1607dea0ae5240a0e0e26740927e9a2daa313524",
+  "failureCode": "GATE_REJECTED"
+}

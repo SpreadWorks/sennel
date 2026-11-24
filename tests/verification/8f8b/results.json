@@ -1,0 +1,2312 @@
+{
+  "board": "8f8b",
+  "currentSummary": {
+    "observedCases": 130,
+    "passed": 130,
+    "failed": 0,
+    "skipped": 0,
+    "reusedUnaffectedDraftCases": 16
+  },
+  "currentCases": [
+    {
+      "name": "artifact execution distinguishes a first claim from reacquiring an unfinished claim",
+      "status": "passed",
+      "durationMs": 6.05851,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "sealed and partially published results replay before considering additional execution",
+      "status": "passed",
+      "durationMs": 3.764074,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "a phase owner that completed the prior generation selects its next execution without replaying old results",
+      "status": "passed",
+      "durationMs": 1.050359,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "only authenticated stopped or unstarted claims with remaining budget select explicit recovery",
+      "status": "passed",
+      "durationMs": 1.337197,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "saved replacement permits one unused call and requires explicit reconciliation for an unstarted reservation",
+      "status": "passed",
+      "durationMs": 3.226395,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "an already authorized tooling retry continues after recovery without allocating another recovery receipt",
+      "status": "passed",
+      "durationMs": 1.724757,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "tooling retry authorization cannot start a worker while the previous physical execution is running",
+      "status": "passed",
+      "durationMs": 1.662598,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "invalid or unknown publication evidence refuses execution while retaining the diagnostic",
+      "status": "passed",
+      "durationMs": 0.602839,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "phase owners retain their frontier and acquire only the saved recovery generation and budget",
+      "status": "passed",
+      "durationMs": 1.776197,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "conditional Draft consumes the shared authorization decision while retaining its own publication lifecycle",
+      "status": "passed",
+      "durationMs": 1.899116,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "execution observations require their typed frontier and supported classifications",
+      "status": "passed",
+      "durationMs": 0.779559,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "a conditional recovery reuses its selected Result and creates the authorized generation checkpoint",
+      "status": "passed",
+      "durationMs": 7.792666,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "conditional recovery refuses legacy, unclaimed, published, stale generation and foreign claim states",
+      "status": "passed",
+      "durationMs": 4.670072,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "conditional recovery refuses changed target provenance, checkpoint content and Attempt binding",
+      "status": "passed",
+      "durationMs": 1.138638,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "StepResult is abstract and every concrete Result has one unique fixed contract",
+      "status": "passed",
+      "durationMs": 5.691631,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "StepResult readback rejects unknown kind, mismatched type, and wrong Step",
+      "status": "passed",
+      "durationMs": 0.596639,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "stepResultDigest accepts only a concrete StepResult",
+      "status": "passed",
+      "durationMs": 0.654759,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "StepErrorResult preserves generic code/data and Flow error identity on readback",
+      "status": "passed",
+      "durationMs": 1.057878,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "Result.persist resolves only after the service returns its durable receipt",
+      "status": "passed",
+      "durationMs": 0.3112,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "Step.execute accepts only a concrete StepResult boundary",
+      "status": "passed",
+      "durationMs": 0.547399,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "Step.execute starts its asynchronous operation immediately and waits for acknowledgement",
+      "status": "passed",
+      "durationMs": 1.340597,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "generation seed uses existing canonical candidate classes and stores manifest metadata without bytes",
+      "status": "passed",
+      "durationMs": 4.360833,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 operands project only source binding, remaining R identities/statuses and existing retry values",
+      "status": "passed",
+      "durationMs": 3.651834,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 dedicated operand export: RequirementTestResultBinding",
+      "status": "passed",
+      "durationMs": 0.1694,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 dedicated operand export: RequirementTestResultFrontier",
+      "status": "passed",
+      "durationMs": 0.319359,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 dedicated operand export: RequirementTestRetryState",
+      "status": "passed",
+      "durationMs": 0.10684,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateCandidateSavedResult: single registry fixes concrete class, kind, type and leaf",
+      "status": "passed",
+      "durationMs": 0.281039,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateCandidateSavedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+      "status": "passed",
+      "durationMs": 3.371194,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateCandidateSavedResult: constructor refuses missing, untyped and undeclared operands",
+      "status": "passed",
+      "durationMs": 2.028717,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateCandidateSavedResult: readback refuses identity, schema and forbidden payload tampering",
+      "status": "passed",
+      "durationMs": 5.151551,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateStructuralRejectedResult: single registry fixes concrete class, kind, type and leaf",
+      "status": "passed",
+      "durationMs": 0.911478,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateStructuralRejectedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+      "status": "passed",
+      "durationMs": 1.260998,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateStructuralRejectedResult: constructor refuses missing, untyped and undeclared operands",
+      "status": "passed",
+      "durationMs": 1.344197,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "TestGenerateStructuralRejectedResult: readback refuses identity, schema and forbidden payload tampering",
+      "status": "passed",
+      "durationMs": 2.987275,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 binding refuses another R, Spec, leaf, Attempt or candidate publication identity",
+      "status": "passed",
+      "durationMs": 2.218836,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 digest includes R frontier order, candidate lineage/bytes, auto mode and each retry counter",
+      "status": "passed",
+      "durationMs": 5.137872,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 Definition selects the same final-candidate Settlement from saved Result alone",
+      "status": "passed",
+      "durationMs": 1.994796,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "existing ordinary/Error codecs retain kind/type and code/data while refusing generic payload",
+      "status": "passed",
+      "durationMs": 1.368158,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 registry is closed for all five leaves and reuses StepErrorResult only for common errors",
+      "status": "passed",
+      "durationMs": 1.457477,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-execution-recovery-required: saved typed recovery selects only its own execution recovery Settlement",
+      "status": "passed",
+      "durationMs": 3.572154,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-execution-recovery-required: saved typed recovery selects only its own execution recovery Settlement",
+      "status": "passed",
+      "durationMs": 1.170318,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 recovery codec refuses generic test operands and unauthenticated replacement evidence",
+      "status": "passed",
+      "durationMs": 1.928397,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 approval-awaiting-user: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.698399,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 approval-confirmed-with-tests: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.715359,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 approval-confirmed-without-tests: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.462439,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-candidate-saved: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.42696,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-structural-rejected: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.431759,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-execution-required: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.406319,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-passed: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.432439,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-advisory: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.40216,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-rejected: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.434519,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-progress-saved: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.403919,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-candidate-saved: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.451639,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-structural-rejected: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.41172,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-gate-compatible: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.39804,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-gate-incompatible: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.426919,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.412079,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.423039,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.39716,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-gate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.442079,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-external-blocked: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.483439,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-external-blocked: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.458399,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-external-blocked: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.423279,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 approval-error: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.40996,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate-error: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.393359,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review-error: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.405999,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair-error: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.380599,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-gate-error: fixed registry identity and malformed saved operands are refused",
+      "status": "passed",
+      "durationMs": 0.44152,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 approval: common Error codec retains class/code/data and selects connector-free Failure",
+      "status": "passed",
+      "durationMs": 2.324196,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-generate: common Error codec retains class/code/data and selects connector-free Failure",
+      "status": "passed",
+      "durationMs": 2.041836,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-review: common Error codec retains class/code/data and selects connector-free Failure",
+      "status": "passed",
+      "durationMs": 1.649317,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-repair: common Error codec retains class/code/data and selects connector-free Failure",
+      "status": "passed",
+      "durationMs": 1.979157,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 test-gate: common Error codec retains class/code/data and selects connector-free Failure",
+      "status": "passed",
+      "durationMs": 1.606077,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 all Result binding/frontier/retry operand codecs reject undeclared saved facts",
+      "status": "passed",
+      "durationMs": 1.809797,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 TestGenerateCandidateSavedResult rejects whole plan/bytes and nested publication or manifest additions",
+      "status": "passed",
+      "durationMs": 6.923748,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 TestGenerateStructuralRejectedResult rejects whole plan/bytes and nested publication or manifest additions",
+      "status": "passed",
+      "durationMs": 2.728795,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 candidate manifest binds support owner, primary R, lineage and exact member hash/size without bytes",
+      "status": "passed",
+      "durationMs": 2.115157,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 Result digest binds same support bytes to their primary publication owner",
+      "status": "passed",
+      "durationMs": 0.826398,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 final generation selects Review while remaining R continues the same Attempt without Connector",
+      "status": "passed",
+      "durationMs": 1.866277,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 structural rejection uses saved automatic budget/finding to select repair or defer",
+      "status": "passed",
+      "durationMs": 2.648516,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 structural rejection uses saved manual budget/finding to select repair or defer",
+      "status": "passed",
+      "durationMs": 2.189437,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 binding publication identity includes Activity as well as unchanged bytes",
+      "status": "passed",
+      "durationMs": 0.794118,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 frontier refuses duplicate/cross-group R and preserves staged/pending order after readback",
+      "status": "passed",
+      "durationMs": 0.705919,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 retry operand retains separate counters/mode/complete recorded finding identity",
+      "status": "passed",
+      "durationMs": 0.429999,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 named Gate artifact readback retains candidate lineage and distinguishes assertion kinds",
+      "status": "passed",
+      "durationMs": 1.267838,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 repair checkpoint seed is a real bounded batch with durable exact finding/receipt/coordinator identity",
+      "status": "passed",
+      "durationMs": 31.947226,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 repair Result requires a metadata-only dedicated progress codec, never staged source bytes",
+      "status": "passed",
+      "durationMs": 2.021596,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 evidence checker binds Gate named observation and publication and rejects arbitrary/stale evidence",
+      "status": "passed",
+      "durationMs": 4.859432,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 evidence checker binds Review work-unit/evidence publication and refuses same-size identity substitution",
+      "status": "passed",
+      "durationMs": 10.203382,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 evidence checker requires exact unexecuted Review work-unit without fabricating an accepted publication",
+      "status": "passed",
+      "durationMs": 1.681998,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 evidence checker binds tooling Gate Result evidence to the actual named runner observation",
+      "status": "passed",
+      "durationMs": 2.285397,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 Settlement outcome checker rejects wrong source/result, target, and connector-bearing stops",
+      "status": "passed",
+      "durationMs": 2.686835,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "02 Settlement checker without an expected route still binds the saved Result identity",
+      "status": "passed",
+      "durationMs": 0.625799,
+      "checkId": "result-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "skill source directories use sennel.* naming",
+      "status": "passed",
+      "durationMs": 1.947717,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "SKILL.md name fields use sennel.* naming",
+      "status": "passed",
+      "durationMs": 1.170158,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "deploySkills copies the exact bundled set as regular files with expanded content to both targets",
+      "status": "passed",
+      "durationMs": 26.986195,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "setup --agent claude,codex generates both instruction files and deploys skills as regular files",
+      "status": "passed",
+      "durationMs": 1890.897154,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "setup without --agent deploys skills without generating instruction files",
+      "status": "passed",
+      "durationMs": 1872.118506,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "summarizes the original Spec within 60000 characters and reloads the exact cached view across CLI processes without canonical writes",
+      "status": "passed",
+      "durationMs": 7074.526567,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "rejects a changed source excerpt without saving a summary or modifying canonical Flow, Spec, Review, or Gate artifacts",
+      "status": "passed",
+      "durationMs": 5160.048053,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "every artifact recovery producer prepares its actual registered private Service from acquired selection and save capability",
+      "status": "passed",
+      "durationMs": 42.925887,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "deployed SKILL.md contains no include directives",
+      "status": "passed",
+      "durationMs": 20.338006,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "deployed content includes partials content",
+      "status": "passed",
+      "durationMs": 8.471625,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "lets the bundled canonical skill replace a colliding plugin skill",
+      "status": "passed",
+      "durationMs": 11.84314,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "rejects an invalid manifest before writing any skill",
+      "status": "passed",
+      "durationMs": 2.548516,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "replaces dangling canonical skill-root symlinks during a forced deployment",
+      "status": "passed",
+      "durationMs": 8.716106,
+      "checkId": "local-integration-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode",
+      "status": "passed",
+      "durationMs": 386205.285289,
+      "checkId": "acceptance-durable-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call",
+      "status": "passed",
+      "durationMs": 312028.792211,
+      "checkId": "acceptance-phase-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "checkpoints an unauthorized Gate repair handoff without consuming the Attempt budget",
+      "status": "passed",
+      "durationMs": 10468.063994,
+      "checkId": "draft-corrections-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "retains an unpublished Draft Attempt and retry budget after provider refusal across restart",
+      "status": "passed",
+      "durationMs": 1109.740209,
+      "checkId": "draft-corrections-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "connects Draft entry through worker-free refine and Gate repair to the canonical Spec handoff",
+      "status": "passed",
+      "durationMs": 17506.332838,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "releases handoff authority after worker-free draft-refine settlement",
+      "status": "passed",
+      "durationMs": 3476.88102,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "continues a fixture-prepared boundary from Store readback and hands the exact canonical Draft to Spec",
+      "status": "passed",
+      "durationMs": 9549.76392,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "reuses an unused refine claim after reload for exactly one original-generation provider call",
+      "status": "passed",
+      "durationMs": 10719.672939,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "requires explicit recovery for an unsealed refine response before another provider call",
+      "status": "passed",
+      "durationMs": 7195.866029,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "replays the exact sealed refine response after reload without repeating its provider or publication",
+      "status": "passed",
+      "durationMs": 10679.868689,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "replays the exact publication refine response after reload without repeating its provider or publication",
+      "status": "passed",
+      "durationMs": 9319.665771,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses publication refine replay after formal project tests changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 6812.830927,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses sealed refine replay after unowned single-dot runtime suffix changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 6939.930625,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses sealed refine replay after canonical Draft input changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 6745.173186,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses publication refine replay after newer canonical Draft publication changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 7838.266306,
+      "checkId": "draft-corrections-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "refuses publication refine replay after unrelated catalog publication changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 6892.175617,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses sealed refine replay after stored request binding changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 6502.893406,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses publication refine replay after published sealed payload changes without a provider or persistence effects",
+      "status": "passed",
+      "durationMs": 7067.012745,
+      "checkId": "draft-corrections-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "refuses reading or dispatching a corrupted saved refine contract without repairing it or consuming budget",
+      "status": "passed",
+      "durationMs": 6140.882351,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "keeps produced refine requests bounded when valid historical Activity bodies grow and replays their compact prefix proof",
+      "status": "passed",
+      "durationMs": 21032.913564,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses compact refine replay when its raw journal prefix changes without effects",
+      "status": "passed",
+      "durationMs": 6509.380477,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "refuses nested refine replay after staging canonical Draft bytes without a source or provider change",
+      "status": "passed",
+      "durationMs": 12558.194854,
+      "checkId": "draft-affected-first",
+      "verification": "reused-unaffected-case"
+    },
+    {
+      "name": "the original unused grant remains available before any Prompt reservation across recovery and reload",
+      "status": "passed",
+      "durationMs": 871.790938,
+      "checkId": "recovery-durable-final",
+      "verification": "latest-case-execution"
+    },
+    {
+      "name": "a stopped unsealed conditional claim saves one replacement and owner checkpoint, then replays them after fresh readback",
+      "status": "passed",
+      "durationMs": 12388.61949,
+      "checkId": "recovery-durable-final",
+      "verification": "latest-case-execution"
+    }
+  ],
+  "checks": [
+    {
+      "id": "baseline-result",
+      "log": ".tmp/8f8b/baseline-result.log",
+      "exitCode": 1,
+      "stage": "before",
+      "classification": "test-oracle-defect",
+      "command": "node tests/run.js --file tests/unit/flow-engine-step-result.test.js --file tests/unit/structured-step-result-contract.test.js --jobs 1",
+      "logSha256": "a34fbc684c7fb63f13c745208afe301b84048d3d483692809cac2db4f2c6fe64",
+      "totals": {
+        "tests": 76,
+        "pass": 74,
+        "fail": 2,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 2563.169256
+      },
+      "cases": [
+        {
+          "name": "StepResult is abstract and every concrete Result has one unique fixed contract",
+          "status": "failed",
+          "durationMs": 9.503744,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "StepResult readback rejects unknown kind, mismatched type, and wrong Step",
+          "status": "passed",
+          "durationMs": 0.967518
+        },
+        {
+          "name": "stepResultDigest accepts only a concrete StepResult",
+          "status": "passed",
+          "durationMs": 0.880798
+        },
+        {
+          "name": "StepErrorResult preserves generic code/data and Flow error identity on readback",
+          "status": "passed",
+          "durationMs": 1.017839
+        },
+        {
+          "name": "Result.persist resolves only after the service returns its durable receipt",
+          "status": "passed",
+          "durationMs": 0.47428
+        },
+        {
+          "name": "Step.execute accepts only a concrete StepResult boundary",
+          "status": "passed",
+          "durationMs": 0.496639
+        },
+        {
+          "name": "Step.execute starts its asynchronous operation immediately and waits for acknowledgement",
+          "status": "passed",
+          "durationMs": 1.338317
+        },
+        {
+          "name": "generation seed uses existing canonical candidate classes and stores manifest metadata without bytes",
+          "status": "passed",
+          "durationMs": 4.673512
+        },
+        {
+          "name": "02 operands project only source binding, remaining R identities/statuses and existing retry values",
+          "status": "passed",
+          "durationMs": 3.664913
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestResultBinding",
+          "status": "passed",
+          "durationMs": 0.211
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestResultFrontier",
+          "status": "passed",
+          "durationMs": 0.299559
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestRetryState",
+          "status": "passed",
+          "durationMs": 0.11264
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: single registry fixes concrete class, kind, type and leaf",
+          "status": "passed",
+          "durationMs": 0.28584
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+          "status": "passed",
+          "durationMs": 3.353275
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: constructor refuses missing, untyped and undeclared operands",
+          "status": "passed",
+          "durationMs": 2.023276
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: readback refuses identity, schema and forbidden payload tampering",
+          "status": "passed",
+          "durationMs": 4.997711
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: single registry fixes concrete class, kind, type and leaf",
+          "status": "passed",
+          "durationMs": 0.889478
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+          "status": "passed",
+          "durationMs": 1.269158
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: constructor refuses missing, untyped and undeclared operands",
+          "status": "passed",
+          "durationMs": 1.238958
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: readback refuses identity, schema and forbidden payload tampering",
+          "status": "passed",
+          "durationMs": 3.420754
+        },
+        {
+          "name": "02 binding refuses another R, Spec, leaf, Attempt or candidate publication identity",
+          "status": "passed",
+          "durationMs": 5.70139
+        },
+        {
+          "name": "02 digest includes R frontier order, candidate lineage/bytes, auto mode and each retry counter",
+          "status": "passed",
+          "durationMs": 15.192614
+        },
+        {
+          "name": "02 Definition selects the same final-candidate Settlement from saved Result alone",
+          "status": "passed",
+          "durationMs": 4.304873
+        },
+        {
+          "name": "existing ordinary/Error codecs retain kind/type and code/data while refusing generic payload",
+          "status": "passed",
+          "durationMs": 1.604037
+        },
+        {
+          "name": "02 registry is closed for all five leaves and reuses StepErrorResult only for common errors",
+          "status": "failed",
+          "durationMs": 10.683461,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "02 approval-awaiting-user: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.739959
+        },
+        {
+          "name": "02 approval-confirmed-with-tests: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.418639
+        },
+        {
+          "name": "02 approval-confirmed-without-tests: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.430239
+        },
+        {
+          "name": "02 test-generate-candidate-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.40076
+        },
+        {
+          "name": "02 test-generate-structural-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.418999
+        },
+        {
+          "name": "02 test-review-execution-required: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.390279
+        },
+        {
+          "name": "02 test-review-passed: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.433279
+        },
+        {
+          "name": "02 test-review-advisory: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.40388
+        },
+        {
+          "name": "02 test-review-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.627039
+        },
+        {
+          "name": "02 test-repair-progress-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.419959
+        },
+        {
+          "name": "02 test-repair-candidate-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.547999
+        },
+        {
+          "name": "02 test-repair-structural-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.457639
+        },
+        {
+          "name": "02 test-gate-compatible: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.448559
+        },
+        {
+          "name": "02 test-gate-incompatible: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.407719
+        },
+        {
+          "name": "02 test-generate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.52508
+        },
+        {
+          "name": "02 test-review-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.40396
+        },
+        {
+          "name": "02 test-repair-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.425959
+        },
+        {
+          "name": "02 test-gate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.406519
+        },
+        {
+          "name": "02 test-generate-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.443799
+        },
+        {
+          "name": "02 test-review-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.45892
+        },
+        {
+          "name": "02 test-repair-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.397559
+        },
+        {
+          "name": "02 approval-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.385479
+        },
+        {
+          "name": "02 test-generate-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.371599
+        },
+        {
+          "name": "02 test-review-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.49208
+        },
+        {
+          "name": "02 test-repair-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.38784
+        },
+        {
+          "name": "02 test-gate-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.402839
+        },
+        {
+          "name": "02 approval: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 2.184836
+        },
+        {
+          "name": "02 test-generate: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.917997
+        },
+        {
+          "name": "02 test-review: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.482597
+        },
+        {
+          "name": "02 test-repair: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.842117
+        },
+        {
+          "name": "02 test-gate: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.534717
+        },
+        {
+          "name": "02 all Result binding/frontier/retry operand codecs reject undeclared saved facts",
+          "status": "passed",
+          "durationMs": 1.781677
+        },
+        {
+          "name": "02 TestGenerateCandidateSavedResult rejects whole plan/bytes and nested publication or manifest additions",
+          "status": "passed",
+          "durationMs": 2.013477
+        },
+        {
+          "name": "02 TestGenerateStructuralRejectedResult rejects whole plan/bytes and nested publication or manifest additions",
+          "status": "passed",
+          "durationMs": 1.810437
+        },
+        {
+          "name": "02 candidate manifest binds support owner, primary R, lineage and exact member hash/size without bytes",
+          "status": "passed",
+          "durationMs": 1.434757
+        },
+        {
+          "name": "02 Result digest binds same support bytes to their primary publication owner",
+          "status": "passed",
+          "durationMs": 0.624759
+        },
+        {
+          "name": "02 final generation selects Review while remaining R continues the same Attempt without Connector",
+          "status": "passed",
+          "durationMs": 1.510757
+        },
+        {
+          "name": "02 structural rejection uses saved automatic budget/finding to select repair or defer",
+          "status": "passed",
+          "durationMs": 2.337876
+        },
+        {
+          "name": "02 structural rejection uses saved manual budget/finding to select repair or defer",
+          "status": "passed",
+          "durationMs": 1.721557
+        },
+        {
+          "name": "02 binding publication identity includes Activity as well as unchanged bytes",
+          "status": "passed",
+          "durationMs": 0.705759
+        },
+        {
+          "name": "02 frontier refuses duplicate/cross-group R and preserves staged/pending order after readback",
+          "status": "passed",
+          "durationMs": 0.642279
+        },
+        {
+          "name": "02 retry operand retains separate counters/mode/complete recorded finding identity",
+          "status": "passed",
+          "durationMs": 0.369399
+        },
+        {
+          "name": "02 named Gate artifact readback retains candidate lineage and distinguishes assertion kinds",
+          "status": "passed",
+          "durationMs": 1.050838
+        },
+        {
+          "name": "02 repair checkpoint seed is a real bounded batch with durable exact finding/receipt/coordinator identity",
+          "status": "passed",
+          "durationMs": 17.907329
+        },
+        {
+          "name": "02 repair Result requires a metadata-only dedicated progress codec, never staged source bytes",
+          "status": "passed",
+          "durationMs": 1.668918
+        },
+        {
+          "name": "02 evidence checker binds Gate named observation and publication and rejects arbitrary/stale evidence",
+          "status": "passed",
+          "durationMs": 4.174872
+        },
+        {
+          "name": "02 evidence checker binds Review work-unit/evidence publication and refuses same-size identity substitution",
+          "status": "passed",
+          "durationMs": 10.223663
+        },
+        {
+          "name": "02 evidence checker requires exact unexecuted Review work-unit without fabricating an accepted publication",
+          "status": "passed",
+          "durationMs": 1.396357
+        },
+        {
+          "name": "02 evidence checker binds tooling Gate Result evidence to the actual named runner observation",
+          "status": "passed",
+          "durationMs": 2.208597
+        },
+        {
+          "name": "02 Settlement outcome checker rejects wrong source/result, target, and connector-bearing stops",
+          "status": "passed",
+          "durationMs": 2.061717
+        },
+        {
+          "name": "02 Settlement checker without an expected route still binds the saved Result identity",
+          "status": "passed",
+          "durationMs": 0.439119
+        }
+      ],
+      "inputProfile": "baseCommit"
+    },
+    {
+      "id": "baseline-acceptance-durable",
+      "log": ".tmp/8f8b/baseline-acceptance-durable.log",
+      "exitCode": 1,
+      "stage": "before",
+      "classification": "fixture-initialization-error",
+      "command": "node --import ./src/sennel.js --test --test-concurrency=1 --test-name-pattern='reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode' tests/integration/flow-cli/acceptance-durable-execution.test.js",
+      "logSha256": "3f64bb1ea0295d87b8ef28393205d72c0ac36d0677bb7bff2078c340807aab6b",
+      "totals": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 218023.94357
+      },
+      "cases": [
+        {
+          "name": "reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode",
+          "status": "failed",
+          "durationMs": 47.684279,
+          "errorCode": "ERR_TEST_FAILURE",
+          "error": "\"Cannot access 'scenario' before initialization\""
+        }
+      ],
+      "inputProfile": "baseCommit"
+    },
+    {
+      "id": "baseline-acceptance-phase",
+      "log": ".tmp/8f8b/baseline-acceptance-phase.log",
+      "exitCode": 1,
+      "stage": "before",
+      "classification": "fixture-initialization-error",
+      "command": "node --import ./src/sennel.js --test --test-concurrency=1 --test-name-pattern='A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call' tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+      "logSha256": "92e268a8209c111b88ca9514dfcc6d57de32853566d2823641c9ebc0414fc09f",
+      "totals": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 219779.77739
+      },
+      "cases": [
+        {
+          "name": "A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call",
+          "status": "failed",
+          "durationMs": 217029.577705,
+          "errorCode": "ERR_TEST_FAILURE",
+          "error": "\"Cannot access 'scenario' before initialization\""
+        }
+      ],
+      "inputProfile": "baseCommit"
+    },
+    {
+      "id": "baseline-draft-minimal",
+      "log": ".tmp/8f8b/baseline-draft-minimal.log",
+      "exitCode": 1,
+      "stage": "before",
+      "classification": "mixed-test-contract-defects",
+      "command": "node --test --test-concurrency=1 --import ./src/sennel.js --test-name-pattern='connects Draft entry through worker-free refine and Gate repair to the canonical Spec handoff|holds a real refine claim with a (missing|unsealed) response after reload without another provider or state change|refuses sealed refine replay after stored request binding changes without a provider or persistence effects|refuses publication refine replay after (newer canonical Draft publication|published sealed payload) changes without a provider or persistence effects' tests/integration/flow-cli/draft-dispatch-authority.test.js tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+      "logSha256": "3a14c0c745ca43f412ff2908468f5e6a7cc0e223f8877f1596d455148ebb3657",
+      "totals": {
+        "tests": 5,
+        "pass": 0,
+        "fail": 5,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 42090.393444
+      },
+      "cases": [
+        {
+          "name": "connects Draft entry through worker-free refine and Gate repair to the canonical Spec handoff",
+          "status": "failed",
+          "durationMs": 846.985643,
+          "errorCode": "PROMPT_EXECUTION_ADAPTER_INVALID",
+          "error": "'Durable execution requires an adapter that claims provider admission'"
+        },
+        {
+          "name": "holds a real refine claim with a unsealed response after reload without another provider or state change",
+          "status": "failed",
+          "durationMs": 6139.649505,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "refuses publication refine replay after newer canonical Draft publication changes without a provider or persistence effects",
+          "status": "failed",
+          "durationMs": 11168.776975,
+          "errorCode": "ERR_TEST_FAILURE",
+          "error": "\"Cannot read properties of undefined (reading 'directive')\""
+        },
+        {
+          "name": "refuses sealed refine replay after stored request binding changes without a provider or persistence effects",
+          "status": "failed",
+          "durationMs": 6488.490835,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "refuses publication refine replay after published sealed payload changes without a provider or persistence effects",
+          "status": "failed",
+          "durationMs": 6686.933019,
+          "errorCode": "ERR_TEST_FAILURE",
+          "error": "\"Cannot read properties of undefined (reading 'directive')\""
+        }
+      ],
+      "inputProfile": "baseCommit"
+    },
+    {
+      "id": "baseline-draft-missing",
+      "log": ".tmp/8f8b/baseline-draft-missing.log",
+      "exitCode": 1,
+      "stage": "before",
+      "classification": "test-contract-defect",
+      "command": "node --test --test-concurrency=1 --import ./src/sennel.js --test-name-pattern='^holds a real refine claim with a missing response after reload without another provider or state change$' tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+      "logSha256": "69b7717229420646b0e8e22b9ab097c86ae7633315ef7e9e7eaaf24a18fc53a9",
+      "totals": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 8175.441583
+      },
+      "cases": [
+        {
+          "name": "holds a real refine claim with a missing response after reload without another provider or state change",
+          "status": "failed",
+          "durationMs": 6109.917964,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        }
+      ],
+      "inputProfile": "baseCommit"
+    },
+    {
+      "id": "result-final",
+      "log": ".tmp/8f8b/result-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node tests/run.js --file tests/unit/flow-engine-step-result.test.js --file tests/unit/structured-step-result-contract.test.js --file tests/unit/artifact-worker-execution-continuation.test.js --file tests/unit/draft-worker-recovery-checkpoint.test.js --jobs 1",
+      "logSha256": "4954c438f787a0975cedec68e04c330049a11aa115aeff2171c79f22e9080c60",
+      "totals": {
+        "tests": 93,
+        "pass": 93,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 5039.982974
+      },
+      "cases": [
+        {
+          "name": "artifact execution distinguishes a first claim from reacquiring an unfinished claim",
+          "status": "passed",
+          "durationMs": 6.05851
+        },
+        {
+          "name": "sealed and partially published results replay before considering additional execution",
+          "status": "passed",
+          "durationMs": 3.764074
+        },
+        {
+          "name": "a phase owner that completed the prior generation selects its next execution without replaying old results",
+          "status": "passed",
+          "durationMs": 1.050359
+        },
+        {
+          "name": "only authenticated stopped or unstarted claims with remaining budget select explicit recovery",
+          "status": "passed",
+          "durationMs": 1.337197
+        },
+        {
+          "name": "saved replacement permits one unused call and requires explicit reconciliation for an unstarted reservation",
+          "status": "passed",
+          "durationMs": 3.226395
+        },
+        {
+          "name": "an already authorized tooling retry continues after recovery without allocating another recovery receipt",
+          "status": "passed",
+          "durationMs": 1.724757
+        },
+        {
+          "name": "tooling retry authorization cannot start a worker while the previous physical execution is running",
+          "status": "passed",
+          "durationMs": 1.662598
+        },
+        {
+          "name": "invalid or unknown publication evidence refuses execution while retaining the diagnostic",
+          "status": "passed",
+          "durationMs": 0.602839
+        },
+        {
+          "name": "phase owners retain their frontier and acquire only the saved recovery generation and budget",
+          "status": "passed",
+          "durationMs": 1.776197
+        },
+        {
+          "name": "conditional Draft consumes the shared authorization decision while retaining its own publication lifecycle",
+          "status": "passed",
+          "durationMs": 1.899116
+        },
+        {
+          "name": "execution observations require their typed frontier and supported classifications",
+          "status": "passed",
+          "durationMs": 0.779559
+        },
+        {
+          "name": "a conditional recovery reuses its selected Result and creates the authorized generation checkpoint",
+          "status": "passed",
+          "durationMs": 7.792666
+        },
+        {
+          "name": "conditional recovery refuses legacy, unclaimed, published, stale generation and foreign claim states",
+          "status": "passed",
+          "durationMs": 4.670072
+        },
+        {
+          "name": "conditional recovery refuses changed target provenance, checkpoint content and Attempt binding",
+          "status": "passed",
+          "durationMs": 1.138638
+        },
+        {
+          "name": "StepResult is abstract and every concrete Result has one unique fixed contract",
+          "status": "passed",
+          "durationMs": 5.691631
+        },
+        {
+          "name": "StepResult readback rejects unknown kind, mismatched type, and wrong Step",
+          "status": "passed",
+          "durationMs": 0.596639
+        },
+        {
+          "name": "stepResultDigest accepts only a concrete StepResult",
+          "status": "passed",
+          "durationMs": 0.654759
+        },
+        {
+          "name": "StepErrorResult preserves generic code/data and Flow error identity on readback",
+          "status": "passed",
+          "durationMs": 1.057878
+        },
+        {
+          "name": "Result.persist resolves only after the service returns its durable receipt",
+          "status": "passed",
+          "durationMs": 0.3112
+        },
+        {
+          "name": "Step.execute accepts only a concrete StepResult boundary",
+          "status": "passed",
+          "durationMs": 0.547399
+        },
+        {
+          "name": "Step.execute starts its asynchronous operation immediately and waits for acknowledgement",
+          "status": "passed",
+          "durationMs": 1.340597
+        },
+        {
+          "name": "generation seed uses existing canonical candidate classes and stores manifest metadata without bytes",
+          "status": "passed",
+          "durationMs": 4.360833
+        },
+        {
+          "name": "02 operands project only source binding, remaining R identities/statuses and existing retry values",
+          "status": "passed",
+          "durationMs": 3.651834
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestResultBinding",
+          "status": "passed",
+          "durationMs": 0.1694
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestResultFrontier",
+          "status": "passed",
+          "durationMs": 0.319359
+        },
+        {
+          "name": "02 dedicated operand export: RequirementTestRetryState",
+          "status": "passed",
+          "durationMs": 0.10684
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: single registry fixes concrete class, kind, type and leaf",
+          "status": "passed",
+          "durationMs": 0.281039
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+          "status": "passed",
+          "durationMs": 3.371194
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: constructor refuses missing, untyped and undeclared operands",
+          "status": "passed",
+          "durationMs": 2.028717
+        },
+        {
+          "name": "TestGenerateCandidateSavedResult: readback refuses identity, schema and forbidden payload tampering",
+          "status": "passed",
+          "durationMs": 5.151551
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: single registry fixes concrete class, kind, type and leaf",
+          "status": "passed",
+          "durationMs": 0.911478
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: roundtrip retains next R frontier, adopted lineage and retry state",
+          "status": "passed",
+          "durationMs": 1.260998
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: constructor refuses missing, untyped and undeclared operands",
+          "status": "passed",
+          "durationMs": 1.344197
+        },
+        {
+          "name": "TestGenerateStructuralRejectedResult: readback refuses identity, schema and forbidden payload tampering",
+          "status": "passed",
+          "durationMs": 2.987275
+        },
+        {
+          "name": "02 binding refuses another R, Spec, leaf, Attempt or candidate publication identity",
+          "status": "passed",
+          "durationMs": 2.218836
+        },
+        {
+          "name": "02 digest includes R frontier order, candidate lineage/bytes, auto mode and each retry counter",
+          "status": "passed",
+          "durationMs": 5.137872
+        },
+        {
+          "name": "02 Definition selects the same final-candidate Settlement from saved Result alone",
+          "status": "passed",
+          "durationMs": 1.994796
+        },
+        {
+          "name": "existing ordinary/Error codecs retain kind/type and code/data while refusing generic payload",
+          "status": "passed",
+          "durationMs": 1.368158
+        },
+        {
+          "name": "02 registry is closed for all five leaves and reuses StepErrorResult only for common errors",
+          "status": "passed",
+          "durationMs": 1.457477
+        },
+        {
+          "name": "02 test-generate-execution-recovery-required: saved typed recovery selects only its own execution recovery Settlement",
+          "status": "passed",
+          "durationMs": 3.572154
+        },
+        {
+          "name": "02 test-repair-execution-recovery-required: saved typed recovery selects only its own execution recovery Settlement",
+          "status": "passed",
+          "durationMs": 1.170318
+        },
+        {
+          "name": "02 recovery codec refuses generic test operands and unauthenticated replacement evidence",
+          "status": "passed",
+          "durationMs": 1.928397
+        },
+        {
+          "name": "02 approval-awaiting-user: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.698399
+        },
+        {
+          "name": "02 approval-confirmed-with-tests: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.715359
+        },
+        {
+          "name": "02 approval-confirmed-without-tests: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.462439
+        },
+        {
+          "name": "02 test-generate-candidate-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.42696
+        },
+        {
+          "name": "02 test-generate-structural-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.431759
+        },
+        {
+          "name": "02 test-review-execution-required: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.406319
+        },
+        {
+          "name": "02 test-review-passed: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.432439
+        },
+        {
+          "name": "02 test-review-advisory: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.40216
+        },
+        {
+          "name": "02 test-review-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.434519
+        },
+        {
+          "name": "02 test-repair-progress-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.403919
+        },
+        {
+          "name": "02 test-repair-candidate-saved: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.451639
+        },
+        {
+          "name": "02 test-repair-structural-rejected: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.41172
+        },
+        {
+          "name": "02 test-gate-compatible: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.39804
+        },
+        {
+          "name": "02 test-gate-incompatible: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.426919
+        },
+        {
+          "name": "02 test-generate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.412079
+        },
+        {
+          "name": "02 test-review-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.423039
+        },
+        {
+          "name": "02 test-repair-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.39716
+        },
+        {
+          "name": "02 test-gate-tooling-unavailable: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.442079
+        },
+        {
+          "name": "02 test-generate-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.483439
+        },
+        {
+          "name": "02 test-review-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.458399
+        },
+        {
+          "name": "02 test-repair-external-blocked: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.423279
+        },
+        {
+          "name": "02 approval-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.40996
+        },
+        {
+          "name": "02 test-generate-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.393359
+        },
+        {
+          "name": "02 test-review-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.405999
+        },
+        {
+          "name": "02 test-repair-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.380599
+        },
+        {
+          "name": "02 test-gate-error: fixed registry identity and malformed saved operands are refused",
+          "status": "passed",
+          "durationMs": 0.44152
+        },
+        {
+          "name": "02 approval: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 2.324196
+        },
+        {
+          "name": "02 test-generate: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 2.041836
+        },
+        {
+          "name": "02 test-review: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.649317
+        },
+        {
+          "name": "02 test-repair: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.979157
+        },
+        {
+          "name": "02 test-gate: common Error codec retains class/code/data and selects connector-free Failure",
+          "status": "passed",
+          "durationMs": 1.606077
+        },
+        {
+          "name": "02 all Result binding/frontier/retry operand codecs reject undeclared saved facts",
+          "status": "passed",
+          "durationMs": 1.809797
+        },
+        {
+          "name": "02 TestGenerateCandidateSavedResult rejects whole plan/bytes and nested publication or manifest additions",
+          "status": "passed",
+          "durationMs": 6.923748
+        },
+        {
+          "name": "02 TestGenerateStructuralRejectedResult rejects whole plan/bytes and nested publication or manifest additions",
+          "status": "passed",
+          "durationMs": 2.728795
+        },
+        {
+          "name": "02 candidate manifest binds support owner, primary R, lineage and exact member hash/size without bytes",
+          "status": "passed",
+          "durationMs": 2.115157
+        },
+        {
+          "name": "02 Result digest binds same support bytes to their primary publication owner",
+          "status": "passed",
+          "durationMs": 0.826398
+        },
+        {
+          "name": "02 final generation selects Review while remaining R continues the same Attempt without Connector",
+          "status": "passed",
+          "durationMs": 1.866277
+        },
+        {
+          "name": "02 structural rejection uses saved automatic budget/finding to select repair or defer",
+          "status": "passed",
+          "durationMs": 2.648516
+        },
+        {
+          "name": "02 structural rejection uses saved manual budget/finding to select repair or defer",
+          "status": "passed",
+          "durationMs": 2.189437
+        },
+        {
+          "name": "02 binding publication identity includes Activity as well as unchanged bytes",
+          "status": "passed",
+          "durationMs": 0.794118
+        },
+        {
+          "name": "02 frontier refuses duplicate/cross-group R and preserves staged/pending order after readback",
+          "status": "passed",
+          "durationMs": 0.705919
+        },
+        {
+          "name": "02 retry operand retains separate counters/mode/complete recorded finding identity",
+          "status": "passed",
+          "durationMs": 0.429999
+        },
+        {
+          "name": "02 named Gate artifact readback retains candidate lineage and distinguishes assertion kinds",
+          "status": "passed",
+          "durationMs": 1.267838
+        },
+        {
+          "name": "02 repair checkpoint seed is a real bounded batch with durable exact finding/receipt/coordinator identity",
+          "status": "passed",
+          "durationMs": 31.947226
+        },
+        {
+          "name": "02 repair Result requires a metadata-only dedicated progress codec, never staged source bytes",
+          "status": "passed",
+          "durationMs": 2.021596
+        },
+        {
+          "name": "02 evidence checker binds Gate named observation and publication and rejects arbitrary/stale evidence",
+          "status": "passed",
+          "durationMs": 4.859432
+        },
+        {
+          "name": "02 evidence checker binds Review work-unit/evidence publication and refuses same-size identity substitution",
+          "status": "passed",
+          "durationMs": 10.203382
+        },
+        {
+          "name": "02 evidence checker requires exact unexecuted Review work-unit without fabricating an accepted publication",
+          "status": "passed",
+          "durationMs": 1.681998
+        },
+        {
+          "name": "02 evidence checker binds tooling Gate Result evidence to the actual named runner observation",
+          "status": "passed",
+          "durationMs": 2.285397
+        },
+        {
+          "name": "02 Settlement outcome checker rejects wrong source/result, target, and connector-bearing stops",
+          "status": "passed",
+          "durationMs": 2.686835
+        },
+        {
+          "name": "02 Settlement checker without an expected route still binds the saved Result identity",
+          "status": "passed",
+          "durationMs": 0.625799
+        }
+      ],
+      "inputProfile": "current"
+    },
+    {
+      "id": "local-integration-final",
+      "log": ".tmp/8f8b/local-integration-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node tests/run.js --file tests/integration/051-skill-namespace.test.js --file tests/integration/lib/skills-include.test.js --file tests/integration/flow-cli/commands/artifact-summary-input-limit.test.js --file tests/integration/flow/artifact-worker-recovery-service-boundary.test.js --jobs 1",
+      "logSha256": "a10624c9af1ec8e6fcaacf8320cb59ab97b31f68e1b9c367c2aa8667cfab3b00",
+      "totals": {
+        "tests": 13,
+        "pass": 13,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 22325.868673
+      },
+      "cases": [
+        {
+          "name": "skill source directories use sennel.* naming",
+          "status": "passed",
+          "durationMs": 1.947717
+        },
+        {
+          "name": "SKILL.md name fields use sennel.* naming",
+          "status": "passed",
+          "durationMs": 1.170158
+        },
+        {
+          "name": "deploySkills copies the exact bundled set as regular files with expanded content to both targets",
+          "status": "passed",
+          "durationMs": 26.986195
+        },
+        {
+          "name": "setup --agent claude,codex generates both instruction files and deploys skills as regular files",
+          "status": "passed",
+          "durationMs": 1890.897154
+        },
+        {
+          "name": "setup without --agent deploys skills without generating instruction files",
+          "status": "passed",
+          "durationMs": 1872.118506
+        },
+        {
+          "name": "summarizes the original Spec within 60000 characters and reloads the exact cached view across CLI processes without canonical writes",
+          "status": "passed",
+          "durationMs": 7074.526567
+        },
+        {
+          "name": "rejects a changed source excerpt without saving a summary or modifying canonical Flow, Spec, Review, or Gate artifacts",
+          "status": "passed",
+          "durationMs": 5160.048053
+        },
+        {
+          "name": "every artifact recovery producer prepares its actual registered private Service from acquired selection and save capability",
+          "status": "passed",
+          "durationMs": 42.925887
+        },
+        {
+          "name": "deployed SKILL.md contains no include directives",
+          "status": "passed",
+          "durationMs": 20.338006
+        },
+        {
+          "name": "deployed content includes partials content",
+          "status": "passed",
+          "durationMs": 8.471625
+        },
+        {
+          "name": "lets the bundled canonical skill replace a colliding plugin skill",
+          "status": "passed",
+          "durationMs": 11.84314
+        },
+        {
+          "name": "rejects an invalid manifest before writing any skill",
+          "status": "passed",
+          "durationMs": 2.548516
+        },
+        {
+          "name": "replaces dangling canonical skill-root symlinks during a forced deployment",
+          "status": "passed",
+          "durationMs": 8.716106
+        }
+      ],
+      "inputProfile": "current"
+    },
+    {
+      "id": "acceptance-durable-final",
+      "log": ".tmp/8f8b/acceptance-durable-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node --import ./src/sennel.js --test --test-concurrency=1 --test-name-pattern='reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode' tests/integration/flow-cli/acceptance-durable-execution.test.js",
+      "logSha256": "6caf2d875c2ab6e34bfdb0cc68f7664d6485762f0f0810a6c0ba646a2ea774b1",
+      "totals": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 597286.103009
+      },
+      "cases": [
+        {
+          "name": "reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode",
+          "status": "passed",
+          "durationMs": 386205.285289
+        }
+      ],
+      "inputProfile": "current"
+    },
+    {
+      "id": "acceptance-phase-final",
+      "log": ".tmp/8f8b/acceptance-phase-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node --import ./src/sennel.js --test --test-concurrency=1 --test-name-pattern='A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call' tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+      "logSha256": "10f5a09c44663c5249c5fec1e67f55071353efb6f87047c427846fd0083d76f8",
+      "totals": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 314356.31971
+      },
+      "cases": [
+        {
+          "name": "A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call",
+          "status": "passed",
+          "durationMs": 312028.792211
+        }
+      ],
+      "inputProfile": "current"
+    },
+    {
+      "id": "draft-affected-first",
+      "log": ".tmp/8f8b/draft-affected.log",
+      "exitCode": 1,
+      "stage": "intermediate",
+      "classification": "test-helper-and-wrapper-oracle-defects",
+      "inputProfile": "draftIntermediate",
+      "command": "node tests/run.js --jobs 1 --file tests/integration/flow-cli/draft-dispatch-authority.test.js --file tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+      "logSha256": "65242ff3f66ffc0b9d8eae3f9c92274326516d095a4a435a7ed2c48da174bb19",
+      "totals": {
+        "tests": 20,
+        "pass": 16,
+        "fail": 4,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 256664.139362
+      },
+      "cases": [
+        {
+          "name": "checkpoints an unauthorized Gate repair handoff without consuming the Attempt budget",
+          "status": "failed",
+          "durationMs": 10422.981977,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "retains an unpublished Draft Attempt and retry budget after provider refusal across restart",
+          "status": "failed",
+          "durationMs": 744.228959,
+          "errorCode": "ERR_TEST_FAILURE",
+          "error": "'artifact.descriptor.toJSON is not a function'"
+        },
+        {
+          "name": "connects Draft entry through worker-free refine and Gate repair to the canonical Spec handoff",
+          "status": "passed",
+          "durationMs": 17506.332838
+        },
+        {
+          "name": "releases handoff authority after worker-free draft-refine settlement",
+          "status": "passed",
+          "durationMs": 3476.88102
+        },
+        {
+          "name": "continues a fixture-prepared boundary from Store readback and hands the exact canonical Draft to Spec",
+          "status": "passed",
+          "durationMs": 9549.76392
+        },
+        {
+          "name": "reuses an unused refine claim after reload for exactly one original-generation provider call",
+          "status": "passed",
+          "durationMs": 10719.672939
+        },
+        {
+          "name": "requires explicit recovery for an unsealed refine response before another provider call",
+          "status": "passed",
+          "durationMs": 7195.866029
+        },
+        {
+          "name": "replays the exact sealed refine response after reload without repeating its provider or publication",
+          "status": "passed",
+          "durationMs": 10679.868689
+        },
+        {
+          "name": "replays the exact publication refine response after reload without repeating its provider or publication",
+          "status": "passed",
+          "durationMs": 9319.665771
+        },
+        {
+          "name": "refuses publication refine replay after formal project tests changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 6812.830927
+        },
+        {
+          "name": "refuses sealed refine replay after unowned single-dot runtime suffix changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 6939.930625
+        },
+        {
+          "name": "refuses sealed refine replay after canonical Draft input changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 6745.173186
+        },
+        {
+          "name": "refuses publication refine replay after newer canonical Draft publication changes without a provider or persistence effects",
+          "status": "failed",
+          "durationMs": 6890.263892,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "refuses publication refine replay after unrelated catalog publication changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 6892.175617
+        },
+        {
+          "name": "refuses sealed refine replay after stored request binding changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 6502.893406
+        },
+        {
+          "name": "refuses publication refine replay after published sealed payload changes without a provider or persistence effects",
+          "status": "failed",
+          "durationMs": 6576.027281,
+          "errorCode": "ERR_ASSERTION",
+          "error": "|-"
+        },
+        {
+          "name": "refuses reading or dispatching a corrupted saved refine contract without repairing it or consuming budget",
+          "status": "passed",
+          "durationMs": 6140.882351
+        },
+        {
+          "name": "keeps produced refine requests bounded when valid historical Activity bodies grow and replays their compact prefix proof",
+          "status": "passed",
+          "durationMs": 21032.913564
+        },
+        {
+          "name": "refuses compact refine replay when its raw journal prefix changes without effects",
+          "status": "passed",
+          "durationMs": 6509.380477
+        },
+        {
+          "name": "refuses nested refine replay after staging canonical Draft bytes without a source or provider change",
+          "status": "passed",
+          "durationMs": 12558.194854
+        }
+      ]
+    },
+    {
+      "id": "recovery-durable-final",
+      "log": ".tmp/8f8b/recovery-durable-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node --test --test-concurrency=1 --import ./src/sennel.js --test-name-pattern='^the original unused grant remains available before any Prompt reservation across recovery and reload$|^a stopped unsealed conditional claim saves one replacement and owner checkpoint, then replays them after fresh readback$' tests/integration/flow/artifact-worker-recovery.test.js",
+      "logSha256": "9f0bce95dc6009c1ad1f3fb70242e86bbe21d794a44116e08f6eb357d5f9ad51",
+      "totals": {
+        "tests": 2,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 15400.129842
+      },
+      "cases": [
+        {
+          "name": "the original unused grant remains available before any Prompt reservation across recovery and reload",
+          "status": "passed",
+          "durationMs": 871.790938
+        },
+        {
+          "name": "a stopped unsealed conditional claim saves one replacement and owner checkpoint, then replays them after fresh readback",
+          "status": "passed",
+          "durationMs": 12388.61949
+        }
+      ],
+      "inputProfile": "current"
+    },
+    {
+      "id": "draft-corrections-final",
+      "log": ".tmp/8f8b/draft-corrections-final.log",
+      "exitCode": 0,
+      "stage": "after",
+      "classification": "passed",
+      "command": "node --test --test-concurrency=1 --import ./src/sennel.js --test-name-pattern='^Draft dispatcher handoff authority lifecycle checkpoints an unauthorized Gate repair handoff without consuming the Attempt budget$|^Draft dispatcher handoff authority lifecycle retains an unpublished Draft Attempt and retry budget after provider refusal across restart$|^refuses publication refine replay after (newer canonical Draft publication|published sealed payload) changes without a provider or persistence effects$' tests/integration/flow-cli/draft-dispatch-authority.test.js tests/integration/flow-cli/draft-refine-admission-recovery.test.js",
+      "logSha256": "c2733ba773f9bc78f808f16d85bd86655be388c749b2120590edf45c32962de1",
+      "totals": {
+        "tests": 4,
+        "pass": 4,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 30565.089158
+      },
+      "cases": [
+        {
+          "name": "checkpoints an unauthorized Gate repair handoff without consuming the Attempt budget",
+          "status": "passed",
+          "durationMs": 10468.063994
+        },
+        {
+          "name": "retains an unpublished Draft Attempt and retry budget after provider refusal across restart",
+          "status": "passed",
+          "durationMs": 1109.740209
+        },
+        {
+          "name": "refuses publication refine replay after newer canonical Draft publication changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 7838.266306
+        },
+        {
+          "name": "refuses publication refine replay after published sealed payload changes without a provider or persistence effects",
+          "status": "passed",
+          "durationMs": 7067.012745
+        }
+      ],
+      "inputProfile": "current"
+    }
+  ],
+  "confirmedProductDefects": [],
+  "unresolved": [
+    {
+      "kind": "historical-log-detail",
+      "description": "Missing leaf details in historical full-run output remain unresolved."
+    },
+    {
+      "kind": "historical-environment",
+      "description": "Historical setup timeouts were not attributed; current limited setup cases pass with original10-second limit."
+    },
+    {
+      "kind": "real-agent-observation",
+      "description": "Historical Unicode finding and process-observation instability were not rerun or attributed."
+    }
+  ],
+  "reuseRationale": "The intermediate Draft run has16 passing observed cases. Subsequent edits affect only the reservation helper used by the authentication case, the unauthorized payload oracle, and two publication refusal branches. Those4 cases were rerun successfully; other16 results are reused, not silently remapped to new file hashes.",
+  "logsRelativeTo": "worktree root",
+  "logsRetained": true
+}

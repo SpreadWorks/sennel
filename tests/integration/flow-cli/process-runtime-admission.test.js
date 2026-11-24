@@ -12,9 +12,7 @@ import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import { FlowExecutionCommand } from "../../../src/flow/lib/flow-execution-command.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
-import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
-import { readManagedRecord } from "../../../src/lib/managed-process-protocol.js";
-import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { SourceMutationManifest, WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffSubmission } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { Command } from "../../../src/lib/command.js";
 import { Envelope } from "../../../src/lib/flow-envelope.js";
@@ -42,21 +40,29 @@ function executionSnapshot(scenario) {
   return ProcessExecutionRuntime.inspect({ mainRoot: scenario.root });
 }
 
-function assertStoppedReadback(scenario, original) {
-  const inventory = executionSnapshot(scenario);
-  const stopped = inventory.executions.find((entry) => entry.executionId === original.slot);
-  assert.equal(stopped.status, "closed");
-  assert.equal(stopped.accepting, false);
-  assert.equal(stopped.closure.recovery, true);
-  assert.equal(stopped.calls.length, original.executions.find((entry) => entry.executionId === original.slot).calls.length);
-  assert.ok(stopped.calls.length > 0);
-  for (const call of stopped.calls) {
-    assert.equal(call.status, "stopped");
-    assert.equal(call.receipt.executionId, stopped.executionId);
-    assert.equal(call.receipt.callId, call.callId);
-    assert.deepEqual(call.receipt.binding, call.binding);
-    assert.equal(call.receipt.stopEvidence.status, "confirmed");
+function assertClosedReadback(scenario, executionId) {
+  const closed = executionSnapshot(scenario).executions.find((entry) => entry.executionId === executionId);
+  assert.equal(closed.status, "closed");
+  assert.equal(closed.accepting, false);
+  assert.ok(closed.calls.length > 0);
+  for (const call of closed.calls) {
+    const receipt = new ProcessExecutionStopReceipt(call.receipt);
+    assert.equal(receipt.executionId, executionId);
+    assert.equal(receipt.callId, call.callId);
+    assert.deepEqual(receipt.binding.toJSON(), call.binding);
+    assert.equal(receipt.scope, "registered-executions");
+    assert.equal(receipt.observation.kind, "exited");
   }
+}
+
+function assertUnconfirmedReadback(scenario, original) {
+  const inventory = executionSnapshot(scenario);
+  assert.equal(inventory.slot, original.slot, "owner loss must not create another checkout admission");
+  const retained = inventory.executions.find((entry) => entry.executionId === original.slot);
+  assert.notEqual(retained.status, "closed");
+  assert.ok(retained.calls.some((call) => call.receipt === null), "missing handle-owner evidence remains unknown");
+  assert.deepEqual(retained.calls.map((call) => call.callId).sort(),
+    original.executions.find((entry) => entry.executionId === original.slot).calls.map((call) => call.callId).sort());
 }
 
 async function directResult(command, ctx) {
@@ -247,52 +253,62 @@ test("live CLI runtime refuses lifecycle pre and direct Review/Gate/claim across
   assert.equal(closed.executions.find((entry) => entry.executionId === runtimeBefore.slot).status, "closed");
 });
 
-test("concurrent guarded recovery stops a SIGKILL provider and descendant and saves one unused replacement", async (t) => {
+test("concurrent recovery refuses a crashed handle owner without replacing its unsealed contract", async (t) => {
   const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, descendant: true });
   const dispatcher = await scenario.startProvider();
   const before = scenario.snapshot();
   const binding = { runId: scenario.runId, specId: scenario.specId, stepId: "draft", attempt: before.state.attempt };
-  const sourceContract = scenario.manager().artifactWorkerExecutionState({ binding }).executionContract;
-  const budget = scenario.manager().readStoredPromptExecutionEpisode({ executionContract: sourceContract }).budget;
+  const source = scenario.manager().artifactWorkerExecutionState({ binding });
+  const budget = scenario.manager().readStoredPromptExecutionEpisode({ executionContract: source.executionContract }).budget;
   const requestBytes = fs.readFileSync(scenario.request);
   const runtimeBefore = executionSnapshot(scenario);
-  const pids = JSON.parse(fs.readFileSync(scenario.started, "utf8"));
-  assert.ok(pids.descendantPid > 0);
+  assert.ok(runtimeBefore.executions.find((entry) => entry.executionId === runtimeBefore.slot).calls
+    .some((call) => call.parentCallId !== null), "the descendant uses registered admission");
   dispatcher.kill();
-  const crashed = await dispatcher.result;
-  assert.equal(crashed.signal, "SIGKILL");
-  const firstResume = scenario.start(["run", "recover-artifact-execution"]);
-  const secondResume = scenario.start(["run", "recover-artifact-execution"]);
-  const resumed = await Promise.all([firstResume.result, secondResume.result]);
-  assert.ok(resumed.some((result) => result.status === 0), JSON.stringify(resumed));
+  assert.notEqual((await dispatcher.result).status, 0);
+  const resumed = await Promise.all([scenario.start(["run", "recover-artifact-execution"]).result,
+    scenario.start(["run", "recover-artifact-execution"]).result]);
   for (const result of resumed) {
-    const envelope = JSON.parse(result.stdout);
-    if (result.status === 0) assert.equal(envelope.ok, true, result.stdout);
-    else assertBusy(envelope);
+    assert.notEqual(result.status, 0, JSON.stringify(result));
+    assertBusy(result.envelope);
   }
-  assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1,
-    "recovery authorization must not start a replacement provider");
+  assert.deepEqual(scenario.snapshot(), before);
   const manager = scenario.manager();
-  assert.deepEqual(manager.canonicalState(scenario.specId).toJSON(), {
-    ...before.state, confirmationOrder: before.state.confirmationOrder + 1,
-  }, "one recovery publication advances its confirmation order without changing the Attempt or steps");
   const frontier = manager.artifactWorkerExecutionState({ binding });
-  assert.deepEqual(frontier.contracts.map((contract) => contract.generation), [0, 1]);
-  assert.equal(frontier.status, "unconsumed");
-  assert.equal(frontier.recovery.sourceContractId, sourceContract.id);
-  assert.equal(frontier.executionContract.episodeId, sourceContract.episodeId);
-  assert.equal(frontier.executionContract.budgetId, sourceContract.budgetId);
-  assert.equal(manager.artifactWorkerRecoveryReceipts({ specId: scenario.specId }).length, 1);
+  assert.equal(frontier.executionContract.id, source.executionContract.id);
+  assert.deepEqual(frontier.contracts.map((contract) => contract.generation), [0]);
+  assert.equal(manager.artifactWorkerRecoveryReceipts({ specId: scenario.specId }).length, 0);
   assert.deepEqual(manager.readStoredPromptExecutionEpisode({ executionContract: frontier.executionContract }).budget, budget);
-  assertStoppedReadback(scenario, runtimeBefore);
-  assert.throws(() => process.kill(pids.pid, 0), { code: "ESRCH" });
-  assert.throws(() => process.kill(pids.descendantPid, 0), { code: "ESRCH" });
-  assert.deepEqual(fs.readFileSync(scenario.request), requestBytes, "the original unsealed request must remain intact");
+  assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1);
+  assert.deepEqual(fs.readFileSync(scenario.request), requestBytes);
+  assertUnconfirmedReadback(scenario, runtimeBefore);
 });
 
-for (const migratedDescendant of [false, true]) {
-  test(`sealed crash recovery${migratedDescendant ? " waits for a known migrated member then" : ""} publishes once and a fresh canonical consumer reads the original digest`, async (t) => {
-    const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, sealed: true, migratedDescendant });
+test("sealed provider output stays unpublished when its handle owner crashes", async (t) => {
+  const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, sealed: true });
+  const dispatcher = await scenario.startProvider();
+  const request = JSON.parse(fs.readFileSync(scenario.request, "utf8"));
+  const payload = request.payloads.find((entry) => entry.logicalName === "draft.json");
+  const original = fs.readFileSync(payload.payloadPath);
+  const sealedOutput = JSON.parse(fs.readFileSync(scenario.started, "utf8")).sealedOutput;
+  const handoff = fs.readFileSync(sealedOutput.handoffPath);
+  const before = scenario.snapshot();
+  const runtimeBefore = executionSnapshot(scenario);
+  dispatcher.kill();
+  assert.notEqual((await dispatcher.result).status, 0);
+  const refused = await scenario.invoke(["run", "dispatch"]);
+  assert.notEqual(refused.status, 0, JSON.stringify(refused));
+  assertBusy(refused.envelope);
+  assert.deepEqual(scenario.snapshot(), before);
+  assert.deepEqual(fs.readFileSync(payload.payloadPath), original);
+  assert.deepEqual(fs.readFileSync(sealedOutput.handoffPath), handoff);
+  assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1);
+  assertUnconfirmedReadback(scenario, runtimeBefore);
+});
+
+for (const descendant of [false, true]) {
+  test(`sealed output${descendant ? " waits for its registered descendant then" : ""} publishes once and a fresh canonical consumer reads the original digest`, async (t) => {
+    const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, sealed: true, descendant });
     const dispatcher = await scenario.startProvider();
     const request = JSON.parse(fs.readFileSync(scenario.request, "utf8"));
     const payload = request.payloads.find((entry) => entry.logicalName === "draft.json");
@@ -304,104 +320,34 @@ for (const migratedDescendant of [false, true]) {
     assert.equal(sealedDraft.digest, createHash("sha256").update(original).digest("hex"));
     assert.equal(sealedDraft.byteLength, original.length);
     const before = scenario.snapshot();
-    let migratedCall = null;
-    let member = null;
-    const identities = new ProcessIdentitySource();
-    if (migratedDescendant) {
-      const started = JSON.parse(fs.readFileSync(scenario.started, "utf8"));
-      member = new ProcessIdentity(started.descendantIdentity);
-      const active = executionSnapshot(scenario);
-      migratedCall = active.executions.find((entry) => entry.executionId === active.slot).calls
-        .find((call) => call.invocation.kind === "provider" && call.binding.nodeId === "draft");
-      assert.ok(migratedCall, "the actual provider must belong to a managed physical call");
-      const captured = await scenario.awaitOutcome(migratedCall.callId,
-        (record) => record.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))));
-      assert.ok(captured.members.some((entry) => new ProcessIdentity(started.providerIdentity).sameBirth(new ProcessIdentity(entry))),
-        "the durable outcome must identify this exact provider birth");
-      const originalMember = identities.observe(member);
-      assert.equal(originalMember.status, "live");
-      assert.equal(originalMember.stat.pgrp, captured.pgid);
-      assert.notEqual(member.pid, captured.pgid, "setsid must exec without forking a new birth");
-      scenario.migrateMember();
-      await awaitRuntimeBarrier(scenario.migrated);
-      const moved = JSON.parse(fs.readFileSync(scenario.migrated, "utf8"));
-      assert.equal(member.sameBirth(new ProcessIdentity(moved.identity)), true);
-      assert.equal(moved.stat.pgrp, member.pid);
-      assert.equal(moved.stat.sessionId, member.pid);
-      assert.notEqual(moved.stat.pgrp, captured.pgid);
-      const provider = identities.observe(new ProcessIdentity(started.providerIdentity));
-      assert.equal(provider.status, "live");
-      assert.equal(provider.stat.pgrp, captured.pgid, "only the descendant may leave the provider group");
-      scenario.releaseProvider();
-      const exited = await scenario.awaitOutcome(migratedCall.callId, (record) => {
-        assert.equal(record.controlFailure, null, "a known member migration must preserve managed control");
-        return record.outcome.code === 0;
-      });
-      assert.notEqual(exited.state, "finished", "provider exit must not finish while the migrated birth is live");
-      assert.equal(identities.observe(member).terminated, false);
-      assert.deepEqual(scenario.snapshot(), before, "a live migrated member must prevent initial publication");
-    }
     const runtimeBefore = executionSnapshot(scenario);
-    dispatcher.kill();
-    assert.equal((await dispatcher.result).signal, "SIGKILL");
-    const recovery = scenario.start();
-    if (migratedDescendant) {
-      const waiting = new AbortController();
-      try {
-        await Promise.race([
-          scenario.awaitOutcome(migratedCall.callId, (record) => {
-            assert.equal(record.controlFailure, null);
-            return record.state === "stopping";
-          }, { signal: waiting.signal }),
-          recovery.result.then((result) => { throw new Error(`recovery exited with a live migrated member: ${JSON.stringify(result)}`); }),
-        ]);
-        const recovering = executionSnapshot(scenario);
-        const originalExecution = recovering.executions.find((entry) => entry.executionId === runtimeBefore.slot);
-        const originalCall = originalExecution.calls.find((entry) => entry.callId === migratedCall.callId);
-        assert.equal(recovering.slot, runtimeBefore.slot);
-        assert.equal(originalExecution.status, "stopping");
-        assert.equal(originalCall.receipt, null);
-        assert.ok(originalCall.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))),
-          "a fresh manager must merge the durably captured migrated birth before stop confirmation");
-        assert.equal(identities.observe(member).terminated, false);
-        assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1);
-        assert.deepEqual(scenario.snapshot(), before, "recovery must not publish or spend budget before all members stop");
-      } catch (error) {
-        t.diagnostic(`migrated recovery diagnostic: ${scenario.preserveFailureEvidence("migrated-recovery")}`);
-        throw error;
-      } finally {
-        waiting.abort(new Error("recovery barrier observation finished"));
-        scenario.releaseMember();
-      }
+    scenario.releaseProvider();
+    if (descendant) {
+      await awaitRuntimeBarrier(scenario.providerDraining);
+      const pending = executionSnapshot(scenario).executions.find((entry) => entry.executionId === runtimeBefore.slot);
+      const member = pending.calls.find((call) => call.invocation.actualCommand?.args.includes(path.join(scenario.root, ".tmp", "runtime-registered-member.mjs")));
+      assert.ok(member, "the actual descendant has its own registered call");
+      assert.equal(member.receipt, null);
+      assert.notEqual(member.parentCallId, null);
+      assert.equal(pending.calls.find((call) => call.callId === member.parentCallId).receipt, null);
+      assert.deepEqual(scenario.snapshot(), before, "a pending registered descendant prevents publication");
+      scenario.releaseMember();
     }
-    const resumed = await recovery.result;
-    if (migratedDescendant) {
-      await awaitRuntimeBarrier(scenario.memberExited);
-      assert.equal(JSON.parse(fs.readFileSync(scenario.memberExited, "utf8")).reason, "released");
-      assert.equal(identities.observe(member).terminated, true);
-      const settlement = readManagedRecord(scenario.outcomePath(migratedCall.callId));
-      assert.equal(settlement.controlFailure, null);
-      assert.equal(settlement.outcome.code, 0);
-      assert.equal(settlement.outcome.signal, null);
-      assert.ok(settlement.state === "finished"
-        || (settlement.state === "stopping" && settlement.outcome.finalAction === "SIGKILL"),
-      "recovery requires the production launcher seal, before any fixture teardown");
-    }
+    const resumed = await dispatcher.result;
     if (resumed.status !== 0) t.diagnostic(`sealed failure diagnostic: ${scenario.preserveFailureEvidence("sealed")}`);
     assert.equal(resumed.status, 0, `stdout:\n${resumed.stdout}\nstderr:\n${resumed.stderr}`);
-    if (Number(fs.readFileSync(scenario.count, "utf8")) !== 1) {
-      t.diagnostic(`initial Draft call-count failure: ${scenario.preserveFailureEvidence("draft-call-count")}`);
-    }
     assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1,
-      "validated sealed output must be replayed without another call for its original Draft step");
-    assertStoppedReadback(scenario, runtimeBefore);
-    if (migratedDescendant) {
-      const recovered = executionSnapshot(scenario).executions.find((entry) => entry.executionId === runtimeBefore.slot);
-      const call = recovered.calls.find((entry) => entry.callId === migratedCall.callId);
-      assert.ok(call.receipt.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))),
-        "fresh durable receipt readback must retain the exact migrated member birth");
-      assert.deepEqual(call.receipt.members, call.members);
-      assert.equal(call.outcome.code, 0);
+      "the original Draft step must consume its sealed output exactly once");
+    assertClosedReadback(scenario, runtimeBefore.slot);
+    if (descendant) {
+      const memberResult = JSON.parse(fs.readFileSync(scenario.memberExited, "utf8"));
+      assert.equal(memberResult.status, 0);
+      const receipt = new ProcessExecutionStopReceipt(memberResult.receipt);
+      assert.equal(receipt.observation.code, 0);
+      const closed = executionSnapshot(scenario).executions.find((entry) => entry.executionId === runtimeBefore.slot);
+      const member = closed.calls.find((call) => call.callId === receipt.callId);
+      const parent = closed.calls.find((call) => call.callId === member.parentCallId);
+      assert.ok(new ProcessExecutionStopReceipt(parent.receipt).descendants.some((entry) => entry.callId === member.callId));
     }
     const manager = scenario.manager();
     // The real Review provider records a fresh Store read while the initial
@@ -437,10 +383,10 @@ for (const migratedDescendant of [false, true]) {
     assert.ok(nestedReviewCalls.length > 0, "the actual Review child must attach its provider to the root execution");
     for (const { call, parent } of nestedReviewCalls) {
       assert.equal(parent.invocation.kind, "command");
-      assert.notEqual(call.pgid, parent.pgid, "Review CLI and provider require separate managed groups");
+      assert.notEqual(call.executor.executorId, parent.executor.executorId, "Review CLI and provider have distinct handle owners");
       assert.deepEqual(call.binding, parent.binding, "nested physical calls must retain the exact Review execution contract");
-      assert.equal(call.receipt.stopEvidence.status, "confirmed");
-      assert.equal(parent.receipt.stopEvidence.status, "confirmed");
+      assert.equal(new ProcessExecutionStopReceipt(call.receipt).scope, "registered-executions");
+      assert.equal(new ProcessExecutionStopReceipt(parent.receipt).scope, "registered-executions");
     }
     const published = scenario.snapshot();
     const query = await scenario.invoke(["get", "next-action"]);
@@ -449,7 +395,7 @@ for (const migratedDescendant of [false, true]) {
   });
 }
 
-test("source worker crash preserves unaccepted partial edits after exact runtime termination", async (t) => {
+test("source worker crash preserves unaccepted partial edits while stop evidence remains unknown", async (t) => {
   const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, step: "implement", sourceMutation: true,
     nestedUpgrade: true });
   const dispatcher = await scenario.startProvider();
@@ -490,10 +436,11 @@ test("source worker crash preserves unaccepted partial edits after exact runtime
   assert.deepEqual(runtimeAfterUpgrade, runtimeBefore,
     "external upgrade must not borrow source-worker runtime ownership");
   dispatcher.kill();
-  assert.equal((await dispatcher.result).signal, "SIGKILL");
+  assert.notEqual((await dispatcher.result).status, 0);
   const resumed = await scenario.invoke(["run", "dispatch"]);
   assert.notEqual(resumed.status, 0, resumed.stderr);
-  assertStoppedReadback(scenario, runtimeBefore);
+  assertBusy(resumed.envelope);
+  assertUnconfirmedReadback(scenario, runtimeBefore);
   const manager = scenario.manager();
   const afterState = manager.canonicalState(scenario.specId);
   assert.equal(afterState.attempt.id, before.attempt.id);
@@ -504,5 +451,5 @@ test("source worker crash preserves unaccepted partial edits after exact runtime
   assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1);
   const preserved = manager.sourceHandoffAuthorities({ specId: scenario.specId });
   assert.equal(preserved[0].checkpoint.digest, authoritiesBefore[0].checkpoint.digest);
-  assert.equal(preserved[0].settlement, null, "a stop receipt must not manufacture source acceptance or rollback");
+  assert.equal(preserved[0].settlement, null, "unknown stop evidence must not manufacture source acceptance or rollback");
 });

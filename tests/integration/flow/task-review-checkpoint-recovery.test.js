@@ -6,17 +6,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
+import { RetainedTaskReviewWorkUnit, TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { TaskLifecycleFixture } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { readTaskReviewRecoveryAuthorization, readTaskReviewUnsealedCheckpoint } from "../../../src/flow/lib/task-review-recovery-checkpoint.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
-import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnit, assertReviewWorkUnitInputSnapshot } from "../../../src/flow/lib/review-work-unit.js";
 import { ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
-import { SourceMutationBaseline } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import {
   AgentProviderCompletionEvidence,
@@ -25,6 +23,7 @@ import {
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
+import { ExhaustedReviewRetryRecoveryAdmission } from "../../../src/flow/lib/retry-recovery.js";
 
 const seedScope = new SeedCleanupScope(after);
 let implementationSeed;
@@ -100,44 +99,11 @@ async function produceStoppedSurface(scenario) {
   return { directory, result };
 }
 
-function createRetainedTaskReviewUnit({ scenario, attempt, invalidTaskSource = false }) {
-  const state = scenario.manager.loadReadOnly(scenario.specId);
-  const unit = new ReviewWorkUnit({
-    executionRoot: scenario.root,
-    runId: state.runId,
-    specId: scenario.specId,
-    phase: "impl",
-    taskId: scenario.taskId,
-    nodeId: `${scenario.taskId}-review`,
-    attemptId: attempt.id,
-    target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
-    output: ReviewWorkUnitOutput.forReview({ phase: "impl", taskId: scenario.taskId }),
-  });
-  const taskSource = captureCurrentTaskSource({
-    root: scenario.root,
-    flowManager: scenario.manager,
-    state,
-    taskId: scenario.taskId,
-  });
-  const baseline = SourceMutationBaseline.capture({
-    root: scenario.root,
-    attempt,
-    ignoredDirectories: [path.relative(scenario.root, unit.directory)],
-  });
-  unit.writeInput({
-    logicalKey: "task.source",
-    logicalPath: "task-source.json",
-    bytes: Buffer.from(invalidTaskSource ? "{}\n" : `${JSON.stringify(taskSource.toJSON(), null, 2)}\n`),
-    mediaType: "application/json",
-  });
-  unit.writeInput({
-    logicalKey: "task.source-effect-baseline",
-    logicalPath: "task-source-effect-baseline.json",
-    bytes: Buffer.from(`${JSON.stringify(baseline.toJSON(), null, 2)}\n`),
-    mediaType: "application/json",
-  });
-  unit.finalize();
-  return unit;
+function createRetainedTaskReviewUnit({ scenario, attempt, ...options }) {
+  return new RetainedTaskReviewWorkUnit({
+    root: scenario.root, flowManager: scenario.manager, specId: scenario.specId,
+    taskId: scenario.taskId, attempt,
+  }).create(options);
 }
 
 function retainedTaskReviewDirectory({ scenario, attempt }) {
@@ -272,6 +238,60 @@ test("receipt-authorized Task Review checkout checkpoint survives reload and cle
   assert.equal(fs.existsSync(directory), false, "only the receipt-bound old worker is cleaned");
 });
 
+test("lock-scoped Task Review recovery refuses a same-byte index replacement after authorization capture", async (t) => {
+  const scenario = standardScenario(t).exhaust();
+  commitRuntimeEvidence(scenario, 1);
+  assert.equal(scenario.recover().reset, true);
+  scenario.reload();
+  const { directory, result: stopped } = await produceStoppedSurface(scenario);
+  const failed = scenario.state();
+  const checkpoint = readTaskReviewUnsealedCheckpoint({
+    flowManager: scenario.manager, state: failed, taskId: scenario.taskId, root: scenario.root,
+  });
+  assert.notEqual(checkpoint, null, `the parent failure transaction stores the zero-effect checkpoint: ${JSON.stringify({ failure: failed.attempt.failure, stopped })}`);
+  const retainedManifest = path.join(directory, "manifest.json");
+  const retainedBytes = fs.readFileSync(retainedManifest);
+  const retainedInputs = new Map(JSON.parse(retainedBytes).inputs.map((input) => [input.relativePath,
+    fs.readFileSync(path.join(directory, input.relativePath))]));
+  commitRuntimeEvidence(scenario, 2);
+  scenario.reload();
+  const before = scenario.snapshot();
+  const index = path.join(scenario.root, ".git", "index");
+  const assertAdmission = ExhaustedReviewRetryRecoveryAdmission.prototype.assert;
+  let replacements = 0;
+  const admissionMock = t.mock.method(ExhaustedReviewRetryRecoveryAdmission.prototype, "assert", function(view) {
+    if (this.receipt.previous.attemptId === failed.attempt.id && replacements === 0) {
+      assert.notEqual(this.taskReviewRecoveryAuthorization, null, "the ordinary producer prepared the authorization before admission");
+      assert.equal(this.taskReviewRecoveryAuthorization.checkpointDigest, checkpoint.digest);
+      assert.equal(this.taskReviewRecoveryAuthorization.snapshot.mode, "git");
+      const bytes = fs.readFileSync(index);
+      const previous = fs.lstatSync(index, { bigint: true });
+      const replacement = `${index}.external-replacement`;
+      fs.writeFileSync(replacement, bytes);
+      fs.renameSync(replacement, index);
+      assert.deepEqual(fs.readFileSync(index), bytes, "the external writer changed only the index generation");
+      assert.notEqual(fs.lstatSync(index, { bigint: true }).ino, previous.ino);
+      replacements += 1;
+    }
+    return assertAdmission.call(this, view);
+  });
+  let recovery;
+  try { recovery = scenario.recover(); }
+  finally { admissionMock.mock.restore(); }
+  assert.equal(replacements, 1, "the race occurs inside the real lock-scoped admission");
+  assert.equal(recovery.ok, false, JSON.stringify(recovery));
+  assert.equal(recovery.errors[0].code, "RETRY_NOT_AVAILABLE");
+  assert.match(recovery.errors[0].messages.join("\n"), /Task Review recovery checkout observation changed before publication/);
+  scenario.reload();
+  assert.equal(scenario.snapshot(), before, "refused admission publishes no Attempt, Activity, receipt or authorization");
+  assert.equal(scenario.state().attempt.id, failed.attempt.id);
+  assert.equal(fs.existsSync(directory), true);
+  assert.deepEqual(fs.readFileSync(retainedManifest), retainedBytes, "the retained worker and its evidence survive refusal");
+  for (const [relativePath, bytes] of retainedInputs) {
+    assert.deepEqual(fs.readFileSync(path.join(directory, relativePath)), bytes);
+  }
+});
+
 test("an authorization snapshot rejects a later commit without deleting its retained worker", async (t) => {
   const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
@@ -290,23 +310,36 @@ test("an authorization snapshot rejects a later commit without deleting its reta
   assertPartialEffectBlocked({ scenario, result, directory });
 });
 
-test("an authorization snapshot rejects a post-grant Task-owned source edit", async (t) => {
-  const scenario = standardScenario(t).exhaust();
-  commitRuntimeEvidence(scenario, 1);
-  assert.equal(scenario.recover().reset, true);
-  scenario.reload();
-  const { directory } = await produceStoppedSurface(scenario);
-  commitRuntimeEvidence(scenario, 2);
-  scenario.reload();
-  assert.equal(scenario.recover().reset, true);
-  fs.appendFileSync(scenario.sourcePath, "unowned post-grant Task edit\n");
-  scenario.reload();
+for (const change of ["content", "generation"]) {
+  test(change === "content"
+    ? "an authorization snapshot rejects a post-grant Task-owned source edit"
+    : "an authorization snapshot rejects a post-grant same-byte Task source generation", async (t) => {
+    const scenario = standardScenario(t).exhaust();
+    commitRuntimeEvidence(scenario, 1);
+    assert.equal(scenario.recover().reset, true);
+    scenario.reload();
+    const { directory } = await produceStoppedSurface(scenario);
+    commitRuntimeEvidence(scenario, 2);
+    scenario.reload();
+    assert.equal(scenario.recover().reset, true);
+    if (change === "content") fs.appendFileSync(scenario.sourcePath, "unowned post-grant Task edit\n");
+    else {
+      const bytes = fs.readFileSync(scenario.sourcePath);
+      const generation = fs.lstatSync(scenario.sourcePath, { bigint: true }).ino;
+      const replacement = `${scenario.sourcePath}.replacement`;
+      fs.writeFileSync(replacement, bytes);
+      fs.renameSync(replacement, scenario.sourcePath);
+      assert.deepEqual(fs.readFileSync(scenario.sourcePath), bytes);
+      assert.notEqual(fs.lstatSync(scenario.sourcePath, { bigint: true }).ino, generation);
+    }
+    scenario.reload();
 
-  let calls = 0;
-  const result = await runtimeBoundReview(scenario, stoppedWorker(() => { calls += 1; })).execute(scenario.context());
-  assert.equal(calls, 0, JSON.stringify(result));
-  assertPartialEffectBlocked({ scenario, result, directory });
-});
+    let calls = 0;
+    const result = await runtimeBoundReview(scenario, stoppedWorker(() => { calls += 1; })).execute(scenario.context());
+    assert.equal(calls, 0, JSON.stringify(result));
+    assertPartialEffectBlocked({ scenario, result, directory });
+  });
+}
 
 test("a checkpoint rejects a Task-owned source edit before recovery authorization", async (t) => {
   const scenario = standardScenario(t).exhaust();
@@ -474,4 +507,65 @@ test("a later retained-worker verification failure preserves earlier cleanup can
   assert.equal(result.data.workUnit, path.relative(scenario.root, retainedSecond.directory).split(path.sep).join("/"),
     "the rejection must reach the later invalid unit, not stop at the earlier cleanup candidate");
   assert.match(result.errors[0].messages.join("\n"), /source checkpoint cannot be restored against canonical lineage/);
+});
+
+async function assertUncheckpointedRetainedRefusal(t, { expectedMessage, replaceTaskSource = false, ...options }) {
+  const scenario = standardScenario(t);
+  const previousAttempt = scenario.state().attempt;
+  scenario.fail();
+  scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
+  scenario.reload();
+  const retained = createRetainedTaskReviewUnit({ scenario, attempt: previousAttempt, ...options });
+  assert.equal(readTaskReviewUnsealedCheckpoint({
+    flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId,
+    root: scenario.root, attemptId: previousAttempt.id,
+  }), null, "the refusal exercises the fallback without a canonical stopped checkpoint");
+  const manifestBytes = fs.readFileSync(retained.manifestPath);
+  const inputBytes = new Map(retained.manifestDocument.inputs.map((input) => [input.relativePath,
+    assertReviewWorkUnitInputSnapshot(input, retained.root).bytes]));
+  if (replaceTaskSource) {
+    const bytes = fs.readFileSync(scenario.sourcePath);
+    const previous = fs.lstatSync(scenario.sourcePath, { bigint: true });
+    const replacement = `${scenario.sourcePath}.external-replacement`;
+    fs.writeFileSync(replacement, bytes);
+    fs.renameSync(replacement, scenario.sourcePath);
+    assert.deepEqual(fs.readFileSync(scenario.sourcePath), bytes);
+    assert.notEqual(fs.lstatSync(scenario.sourcePath, { bigint: true }).ino, previous.ino);
+  }
+
+  let calls = 0;
+  const result = await runtimeBoundReview(scenario, stoppedWorker(() => { calls += 1; })).execute(scenario.context());
+  assert.equal(calls, 0, JSON.stringify(result));
+  assertPartialEffectBlocked({ scenario, result, directory: retained.directory });
+  assert.match(result.errors[0].messages.join("\n"), expectedMessage);
+  assert.deepEqual(fs.readFileSync(retained.manifestPath), manifestBytes);
+  for (const [relativePath, bytes] of inputBytes) {
+    assert.deepEqual(fs.readFileSync(path.join(retained.root, relativePath)), bytes);
+  }
+}
+
+test("an unsealed worker without a checkpoint refuses missing canonical observation provenance", async (t) => {
+  await assertUncheckpointedRetainedRefusal(t, {
+    includeCanonicalObservation: false,
+    expectedMessage: /missing its canonical observation/,
+  });
+});
+
+test("an unsealed worker without a checkpoint refuses forged canonical observation provenance", async (t) => {
+  await assertUncheckpointedRetainedRefusal(t, {
+    mutateCanonicalObservation(document) {
+      assert.ok(document.activityPrefix.length > 0, "the ordinary observation contains real canonical history");
+      const first = JSON.parse(document.activityPrefix[0]);
+      first.id = "forged-retained-canonical-activity";
+      document.activityPrefix[0] = JSON.stringify(first);
+    },
+    expectedMessage: /canonical Activity ledger changed before the worker-start prefix completed/,
+  });
+});
+
+test("an unsealed worker without a checkpoint refuses a same-byte source generation replacement", async (t) => {
+  await assertUncheckpointedRetainedRefusal(t, {
+    replaceTaskSource: true,
+    expectedMessage: /source physical generation changed before worker/,
+  });
 });

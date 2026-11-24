@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { WorkerArtifactRepositoryEntry } from "../../../src/flow/lib/source-working-file.js";
 import fs from "node:fs";
 import { it } from "node:test";
 import { FreshFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
@@ -14,7 +16,10 @@ import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runt
 import path from "node:path";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { FlowExecutionInputBaseline } from "../../../src/flow/lib/flow-execution-input-baseline.js";
-import { SourceWorkerCanonicalObservationAdvance } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { SourceWorkerCanonicalObservationAdvance, SourceMutationBaseline, SourceMutationManifest, WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { SourceExecutionObservationAppends, SourceExecutionObservationCatalogBaseline } from "../../../src/flow/lib/source-execution-observation-appends.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { runGit } from "../../../src/lib/git-helpers.js";
 
 function fixture(t) {
   const root = createTmpDir();
@@ -25,6 +30,63 @@ function fixture(t) {
   manager.beginNextAction("001-observations");
   return { root, manager, flow };
 }
+
+function committedObservationBaseline(root, manager) {
+  const location = manager.specLocation("001-observations");
+  const result = runGit(["show", `HEAD:${location.relativeCatalogFile}`], { cwd: root });
+  assert.equal(result.ok, true, result.stderr);
+  return new SourceExecutionObservationCatalogBaseline({ root,
+    catalog: FlowArtifactCatalog.fromSerialized(JSON.parse(result.stdout)) });
+}
+
+it("projects saved and reloaded observation additions against the actual Git-committed catalog without allowing unregistered peers", (t) => {
+  const { root, manager } = fixture(t);
+  initGitRepo(root);
+  commitAll(root, "Record canonical catalog before source registration");
+  const baseline = committedObservationBaseline(root, manager);
+  const session = manager.prepareExecutionObservationSession({ specId: "001-observations" });
+  session.append({ id: "after-committed-baseline", kind: "agent-started", entityId: "logical-source", data: {} });
+  const reconstructed = makeFlowManager(root);
+  const appended = reconstructed.readCanonicalTransitionView({ specId: "001-observations",
+    read: (view) => new SourceExecutionObservationAppends(view, baseline) });
+  const location = reconstructed.specLocation("001-observations");
+  const sourcePath = `${location.relativeDirectory}/artifacts/execution-observations/sources/${session.sourceId}.json`;
+  const factPath = `${location.relativeDirectory}/artifacts/execution-observations/facts/after-committed-baseline.json`;
+  assert.deepEqual(appended.appended.map((entry) => entry.relativePath).sort(), [sourcePath, factPath].sort());
+  assert.equal(appended.retainedCatalog().hash, baseline.catalog.hash);
+  assert.equal(appended.preservesCatalogHash(baseline.catalog.hash), true);
+  assert.equal(appended.allowsFilePath(sourcePath), true);
+  assert.equal(appended.allowsFilePath(factPath), true);
+  assert.equal(appended.allowsFilePath(path.posix.dirname(factPath)), false,
+    "a directory must not borrow an exact-file observation exemption");
+  const peer = `${location.relativeDirectory}/artifacts/execution-observations/facts/unregistered-peer.json`;
+  fs.writeFileSync(path.join(root, peer), "{}\n");
+  assert.equal(appended.allowsFilePath(peer), false,
+    "an unregistered neighboring file remains an independent dirty change");
+});
+
+it("retains existing observation descriptors when a committed catalog baseline receives a new fact", (t) => {
+  const { root, manager } = fixture(t);
+  const session = manager.prepareExecutionObservationSession({ specId: "001-observations" });
+  session.append({ id: "committed-fact", kind: "agent-started", entityId: "logical-source", data: {} });
+  initGitRepo(root);
+  commitAll(root, "Record existing canonical observations");
+  const baseline = committedObservationBaseline(root, manager);
+  session.append({ id: "new-fact", kind: "agent-response-ready", entityId: "logical-source", data: {} });
+  const location = manager.specLocation("001-observations");
+  const capture = () => makeFlowManager(root).readCanonicalTransitionView({ specId: "001-observations",
+    read: (view) => new SourceExecutionObservationAppends(view, baseline) });
+  assert.equal(capture().preservesCatalogHash(baseline.catalog.hash), true);
+  const raw = JSON.parse(fs.readFileSync(location.catalogFile, "utf8"));
+  const retained = raw.artifacts.find((entry) => entry.logicalKey === "execution.observation"
+    && entry.relativePath.endsWith("/committed-fact.json"));
+  retained.mediaType = "text/plain";
+  fs.writeFileSync(location.catalogFile, `${JSON.stringify(FlowArtifactCatalog.regenerate(raw.artifacts).toJSON(), null, 2)}\n`);
+  const changed = capture();
+  assert.equal(changed.preservesCatalogHash(baseline.catalog.hash), false,
+    "a valid new fact cannot hide replacement metadata on a committed observation");
+  assert.equal(changed.allowsFilePath(`${location.relativeDirectory}/${retained.relativePath}`), false);
+});
 
 it("records immutable observations with the starting Attempt and reads them after reconstructing the manager", async (t) => {
   const { root, manager, flow } = fixture(t);
@@ -67,12 +129,66 @@ it("allows append-only execution observations while preserving the Source worker
     flowManager: manager, specId: "001-observations", canonicalSnapshot: observation.canonicalSnapshot }));
 });
 
+it("keeps present digest mismatches and filesystem omissions invalid after canonical append authentication", (t) => {
+  const { manager } = fixture(t);
+  const before = SourceWorkerCanonicalObservationAdvance.capture({ flowManager: manager, specId: "001-observations" });
+  const baseline = new SourceMutationBaseline({ attempt: manager.canonicalState("001-observations").attempt,
+    snapshot: before.canonicalSnapshot });
+  const session = manager.prepareExecutionObservationSession({ specId: "001-observations" });
+  session.append({ id: "snapshot-presence-guard", kind: "agent-started", entityId: "logical-source", data: {} });
+  const appends = manager.readCanonicalTransitionView({ specId: "001-observations",
+    read: (view) => new SourceExecutionObservationAppends(view, before.canonicalSnapshot) });
+  const location = manager.specLocation("001-observations");
+  const factFile = location.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("execution.observation", { observationId: "snapshot-presence-guard" }).relativePath);
+  const bytes = fs.readFileSync(factFile);
+  const capture = () => SourceMutationManifest.capture({ baseline, executionObservations: appends });
+  assert.equal(baseline.snapshot.mode, "filesystem");
+  const factPath = path.relative(baseline.snapshot.root, factFile).split(path.sep).join("/");
+  const captured = capture();
+  assert.equal(captured.paths().includes(factPath), false, "authenticated observations are not source mutations");
+  assert.equal(captured.assertBinding(baseline, { executionObservations: appends }), captured);
+  assert.throws(() => captured.assertBinding(baseline), (error) => error.code === "FLOW_SOURCE_HANDOFF_MANIFEST_BINDING_INVALID",
+    "stored observations gain no implicit execution append exemption");
+  assert.equal(appends.matches(baseline.snapshot, captured.observations), true);
+  assert.equal(appends.matches(baseline.snapshot, baseline.snapshot.entries), false,
+    "a current inventory cannot omit a selected authenticated append");
+  assert.equal(appends.matchesRetainedEntries(baseline.snapshot, baseline.snapshot.entries), true,
+    "earlier observations may predate an immutable authenticated append");
+  const excluded = WorkerArtifactRepositoryMutationSnapshot.capture({ ...baseline.snapshot, ignoredDirectories: [factPath] });
+  assert.equal(appends.matches(excluded), false, "a new exclusion cannot silently rebind the authenticated append selector");
+  const factParent = path.posix.dirname(factPath);
+  const parentBefore = captured.observations.find((entry) => entry.path === factParent);
+  assert.equal(parentBefore.kind, "directory");
+  const replacementParent = captured.observations.find((entry) => entry.path === factPath);
+  const forgedParent = captured.observations.map((entry) => entry.path === factParent
+    ? new WorkerArtifactRepositoryEntry({ path: factParent, workingPath: factParent, working: replacementParent.working, git: replacementParent.git }) : entry);
+  assert.equal(appends.matchesRetainedEntries(baseline.snapshot, forgedParent), false,
+    "an approved append path cannot conceal a regular ancestor after-image");
+
+  try {
+    fs.appendFileSync(factFile, "\n");
+    const altered = SourceMutationManifest.capture({ baseline });
+    assert.equal(appends.matchesRetainedEntries(baseline.snapshot, altered.observations), false, "present retained append bytes must still match");
+    assert.throws(capture, /Execution observation appends differ from their cataloged bytes/,
+      "a recorded digest mismatch cannot borrow canonical authentication");
+    assert.throws(() => manager.readCanonicalTransitionView({ specId: "001-observations",
+      read: (view) => new SourceExecutionObservationAppends(view, before.canonicalSnapshot) }), /catalog|content|artifact/i);
+    fs.unlinkSync(factFile);
+    assert.throws(capture, /Execution observation appends differ from their cataloged bytes/,
+      "a filesystem snapshot omission is physical missing evidence");
+    assert.throws(() => manager.readCanonicalTransitionView({ specId: "001-observations",
+      read: (view) => new SourceExecutionObservationAppends(view, before.canonicalSnapshot) }), /missing|exist|ENOENT|artifact/i);
+  } finally {
+    fs.writeFileSync(factFile, bytes);
+  }
+});
+
 it("refuses observation tampering and protected artifact changes beside a valid observation append", async (t) => {
-  const changeMode = (file) => fs.chmodSync(file, (fs.statSync(file).mode & 0o777) ^ 0o100);
+  const replaceGeneration = file => new AtomicFile(file).write(fs.readFileSync(file));
   const cases = [
     ["existing observation bytes", (_location, factFile) => fs.appendFileSync(factFile, "\n")],
-    ["existing observation metadata", (_location, factFile) => changeMode(factFile)],
-    ["protected semantic artifact", (location) => changeMode(location.specFile)],
+    ["existing observation generation", (_location, factFile) => replaceGeneration(factFile)],
+    ["protected semantic artifact generation", (location) => replaceGeneration(location.specFile)],
     ["existing catalog authority metadata", (location) => {
       const value = JSON.parse(fs.readFileSync(location.catalogFile));
       const descriptor = value.artifacts.find((entry) => entry.logicalKey === "spec.record");

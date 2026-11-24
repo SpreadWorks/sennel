@@ -9,11 +9,14 @@ import {
   SourceHandoffEvent,
   SourceHandoffSettlement,
   SourceMutationManifest,
+  WorkerArtifactSourceRollbackCheckpoint,
   SourceWorkerHandoffIdentity,
   sourceHandoffCanonicalGeneration,
 } from "./worker-artifact-handoff.js";
 import { CurrentAttemptIdentity, CurrentFlowStateInvariantError } from "./current-flow-state.js";
 import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
+import { SourceWorkingFile } from "./source-working-file.js";
+import { SourceCheckpointArtifactProof } from "../../lib/source-checkpoint-artifact-encoding.js";
 
 const CHECKPOINT_KEY = "source.handoff.checkpoint";
 const EVENT_KEY = "source.handoff.event";
@@ -24,6 +27,20 @@ function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+function assertRollbackBeforeImages(checkpoint, rollbackBlob) {
+  if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+    || !Buffer.isBuffer(rollbackBlob) || digest(rollbackBlob) !== checkpoint.rollbackBlobDigest) {
+    throw new CurrentFlowStateInvariantError("source handoff rollback blob does not match its checkpoint");
+  }
+  const rollback = WorkerArtifactSourceRollbackCheckpoint.fromBlob(rollbackBlob, {
+    root: checkpoint.baseline.snapshot.root, runtimeLocks: checkpoint.baseline.snapshot.runtimeLocks,
+  });
+  if (rollback.repositories.length !== 1
+    || JSON.stringify(rollback.repositories[0].snapshot.toJSON()) !== JSON.stringify(checkpoint.baseline.snapshot.toJSON())) {
+    throw new CurrentFlowStateInvariantError("source handoff rollback before-images differ from its exact baseline authority");
+  }
+}
+
 function jsonBytes(value) {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -32,6 +49,12 @@ function parseJSON(bytes, label) {
   try { return JSON.parse(bytes.toString("utf8")); } catch (cause) {
     throw new CurrentFlowStateInvariantError(`${label} is invalid JSON: ${cause.message}`);
   }
+}
+
+function readSourceHandoffEvent(view, descriptor) {
+  const captured = view.readArtifactSnapshot(descriptor);
+  return SourceHandoffEvent.fromStored(parseJSON(captured.bytes, "source handoff event"),
+    { processEvidence: captured.processEvidence });
 }
 
 function eventParameters(event) {
@@ -86,7 +109,8 @@ export function assertSourceHandoffEventTransition(previous, event) {
     "start-intent": new Set(["worker-exited", "failure"]),
     "worker-exited": new Set(["failure", "rollback-intent"]),
     failure: new Set(["rollback-intent"]),
-    "rollback-intent": new Set(),
+    "rollback-intent": new Set(["rollback-progress"]),
+    "rollback-progress": new Set(["rollback-progress"]),
   };
   if (previous === null ? event.kind !== "prepared" : !allowed[previous.kind]?.has(event.kind)) {
     throw new CurrentFlowStateInvariantError("source handoff event transition is invalid");
@@ -95,10 +119,91 @@ export function assertSourceHandoffEventTransition(previous, event) {
 
 export function assertSourceHandoffSettlementTransition(event, settlement) {
   const compatible = settlement.kind === "accepted" ? event.kind === "worker-exited"
-    : settlement.kind === "rolled-back" ? event.kind === "rollback-intent"
+    : settlement.kind === "rolled-back" ? ["rollback-intent", "rollback-progress"].includes(event.kind)
       : settlement.kind === "aborted-before-start" ? event.kind === "prepared"
         : event.kind === "failure";
   if (!compatible) throw new CurrentFlowStateInvariantError("source handoff settlement is incompatible with its event head");
+}
+
+/** Source evidence and operation lineage, shared by admission and strict reload. */
+class SourceHandoffEventLineage {
+  #checkpoint;
+  #intent = null;
+  #mutations = new Map();
+  #latest = new Map();
+  #publications = new Map();
+
+  constructor(checkpoint, events) {
+    this.#checkpoint = checkpoint;
+    for (const event of events) {
+      event.sourceManifest?.assertBinding(checkpoint.baseline);
+      if (event.kind === "rollback-intent") {
+        if (this.#intent !== null) this.#fail("rollback has more than one intent");
+        this.#intent = event;
+        this.#mutations = new Map(event.sourceManifest.mutations.map((entry) => [entry.path, entry]));
+      } else if (event.kind === "rollback-progress") {
+        this.#append(event);
+      }
+    }
+    Object.freeze(this);
+  }
+
+  #fail(message) { throw new CurrentFlowStateInvariantError(`source rollback progress is invalid: ${message}`); }
+
+  #baseline(path) {
+    return this.#checkpoint.baseline.snapshot.entries.find((candidate) => candidate.path === path) ?? null;
+  }
+
+  #complete(receipt) {
+    const baseline = this.#baseline(receipt.path);
+    return baseline === null
+      ? receipt.after.kind === "missing" && receipt.afterMode === null
+      : receipt.after.sameContent(baseline.working) && receipt.afterMode === baseline.mode;
+  }
+
+  #append(event) {
+    if (this.#intent === null || event.rollbackPlanDigest !== this.#intent.rollbackPlanDigest) this.#fail("operation belongs to another plan");
+    const receipt = event.rollbackOperation;
+    const mutation = this.#mutations.get(receipt.path);
+    if (mutation === undefined) this.#fail("operation is outside its stopped mutation manifest");
+    const previous = this.#latest.get(receipt.path);
+    if (receipt.phase === "published") {
+      if (previous?.phase !== "prepared"
+        || JSON.stringify(previous.published().toJSON()) !== JSON.stringify(receipt.toJSON())) {
+        this.#fail("publication does not retain its exact prepared operation");
+      }
+    } else {
+      try {
+        receipt.assertPathBinding({
+          baselineEntries: this.#checkpoint.baseline.snapshot.entries,
+          stoppedEntries: this.#intent.sourceManifest.observations,
+          operations: this.#publications,
+        });
+      } catch (cause) { this.#fail(cause.message); }
+      const before = previous === undefined
+        ? new SourceWorkingFile({ kind: mutation.afterKind, digest: mutation.afterDigest, generation: mutation.afterGeneration })
+        : previous.phase === "prepared" ? previous.before : previous.after;
+      const beforeMode = previous === undefined ? mutation.afterMode
+        : previous.phase === "prepared" ? previous.beforeMode : previous.afterMode;
+      if (previous?.phase === "published" && this.#complete(previous)) this.#fail("a completed path cannot be published again");
+      if (!receipt.matches(before, "before") || receipt.beforeMode !== beforeMode) this.#fail("operation lost its previous physical generation");
+      const baseline = this.#baseline(receipt.path);
+      const intermediateRemoval = receipt.operation === "remove" && receipt.after.kind === "missing"
+        && baseline !== null && baseline.kind !== "missing";
+      if (!this.#complete(receipt) && !intermediateRemoval) this.#fail("operation does not restore its checkpoint representation");
+    }
+    this.#latest.set(receipt.path, receipt);
+    if (receipt.phase === "published") this.#publications.set(receipt.path, receipt);
+  }
+
+  assertSettled(settlement) {
+    if (settlement?.kind !== "rolled-back") return;
+    if (this.#intent === null) this.#fail("settlement lacks a rollback intent");
+    for (const path of this.#mutations.keys()) {
+      const receipt = this.#latest.get(path);
+      if (receipt?.phase !== "published" || !this.#complete(receipt)) this.#fail(`settlement lacks a completed publication: ${path}`);
+    }
+  }
 }
 
 function assertPublicationActivity({ descriptor, activities, identity, label, allowedOperations = ["publish_artifacts"] }) {
@@ -128,7 +233,7 @@ export class CanonicalSourceHandoffAuthority {
     if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)) throw new CurrentFlowStateInvariantError("source handoff authority requires a typed checkpoint");
     if (!Array.isArray(events) || events.some((entry) => !(entry instanceof SourceHandoffEvent))) throw new CurrentFlowStateInvariantError("source handoff authority requires typed events");
     if (events.length === 0 || events[0].kind !== "prepared") throw new CurrentFlowStateInvariantError("source handoff authority requires its prepared event");
-    if (!Buffer.isBuffer(rollbackBlob) || digest(rollbackBlob) !== checkpoint.rollbackBlobDigest) throw new CurrentFlowStateInvariantError("source handoff rollback blob does not match its checkpoint");
+    assertRollbackBeforeImages(checkpoint, rollbackBlob);
     if (events.length !== eventDescriptors.length) throw new CurrentFlowStateInvariantError("source handoff event descriptors are incomplete");
     let previous = null;
     for (let index = 0; index < events.length; index += 1) {
@@ -141,6 +246,7 @@ export class CanonicalSourceHandoffAuthority {
       previous = event.digest;
       assertPublicationActivity({ descriptor: eventDescriptors[index], activities, identity: checkpoint.identity, label: "source handoff event" });
     }
+    const rollbackProgress = new SourceHandoffEventLineage(checkpoint, events);
     if ((settlement === null) !== (settlementDescriptor === null)) throw new CurrentFlowStateInvariantError("source handoff settlement descriptor is incomplete");
     if (settlement !== null) {
       if (!(settlement instanceof SourceHandoffSettlement)) throw new CurrentFlowStateInvariantError("source handoff settlement must be typed");
@@ -149,6 +255,7 @@ export class CanonicalSourceHandoffAuthority {
         throw new CurrentFlowStateInvariantError("source handoff settlement does not bind the event head");
       }
       assertSourceHandoffSettlementTransition(events.at(-1), settlement);
+      rollbackProgress.assertSettled(settlement);
       assertPublicationActivity({
         descriptor: settlementDescriptor, activities, identity: checkpoint.identity, label: "source handoff settlement",
         allowedOperations: settlement.kind === "accepted"
@@ -181,13 +288,17 @@ export class CanonicalSourceHandoffAuthority {
 
 /** Lock-scoped CAS and capture admission shared by checkpoint, event and settlement writes. */
 export class SourceHandoffPersistenceAdmission {
-  constructor({ identity, checkpoint = null, expectedCheckpointDigest = null, expectedPreviousEventDigest = null, settlement = null, expectSettlementAbsent = true, validateCapture = false,
+  constructor({ identity, checkpoint = null, expectedCheckpointDigest = null, expectedPreviousEventDigest = null, event = null, settlement = null, expectSettlementAbsent = true, validateCapture = false,
     processStopEvidence = null, executionContract = null, checkoutIdentity = null } = {}) {
     this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
     if (checkpoint !== null && !(checkpoint instanceof CanonicalSourceHandoffCheckpoint)) throw new CurrentFlowStateInvariantError("source handoff admission checkpoint must be typed");
     this.checkpoint = checkpoint;
     this.expectedCheckpointDigest = expectedCheckpointDigest;
     this.expectedPreviousEventDigest = expectedPreviousEventDigest;
+    if (event !== null && (!(event instanceof SourceHandoffEvent) || !this.identity.matches(event.identity))) {
+      throw new CurrentFlowStateInvariantError("source handoff admission event must bind its exact identity");
+    }
+    this.event = event;
     if (settlement !== null && !(settlement instanceof SourceHandoffSettlement)) {
       throw new CurrentFlowStateInvariantError("source handoff admission settlement must be typed");
     }
@@ -213,7 +324,7 @@ export class SourceHandoffPersistenceAdmission {
     }
     if (this.validateCapture) {
       if (this.checkpoint === null) throw new CurrentFlowStateInvariantError("source handoff capture admission lacks its checkpoint");
-      if (SourceMutationManifest.capture({ baseline: this.checkpoint.baseline }).mutations.length !== 0) {
+      if (SourceMutationManifest.capture({ baseline: this.checkpoint.baseline, beforeWorker: true }).mutations.length !== 0) {
         throw new CurrentFlowStateConflictError("source changed before handoff checkpoint publication");
       }
       if (this.identity.canonicalGeneration !== sourceHandoffCanonicalGeneration({ state: view.state, activities: view.activities })) {
@@ -259,12 +370,20 @@ export class SourceHandoffPersistenceAdmission {
       throw new CurrentFlowStateConflictError("source handoff checkpoint already exists");
     }
     const eventDescriptors = view.catalog.artifacts.filter((entry) => entry.logicalKey === EVENT_KEY && entry.relativePath.startsWith(eventPrefix(this.identity)));
-    const events = eventDescriptors.map((entry) => SourceHandoffEvent.fromStored(parseJSON(view.readCatalogedArtifact(entry), "source handoff event")))
+    const events = eventDescriptors.map((entry) => readSourceHandoffEvent(view, entry))
       .sort((left, right) => left.sequence - right.sequence);
     const head = events.at(-1)?.digest ?? null;
     if (head !== this.expectedPreviousEventDigest) throw new CurrentFlowStateConflictError("source handoff event head changed before append");
+    if (this.event !== null) {
+      if (this.event.previousDigest !== head || this.event.sequence !== events.length + 1) {
+        throw new CurrentFlowStateConflictError("source handoff event does not extend the exact persisted prefix");
+      }
+      assertSourceHandoffEventTransition(events.at(-1) ?? null, this.event);
+    }
+    const rollbackProgress = new SourceHandoffEventLineage(this.checkpoint, this.event === null ? events : [...events, this.event]);
     if (this.settlement !== null) {
       assertSourceHandoffSettlementTransition(events.at(-1) ?? null, this.settlement);
+      rollbackProgress.assertSettled(this.settlement);
     }
     const settlementPath = FLOW_ARTIFACT_CONTRACTS.resolve(SETTLEMENT_KEY, { handoffId: this.identity.storageId }).relativePath;
     if (this.expectSettlementAbsent && view.catalog.artifacts.some((entry) => entry.relativePath === settlementPath)) {
@@ -278,6 +397,7 @@ export function sourceHandoffArtifactWrites({ checkpoint = null, rollbackBlob = 
   if (checkpoint !== null) writes.push({ logicalKey: CHECKPOINT_KEY, parameters: { handoffId: checkpoint.identity.storageId }, mediaType: "application/json", bytes: jsonBytes(checkpoint.toJSON()) });
   if (rollbackBlob !== null) {
     const bytes = Buffer.from(rollbackBlob);
+    assertRollbackBeforeImages(checkpoint, bytes);
     const identity = checkpoint?.identity ?? event?.identity ?? settlement?.identity;
     if (!(identity instanceof SourceWorkerHandoffIdentity)) throw new CurrentFlowStateInvariantError("source handoff rollback blob requires its identity");
     writes.push({ logicalKey: ROLLBACK_BLOB_KEY, parameters: { handoffId: identity.storageId, blobDigest: digest(bytes) }, mediaType: "application/json", bytes });
@@ -292,15 +412,12 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
   const checkpointPath = FLOW_ARTIFACT_CONTRACTS.resolve(CHECKPOINT_KEY, { handoffId: expected.storageId }).relativePath;
   const checkpointDescriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === CHECKPOINT_KEY && entry.relativePath === checkpointPath) ?? null;
   if (checkpointDescriptor === null) return null;
-  const checkpoint = CanonicalSourceHandoffCheckpoint.fromStored(
-    parseJSON(view.readCatalogedArtifact(checkpointDescriptor), "source handoff checkpoint"),
-    { root, canonicalLocation },
-  );
+  const checkpoint = readSourceCheckpoint(view, checkpointDescriptor, { root, canonicalLocation });
   assertSameIdentity(expected, checkpoint.identity, "source handoff checkpoint");
   const eventDescriptors = view.catalog.artifacts
     .filter((entry) => entry.logicalKey === EVENT_KEY && entry.relativePath.startsWith(eventPrefix(expected)))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-  const events = eventDescriptors.map((entry) => SourceHandoffEvent.fromStored(parseJSON(view.readCatalogedArtifact(entry), "source handoff event")));
+  const events = eventDescriptors.map((entry) => readSourceHandoffEvent(view, entry));
   for (const event of events) {
     if (event.processStopEvidence === null) continue;
     const descriptor = protocolDescriptors(view, expected).find((entry) => entry.logicalKey === "execution.contract"
@@ -332,6 +449,19 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
     executionContractDescriptors: protocolDescriptors(view, expected)
       .filter((descriptor) => descriptor.logicalKey === "execution.contract").map((descriptor) => descriptor.toJSON()),
   });
+}
+
+function readSourceCheckpoint(view, descriptor, options) {
+  const bytes = view.readCatalogedArtifact(descriptor);
+  const prepared = view.readRetainedSourceCheckpoint?.(descriptor, bytes, options) ?? null;
+  if (prepared !== null) return prepared;
+  const proofPath = SourceCheckpointArtifactProof.pathFor(descriptor.hash);
+  const proofDescriptor = view.catalog.artifacts.find(entry => entry.relativePath === proofPath) ?? null;
+  if (proofDescriptor !== null) {
+    SourceCheckpointArtifactProof.assertDescriptor(proofDescriptor);
+    return SourceCheckpointArtifactProof.fromBytes(view.readCatalogedArtifact(proofDescriptor), bytes, options).checkpoint();
+  }
+  return CanonicalSourceHandoffCheckpoint.fromStored(parseJSON(bytes, "source handoff checkpoint"), options);
 }
 
 export const SOURCE_HANDOFF_LOGICAL_KEYS = Object.freeze({ checkpoint: CHECKPOINT_KEY, event: EVENT_KEY, settlement: SETTLEMENT_KEY, rollbackBlob: ROLLBACK_BLOB_KEY });

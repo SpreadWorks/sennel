@@ -459,6 +459,22 @@ describe("Logger — sensitive information masking", () => {
     assert.equal(entry.file, insidePath, `internal path should be preserved: ${entry.file}`);
   });
 
+  it("masks external diagnostic suffixes in both JSONL and saved prompt values", async () => {
+    const insidePath = path.join(tmpDir, "a");
+    const input = `${insidePath}: open(/private/secret)`;
+    const expected = `${insidePath}: open(***)`;
+    const inst = buildLogger(tmpDir);
+    await inst.event("compound-path", { line: input });
+    await inst.agent({ phase: "end", requestId: "c0ffee01", prompt: { user: input },
+      response: { stdout: input } });
+    await inst.flush();
+    assert.equal(readJsonl(logFile).find((entry) => entry.name === "compound-path").line, expected);
+    const promptFile = path.join(tmpDir, "prompts", todayLocal(), "c0ffee01.json");
+    const payload = JSON.parse(fs.readFileSync(promptFile, "utf8"));
+    assert.equal(payload.prompt.user, expected);
+    assert.equal(payload.response.stdout, expected);
+  });
+
   it("masks values in nested objects (recursive traversal)", async () => {
     const entry = await writeAndReadEntry((inst) =>
       inst.event("nested", { outer: { mid: { inner: FAKE.ghp } } })

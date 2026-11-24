@@ -1,0 +1,582 @@
+{
+  "scope": "Validated e799 feature snapshot based on Git62eeacaa104f626747c14b50a149e62362c4c838, before integrating the existing main Git-plugin-archive commit. Documentation-only archival changes do not change the validated runtime. This is scoped functional acceptance, not whole-suite or whole-auditor PASS.",
+  "verifiedAtUtc": "2026-11-12T16:51:09.423892+00:00",
+  "baseCommit": "62eeacaa104f626747c14b50a149e62362c4c838",
+  "existingMainCommit": "43d3c5814f6b1e27db48d06bf479145d35131820",
+  "runtimeFingerprint": "ef9e2338442cd6bf36a83f58c162625cc7feac2f1662ffcb55b6b7f970245367",
+  "requirements": [
+    {
+      "id": 1,
+      "requirement": "公開移行の preflight・排他・read-only",
+      "implementationBoundaries": [
+        "Public migration registry",
+        "RepositoryMaintenanceLock",
+        "ReadOnlyInvocationWorkspace"
+      ],
+      "outcomeToConditionReview": [
+        "Inspect, dry-run and already-current no-op avoid creating project state. Apply rechecks source and control generations under RepositoryMaintenanceLock. Read-only managed execution uses external owned scratch."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 2,
+      "requirement": "Layout の stage・journal・publication・readback・recovery",
+      "implementationBoundaries": [
+        "Layout migration snapshot3/journal10",
+        "AtomicFile/AtomicJsonFile",
+        "RealDirectoryAuthority"
+      ],
+      "outcomeToConditionReview": [
+        "Closed sibling stages and exact before-images bind preparation, publication and readback. Cold recovery resumes owned unfinished effects. The durable cleanup cutoff restricts later work to evidence retirement. Foreign bytes, paths and generations refuse."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 3,
+      "requirement": "Specs と真正な直前 producer からの明示 migration",
+      "implementationBoundaries": [
+        "Public Specs migration registry1..6; canonicalFlow schema5; explicit Runtime8/9->10 before process-evidence conversion whenrequired",
+        "Strict current readers",
+        "Owned generation-limited recovery"
+      ],
+      "outcomeToConditionReview": [
+        "Explicit public migration validates genuine previous-producer bytes, preserves original evidence and semantic history, and strictly reads the current form. Dormant history and old grants do not acquire new execution authority."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 4,
+      "requirement": "Repair identity・Git logical mode と raw source の分離",
+      "implementationBoundaries": [
+        "GitSourceEntry",
+        "SourceWorkingFile",
+        "repair-state-identity.js"
+      ],
+      "outcomeToConditionReview": [
+        "Raw content digests remain independent of UTF-8 presentation and native permission hints. Git logical modes, flags and physical controls are captured through their shared acquisition boundaries. Same-byte replacements remain distinct physical generations."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 5,
+      "requirement": "独立 Git restore stage と既存 rollback の接続",
+      "implementationBoundaries": [
+        "SourceGitRestoreStage",
+        "GitOwnedStagePolicy",
+        "AtomicFile closed-stage publication",
+        "SourceRestoreCapability"
+      ],
+      "outcomeToConditionReview": [
+        "The independent Git stage isolates index, objects, refs, EOL and configuration. Exact raw readback and Git-visible mode are required before a restore capability is minted. Prepared/published per-path receipts connect live rollback and cold recovery without duplicate effects."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 6,
+      "requirement": "正規の非 Git source の保存・再読込・復元",
+      "implementationBoundaries": [
+        "SourceWorkingFile regular/missing/directory",
+        "Existing checkpoint/rollback engines",
+        "No Git-tool-failure fallback"
+      ],
+      "outcomeToConditionReview": [
+        "A selected regular non-Git root uses raw kind, bytes and generation throughout save, reload and restore. Git command failure preserves the typed failure. Missing paths, blocked descendants and directories retain their separate representations."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 7,
+      "requirement": "保存形式・digest・strict codec と後続 consumer",
+      "implementationBoundaries": [
+        "CanonicalFlow schema5; explicitSpecs6 process-evidence route",
+        "Source-state2/task-source2/repair-fingerprint4",
+        "Runtime records10; currentprocess-evidence leaves and permanentoriginalproducer encodingproofs",
+        "Canonical Store and existing Source handoff persistence"
+      ],
+      "outcomeToConditionReview": [
+        "Current strict formats cover Flow5, Runtime10, Source2, TaskSource2 and RepairFingerprint4 plus independently versioned process evidence. Original producer encoding preserves event and receipt identity through explicit migration. Shared Store/readback consumers use those same codecs."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 8,
+      "requirement": "未使用 offline migration transaction の削除",
+      "implementationBoundaries": [
+        "src/lib/offline-migration-transaction.js deletion",
+        "Test-only migration-directory snapshot under tests/support"
+      ],
+      "outcomeToConditionReview": [
+        "The unused production offline migration transaction is deleted. Existing typed migration and file-authority modules own the effects. Test-only historical producers and snapshots remain in tests/support and fixtures."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    },
+    {
+      "id": 9,
+      "requirement": "共通 retry・recovery 契約と停止・再開の保証",
+      "implementationBoundaries": [
+        "Existing finite FileLock and process completion boundary",
+        "Same-transaction readback/recovery",
+        "No unknown owner reclamation or new native budget"
+      ],
+      "outcomeToConditionReview": [
+        "Finite execution/control budgets and existing retry/recovery ownership remain intact. Unknown native completion retains evidence and exclusion. The exact parent Source ProcessExecutionControlFailure now reaches shared failure selection before content-error conversion. Freeze-proof expiration changes in-memory work only."
+      ],
+      "status": "COMPLETE_UNDER_ACTUAL_REVISED_E799_FUNCTIONAL_SCOPE"
+    }
+  ],
+  "verification": {
+    "sharedCatalogMigrationCasesPerNode": 349,
+    "nodes": [
+      "18.19.0",
+      "26.12.1"
+    ],
+    "native16BothNodes": {
+      "children": 16,
+      "canonicalEvents": 64,
+      "result": "PASS",
+      "checks": [
+        "exact stdout/stderr and receipts",
+        "fresh and cold readback",
+        "actual coordinator exit",
+        "lock release"
+      ]
+    },
+    "node18DraftSpec": {
+      "qualifiedCases": 18,
+      "draftCases": 9,
+      "specCases": 9,
+      "result": "PASS",
+      "actualOwningControllerExitCode": 0,
+      "originalTerminalHandleLost": true,
+      "completionProof": "Original surviving observer Popen.wait and controller child.wait; no scope restart or fabricated terminal receipt.",
+      "remaining17LogDigests": [
+        {
+          "scopes": [
+            "draft-case-02"
+          ],
+          "actualExitCode": 0,
+          "sha256": "20acf75cec9151bb105d8f879a5246eccfd9cca34409a71854d365e633167f9f"
+        },
+        {
+          "scopes": [
+            "draft-case-03"
+          ],
+          "actualExitCode": 0,
+          "sha256": "c87de44f9898f67c9ba4fb4d94e14e48c0c504c4a9e60f2ad544d9cb493b77b3"
+        },
+        {
+          "scopes": [
+            "draft-case-04"
+          ],
+          "actualExitCode": 0,
+          "sha256": "4965032892f4e46d47ff7f48de94ef2d80807295d3f141dadc605416b0c86ff2"
+        },
+        {
+          "scopes": [
+            "draft-case-05"
+          ],
+          "actualExitCode": 0,
+          "sha256": "23e71192db68ddc9e57865d447fc10667c36dd7b9d6b02d03ae7675452b30ffe"
+        },
+        {
+          "scopes": [
+            "draft-case-06"
+          ],
+          "actualExitCode": 0,
+          "sha256": "f0f7ab76d654d1882dae3cdc7968356de62ae766ab308a9bf6f14e2ca887be30"
+        },
+        {
+          "scopes": [
+            "draft-case-07"
+          ],
+          "actualExitCode": 0,
+          "sha256": "bcb1d9c5e4271d229f7f7037b0b4d3e7e942c78f5e97b6927a76447681481016"
+        },
+        {
+          "scopes": [
+            "draft-case-08"
+          ],
+          "actualExitCode": 0,
+          "sha256": "23b0acf2ada79f1b6368fd983a24cc141ba5d7dc40afeffee6406f4bbc9b29a5"
+        },
+        {
+          "scopes": [
+            "draft-case-09"
+          ],
+          "actualExitCode": 0,
+          "sha256": "0b0d56100c6923e9b87292d15ef03bd837af03e0b127f594cbb209af81447396"
+        },
+        {
+          "scopes": [
+            "spec-case-01"
+          ],
+          "actualExitCode": 0,
+          "sha256": "467448e6c3fb46dbbcbacecfaa872e5b39574e8299e61ac2663b2239533e77db"
+        },
+        {
+          "scopes": [
+            "spec-case-02"
+          ],
+          "actualExitCode": 0,
+          "sha256": "03d9e82ce9242f45939dd349f69e132a09d16a0675c495703d0d8ecd8038283c"
+        },
+        {
+          "scopes": [
+            "spec-case-03"
+          ],
+          "actualExitCode": 0,
+          "sha256": "b8d4e8fdac1aabe9dc3270f5fdc8bcc09620d14dd074be51b3ddbd379056c3d5"
+        },
+        {
+          "scopes": [
+            "spec-case-04",
+            "spec-case-05"
+          ],
+          "actualExitCode": 0,
+          "sha256": "3f49f076517364a20840c7fe199161abedbd534e3228f99e681df1b0f07f6efa"
+        },
+        {
+          "scopes": [
+            "spec-case-06"
+          ],
+          "actualExitCode": 0,
+          "sha256": "c4af89122525d99dd7e38417da747cd7fdede55137e3dc6493a0787edfbbc062"
+        },
+        {
+          "scopes": [
+            "spec-case-07"
+          ],
+          "actualExitCode": 0,
+          "sha256": "47240cd6678c4f8500d0e1ade6d1a475ec4736ec99f4a5c9c7e88e67066c773e"
+        },
+        {
+          "scopes": [
+            "spec-case-08"
+          ],
+          "actualExitCode": 0,
+          "sha256": "b0173b09fc54befc536d39e6a173daffec4b5d869d76bace2ce3efa164d05d6c"
+        },
+        {
+          "scopes": [
+            "spec-case-09"
+          ],
+          "actualExitCode": 0,
+          "sha256": "9c3c86675c356386019696e4f0db1f65aff1a94ed7aca867750b6d6bfb7e5806"
+        }
+      ]
+    },
+    "node18WholeSourceParent": {
+      "actualExitCode": 0,
+      "counts": {
+        "tests": 38,
+        "pass": 6,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 32
+      },
+      "roles": {
+        "implement": true,
+        "impl-triage": true,
+        "impl-repair": true,
+        "task-impl": true,
+        "task-repair": true,
+        "recovers every source policy from a fresh disk-backed manager exactly once": true
+      },
+      "logSha256": "6983693a25f9dbc37ac04c388e54f6f52e4ecc15fbd9ad0a0e2e5f25deac61d1",
+      "elapsedMs": 18381287.39445936
+    },
+    "realAgents": {
+      "26": {
+        "originalQualifiedCases": 14,
+        "positiveCaseNames": [
+          "evaluates generated base documentation with the configured real provider",
+          "real provider preserves enrichment range identities through canonical synthesis",
+          "real agent completes a synthetic bounded draft Gate repair through canonical spec publication",
+          "real Draft question reviewer resolves supplied authority and preserves an unresolved user choice",
+          "a real producer corrects a retained structural rejection through the guarded dispatcher",
+          "a read-only sandbox can authenticate through owned mailbox scratch without writing its project",
+          "real reviewer reads complete Unicode authority and detects a head/tail contradiction",
+          "real repair model resolves existing evidence and returns only missing choices to Draft",
+          "real Gate repair worker follows imports and scoped rules in the active checkout",
+          "real model preserves cross-range violations, justified exceptions and Spec-stage semantics",
+          "keeps a source handoff valid when a real worker reads context and checks its source",
+          "has a real Codex CLI worker hand off triage and repair to a downstream command",
+          "has a real Codex spec worker seal and publish a canonical spec",
+          "keeps Task review and host filtering read-only before a real repair and re-review"
+        ],
+        "wholeOfficialCommandPassClaim": false,
+        "wholeOfficialCommandActualExitCode": 1,
+        "qualification": "13 exact-current-runtime positives plus corrected Task case",
+        "wholeCommandFailure": "Old480000ms Task watchdog cancellation; corrected original Task case separately passed"
+      },
+      "18": {
+        "originalQualifiedCases": 14,
+        "positiveCaseNames": [
+          "evaluates generated base documentation with the configured real provider",
+          "real provider preserves enrichment range identities through canonical synthesis",
+          "real agent completes a synthetic bounded draft Gate repair through canonical spec publication",
+          "real Draft question reviewer resolves supplied authority and preserves an unresolved user choice",
+          "a real producer corrects a retained structural rejection through the guarded dispatcher",
+          "a read-only sandbox can authenticate through owned mailbox scratch without writing its project",
+          "real reviewer reads complete Unicode authority and detects a head/tail contradiction",
+          "real repair model resolves existing evidence and returns only missing choices to Draft",
+          "real Gate repair worker follows imports and scoped rules in the active checkout",
+          "real model preserves cross-range violations, justified exceptions and Spec-stage semantics",
+          "keeps a source handoff valid when a real worker reads context and checks its source",
+          "has a real Codex CLI worker hand off triage and repair to a downstream command",
+          "keeps Task review and host filtering read-only before a real repair and re-review",
+          "has a real Codex spec worker seal and publish a canonical spec"
+        ],
+        "wholeOfficialCommandPassClaim": false,
+        "wholeOfficialCommandActualExitCode": 1,
+        "qualification": "12 exact-current-runtime positives plus missing Task/Spec cases",
+        "wholeCommandFailure": "Original3600000ms broad category timeout; missing original cases separately passed"
+      }
+    }
+  },
+  "decisions": {
+    "catalogGroupingTargetBytes": 8388608,
+    "largerValidSingleCatalogArtifactAccepted": true,
+    "freezeProofWeakGenerations": 2,
+    "enrollmentsPerGeneration": 16384,
+    "agentTestWatchdogsMs": {
+      "otherThreeCases": 480000,
+      "taskReviewRepairReReview": 1920000,
+      "suite": 3360000
+    },
+    "originalProviderTimeoutMs": 240000,
+    "providerRetrySettingsAndAssertionsChanged": false,
+    "analysisBudgetsRaised": false,
+    "originalImmutableAggregateWatchdogRestriction": "Agent-added restriction corrected after actual human-instruction audit",
+    "wholePathWallSpeedupClaim": false
+  },
+  "structuralAudit": {
+    "result": "NOT_PASS",
+    "actualExitCodePerNode": 2,
+    "countsPerNode": {
+      "violation": 27,
+      "incomplete": 6226
+    },
+    "complete": false,
+    "ok": false,
+    "observedSourceFiles": 1157,
+    "sourceDigest": "e4dfcac673d708377de89e211ad5721e439df5613c9407e1574e4c1122d3568b",
+    "rawReport": "structural-audit.json.gz",
+    "uncompressedSha256": "4c79fecec25d2ea74297119b787a1860bccf0bca798cf386007a7dd09aa699b1",
+    "compressedSha256": "490f3f86288892b05cecac1d9126e37ee4b922ece3f653b9f788a336d11d99e1",
+    "reviews": "structural-review.json",
+    "reviewedProductionLocations": 4,
+    "reviewedTestLocations": 23,
+    "incompleteFamilies": [
+      {
+        "message": "method receiver has no single inspected value",
+        "count": 1454
+      },
+      {
+        "message": "OS-sensitive capability escapes to an uninspected consumer",
+        "count": 1184
+      },
+      {
+        "message": "object spread has no inspected data members",
+        "count": 700
+      },
+      {
+        "message": "source inspection incomplete",
+        "count": 453
+      },
+      {
+        "message": "unsupported binding pattern obscures the capability origin",
+        "count": 447
+      },
+      {
+        "message": "unsupported operator obscures an OS-sensitive value",
+        "count": 363
+      },
+      {
+        "message": "computed access obscures an OS-sensitive capability",
+        "count": 282
+      },
+      {
+        "message": "conditional helper capability origin cannot be proven",
+        "count": 197
+      },
+      {
+        "message": "unresolved binding origin cycle",
+        "count": 145
+      },
+      {
+        "message": "computed dynamic loading",
+        "count": 142
+      },
+      {
+        "message": "platform path inspection incomplete",
+        "count": 137
+      },
+      {
+        "message": "unsupported builtin transform escapes an OS-sensitive capability",
+        "count": 123
+      },
+      {
+        "message": "multiple binding writes obscure the capability origin",
+        "count": 104
+      },
+      {
+        "message": "helper has no single static result",
+        "count": 101
+      },
+      {
+        "message": "helper return has no inspected captured capability result",
+        "count": 80
+      },
+      {
+        "message": "computed capability access",
+        "count": 57
+      },
+      {
+        "message": "member/destructuring assignment escapes an OS-sensitive capability",
+        "count": 48
+      },
+      {
+        "message": "unresolved operator member origin",
+        "count": 31
+      },
+      {
+        "message": "unsupported expression suffix obscures the capability origin",
+        "count": 27
+      },
+      {
+        "message": "unsupported composed-value transform retains an OS-sensitive origin",
+        "count": 21
+      },
+      {
+        "message": "dynamic loading cannot prove the OS-sensitive capability graph complete",
+        "count": 16
+      },
+      {
+        "message": "unresolved or ambiguous export default",
+        "count": 13
+      },
+      {
+        "message": "public executable instruction has no classified portable executable identity",
+        "count": 12
+      },
+      {
+        "message": "callable selection has no single inspected result",
+        "count": 11
+      },
+      {
+        "message": "UID/mode/filesystem magic is used as authority without a corresponding platform guarantee; platform compatibility is unresolved",
+        "count": 9
+      },
+      {
+        "message": "runtime module/code loading obscures the inspectable capability graph",
+        "count": 8
+      },
+      {
+        "message": "spread launch options cannot prove shell and OS authority settings",
+        "count": 8
+      },
+      {
+        "message": "Node option boundary cannot be proven before the script entry ()",
+        "count": 8
+      },
+      {
+        "message": "public shell instruction contains uninspected compound syntax (|)",
+        "count": 8
+      },
+      {
+        "message": "public shell instruction contains uninspected compound syntax (trailing escape)",
+        "count": 7
+      },
+      {
+        "message": "parameter default has no single static value",
+        "count": 5
+      },
+      {
+        "message": "function indirection obscures an OS-sensitive invocation",
+        "count": 5
+      },
+      {
+        "message": "shared platform boundary cannot prove matching result/effect guarantees on Linux, macOS and Windows",
+        "count": 4
+      },
+      {
+        "message": "fsync descriptor has no proven regular writable-file origin",
+        "count": 3
+      },
+      {
+        "message": "runtime input write has no inspected value",
+        "count": 3
+      },
+      {
+        "message": "Node option boundary cannot be proven before the script entry (--import)",
+        "count": 3
+      },
+      {
+        "message": "operator result has no proven callable capability origin",
+        "count": 1
+      },
+      {
+        "message": "unresolved object member projection cycle",
+        "count": 1
+      },
+      {
+        "message": "invocation constructor or instance escapes to an uninspected consumer",
+        "count": 1
+      },
+      {
+        "message": "PID/PGID or signal contract has no corresponding Windows implementation; platform compatibility is unresolved",
+        "count": 1
+      },
+      {
+        "message": "Node option boundary cannot be proven before the script entry (--input-type=module)",
+        "count": 1
+      },
+      {
+        "message": "typed launch executable identity is unresolved at an owned caller",
+        "count": 1
+      },
+      {
+        "message": "inline JavaScript execution has no inspected module boundary",
+        "count": 1
+      }
+    ]
+  },
+  "knownLimits": {
+    "wholeUnitPassClaim": false,
+    "remainingExistingStaticExpectationFailures": [
+      "Fixed Result class inventory omits existing deferred/exhausted result classes",
+      "Legacy-name scanner flags13 required explicit-migration identities"
+    ],
+    "twoCopiedInputOmissionsCorrectedAndRechecked": true,
+    "testExpectationsSkipsOrAllowlistsChangedForTheseFailures": false,
+    "nativeMacOS": "AGREED_SKIP_NEVER_PASS",
+    "nativeWindows": "AGREED_SKIP_NEVER_PASS",
+    "generatedDocsFreshness": "INDETERMINATE: cached analysis references deleted offline migration module",
+    "latestBoardRead": "Unavailable through legacy local workflow runtime; actual explicit user criteria and captured board snapshot used"
+  },
+  "temporaryEvidencePolicy": "Full runtime namespaces, traces, diagnostics, toolchains and working copies were retained through acceptance and are retired only after main inclusion is verified, per the final user cleanup request. These committed outcomes/source identities and the complete structural report remain; retired namespaces grant no recovery authority.",
+  "postValidationDocumentationAndWhitespaceChanges": {
+    "scope": "After the validated snapshot, commit preparation archived documentation and removed blank EOF lines from these3 files. No executable token, assertion, provider setting, deadline or analysis budget changed. The archived raw report/source hashes identify the original validated snapshot.",
+    "files": [
+      {
+        "file": "src/lib/migration-process-owner.js",
+        "beforeSha256": "971c096f9f249b91c0fa10a4d861a92fffc0d922bc96be24aa9d068239058850",
+        "afterSha256": "b363472c946c4fffaeb255a9599c996e62c4d6ef7d32ac4bbd035334e036db7e",
+        "change": "Remove blank lines after final source line; all non-EOF source bytes identical"
+      },
+      {
+        "file": "tests/support/assertions/process-evidence-migration.js",
+        "beforeSha256": "68b96c584b6ff5f59965e8e21ea6cd94c6f87b8b20348f332e9eab8e2dc8d242",
+        "afterSha256": "5160862cefa9cbebcfb0e9d99b146b7a4bb95270fb965349ded477a924b03be4",
+        "change": "Remove blank lines after final source line; all non-EOF source bytes identical"
+      },
+      {
+        "file": "tests/support/infrastructure/git-output-observer.js",
+        "beforeSha256": "2f86e33778b58e0c211de3a5a3f16f7d654935e2493e6db5bd3d273cb53512b6",
+        "afterSha256": "43dab6dc77360b6e7be59ea756e6ba33249afd364089e1d51dad7eded8c7da9c",
+        "change": "Remove blank lines after final source line; all non-EOF source bytes identical"
+      }
+    ]
+  }
+}

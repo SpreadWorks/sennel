@@ -18,6 +18,9 @@ import {
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import fs from "node:fs";
+import path from "node:path";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { checkoutNewBranch } from "../../support/infrastructure/git-repo.js";
 
 const SPEC_ID = "441-reopen-spec-correction";
 
@@ -101,16 +104,22 @@ describe("canonical reopen draft routes", () => {
   });
 
   it("requires a completed Task before entering the task-addition route", async () => {
-    root = createTmpDir("reopen-draft-task-");
+    root = fixtureRepository("reopen-draft-task-");
+    checkoutNewBranch(root, `feature/${SPEC_ID}`);
     const flowManager = makeFlowManager(root);
-    const fixture = new TaskLifecycleFixture({
+    const fixture = await new TaskLifecycleFixture({
       flowManager, specId: SPEC_ID, runId: "run-reopen-task", request: "add a Task",
       execution: { mode: "branch", baseBranch: "main", featureBranch: `feature/${SPEC_ID}` },
-      specRecord: { goal: "fixture", requirements: [{ id: "R-T-1", desc: "Complete the first Task.", task_ids: ["T-1"] }] },
+      specRecord: { goal: "fixture", requirements: [{ id: "R-T-1", desc: "Complete the first Task.", task_ids: ["T-1"], testable: false }] },
       taskDocuments: [{ id: "T-1", title: "first", goal: "finish", parent: null, origin: "plan", added_round: 0, status: "pending" }],
       taskId: "T-1", targetStep: "task-gate",
-    }).create();
-    fixture.flow.flow.settle("T-1-gate").activate("test-execute");
+    }).createWithProducers({
+      sourceMutations: new Map([["T-1-impl", () => {
+        fs.appendFileSync(path.join(root, "README.md"), "The completed Task permits a later Task addition.\n");
+      }]]),
+    });
+    await fixture.flow.flow.produce("T-1-gate");
+    fixture.flow.flow.activate("test-execute");
     const state = flowManager.loadReadOnly(SPEC_ID);
 
     const result = await new RunReopenDraftCommand().execute(commandContext(flowManager, state, { category: "task-addition", reason: "add another task" }));

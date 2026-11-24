@@ -13,12 +13,17 @@ import { DraftRefineWorkerRequiredResult } from "../../../src/flow/engine/step-r
 import { DraftWorkerExecutionClaim, settleDraftStepResult } from "../../../src/flow/definition.js";
 import { FlowAtStepFixture } from "./flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 
 /** Real canonical Agent/provider/process/journal producers; only the provider is a deterministic Node program. */
 export async function createExecutionQueryScenario(t, { result = "received", inputTokens = 0, model = "reported-model", providerSequence = null, providerProgram = null, executionLimitOptions = {} } = {}) {
   const root = createTmpDir("execution-query-scenario-");
   let runtime = null;
-  t.after(async () => { if (runtime && !runtime.closed) await runtime.close(); removeTmpDir(root); });
+  t.after(async () => {
+    try { if (runtime && !runtime.closed) await runtime.close(); }
+    catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw error; }
+    removeTmpDir(root);
+  });
   const specId = "001-observation";
   const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false });
   const flowFixture = new FlowAtStepFixture({ flowManager, specId, runId: "observation-run", request: "Observe calls", targetStep: "draft-refine" }).create();
@@ -48,7 +53,8 @@ export async function createExecutionQueryScenario(t, { result = "received", inp
       model: ${JSON.stringify(model)}, reasoning_effort: 'low' }));
   `;
   const profile = { command: process.execPath, args: ["-e", providerProgram ?? sequenceProgram ?? `process.stdout.write(${JSON.stringify(providerResponse)})`, "{{PROMPT}}"], jsonOutputFlag: "--json" };
-  class Registry extends ProviderRegistry { resolveByCommand() { return new ClaudeProvider(); } }
+  class FixtureProvider extends ClaudeProvider { systemPromptFlag() { return null; } }
+  class Registry extends ProviderRegistry { resolveByCommand() { return new FixtureProvider(); } }
   const agent = new Agent({ config: { agent: { default: "fixture", providers: { fixture: profile } } },
     paths: { root, agentWorkDir: path.join(root, ".tmp") }, flowManager,
     registry: new Registry({ fixture: profile }), logger: new Logger({ logDir: root, enabled: false }) });

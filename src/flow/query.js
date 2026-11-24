@@ -1,7 +1,13 @@
+import { FlowProcessEvent, PROCESS_EVENT_ACTIVITY_TYPES } from "./lib/flow-process-event.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { captureRegularFile } from "../lib/regular-file-snapshot.js";
+import { currentRuntimePackage } from "../lib/runtime-package.js";
+import { RealDirectoryAuthority } from "../lib/real-directory-authority.js";
+import { LogicalRelativePath } from "../lib/portable-path.js";
 import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
+import { selectedRuntimeRecordMigrationPreview } from "../lib/process-runtime-migration-guidance.js";
 import { createI18n } from "../lib/i18n.js";
 import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
 import { FlowExecutionMeasurementReference } from "../lib/flow-execution-observation.js";
@@ -94,24 +100,19 @@ class QueryProjectionSignature {
   }
 
   static async read() {
-    const root = new URL("../", import.meta.url);
+    // Projection code belongs to the captured runtime. A source edit can affect
+    // the next bootstrap, but cannot invalidate cursors of this active runtime.
     const entries = [];
     let totalBytes = 0;
-    const visit = async (directory, prefix) => {
-      for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
-        if (entry.name === "tests") continue;
-        const relative = `${prefix}${entry.name}`;
-        if (entry.isDirectory()) await visit(new URL(`${entry.name}/`, directory), `${relative}/`);
-        else if (entry.isFile() && /\.(?:js|json)$/.test(entry.name)) {
-          if (entries.length >= FLOW_QUERY_LIMITS.MAX_MANAGED_ARTIFACT_ENTRIES) throw new Error("projection source count exceeds the limit");
-          const bytes = await fs.promises.readFile(new URL(entry.name, directory));
-          totalBytes += bytes.length;
-          if (totalBytes > FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES) throw new Error("projection source bytes exceed the limit");
-          entries.push({ path: relative, hash: crypto.createHash("sha256").update(bytes).digest("hex") });
-        }
-      }
-    };
-    await visit(root, "");
+    for (const file of currentRuntimePackage().files) {
+      if (!file.key.startsWith("src/") || !/\.(?:js|json)$/.test(file.key)) continue;
+      const relative = file.key.slice("src/".length);
+      if (relative.split("/").includes("tests")) continue;
+      if (entries.length >= FLOW_QUERY_LIMITS.MAX_MANAGED_ARTIFACT_ENTRIES) throw new Error("projection source count exceeds the limit");
+      totalBytes += file.bytes;
+      if (totalBytes > FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES) throw new Error("projection source bytes exceed the limit");
+      entries.push({ path: relative, hash: file.digest });
+    }
     entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
     return new QueryProjectionSignature(canonicalDigest(entries, { maxBytes: FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES }));
   }
@@ -356,33 +357,17 @@ async function readBoundedFile(file, maxBytes, {
   jsonPath = "/canonical",
   message = "canonical record could not be read",
 } = {}) {
-  let handle;
   try {
-    handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || await fs.promises.realpath(file) !== file) {
-      throw new QueryError(identityCode, jsonPath, "canonical record is not a regular real file");
-    }
-    if (!Number.isSafeInteger(stat.size) || stat.size > maxBytes) {
-      throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size");
-    }
-    const bytes = await handle.readFile();
-    if (bytes.length > maxBytes) throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size");
-    return bytes;
+    return captureRegularFile(file, { label: "canonical record", maxBytes, requireSingleLink: true }).bytes;
   } catch (error) {
     if (error instanceof QueryError) throw error;
-    if (error?.code === "ELOOP") {
+    if (error?.reason === "limit") {
+      throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size", { cause: error });
+    }
+    if (error?.reason === "identity" || error?.code?.startsWith("REAL_DIRECTORY_AUTHORITY_") || error?.code === "ELOOP") {
       throw new QueryError(identityCode, jsonPath, "canonical record is not a regular real file", { cause: error });
     }
     throw new QueryError(code, jsonPath, message, { cause: error });
-  } finally {
-    if (handle !== undefined) {
-      try {
-        await handle.close();
-      } catch (closeError) {
-        throw new QueryError(code, jsonPath, message, { cause: closeError });
-      }
-    }
   }
 }
 
@@ -422,7 +407,7 @@ function stateCreatedActivityId(state) {
   return `flow-created-${identityDigest}`;
 }
 
-function replayCanonicalState(state, activities, attemptHistory) {
+function replayCanonicalState(state, activities) {
   if (!(state instanceof CurrentFlowState) || !Array.isArray(activities)) {
     throw new Error("canonical state replay requires typed state and Activities");
   }
@@ -458,9 +443,9 @@ function replayCanonicalState(state, activities, attemptHistory) {
     // execution history. Once a historical record does claim confirmed
     // Activities, however, validate that prefix through the same transition
     // reducer and resulting-state comparison used by native Flows.
-    if (activities.length === 0) return state;
+    if (activities.length === 0) return new CurrentFlowAttemptHistory();
   }
-  let replayed = CurrentFlowState.create({
+  const initial = CurrentFlowState.create({
     definition: state.definition,
     execution: state.execution.toJSON(),
     version: state.version,
@@ -472,24 +457,14 @@ function replayCanonicalState(state, activities, attemptHistory) {
     outbox: state.outbox.toJSON(),
     context: state.context.toJSON(),
   });
-  const priorActivities = [];
-  for (const activity of activities) {
-    const node = replayed.findNode(activity.nodeId);
-    if (!node || node.key !== activity.nodeKey) {
-      throw new Error("Activity must reference a state node by stable id and semantic key");
-    }
-    const before = replayed;
-    replayed = activity.transition.apply(replayed, activity, { priorActivities })
-      .withConfirmationOrder(activity.confirmationOrder);
-    attemptHistory.recordTransition(before, replayed, activity);
-    priorActivities.push(activity);
-  }
+  const replay = initial.replayActivities(activities);
+  const replayed = replay.state;
   const expectedState = state.toJSON();
   if (state.history !== null) expectedState.history = null;
   if (JSON.stringify(replayed.toJSON()) !== JSON.stringify(expectedState)) {
     throw new Error("flow state content conflicts with its Activity prefix");
   }
-  return state;
+  return replay.attemptHistory;
 }
 
 function validateIdKey(value, label) {
@@ -676,7 +651,7 @@ class MetadataItem {
 
 class ActivityItem {
   constructor(value) {
-    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage", "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs"];
+    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage", "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs", ...(PROCESS_EVENT_ACTIVITY_TYPES.includes(value.activity?.type) ? ["processEvent"] : [])];
     requireExactObject(value, fields, "ActivityItem");
     requireExactObject(value.activity, ["id", "type"], "ActivityItem.activity");
     requirePublicString(value.activity.id, "ActivityItem.activity.id");
@@ -743,35 +718,23 @@ async function requireRealDirectory(directory, {
   message = "canonical directory could not be read",
   inconsistentMessage = "canonical directory is not a real directory",
 } = {}) {
-  let handle;
   try {
-    handle = await fs.promises.open(
-      directory,
-      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0),
-    );
-    const stat = await handle.stat();
-    if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.promises.realpath(directory) !== directory) {
-      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage);
-    }
+    const authority = new RealDirectoryAuthority(directory);
+    authority.assertStable();
+    return authority;
   } catch (error) {
     if (error instanceof QueryError) throw error;
-    if (error?.code === "ELOOP") {
+    if (error?.code === "ELOOP" || (error?.code?.startsWith("REAL_DIRECTORY_AUTHORITY_") && error.cause?.code !== "ENOENT")) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage, { cause: error });
     }
     throw new QueryError(code, jsonPath, message, { cause: error });
-  } finally {
-    if (handle !== undefined) await handle.close();
   }
 }
 
 class CanonicalFlowVersionReader {
   constructor({ repositoryRoot, specRoot = "specs" } = {}) {
     if (typeof repositoryRoot !== "string" || !path.isAbsolute(repositoryRoot)) throw new Error("repositoryRoot must be absolute");
-    if (typeof specRoot !== "string" || specRoot === "" || path.posix.isAbsolute(specRoot)
-      || specRoot.includes("\\") || path.posix.normalize(specRoot) !== specRoot
-      || specRoot.split("/").some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error("specRoot must be a normalized POSIX-relative path");
-    }
+    new LogicalRelativePath(specRoot, "specRoot");
     this.repositoryRoot = path.resolve(repositoryRoot);
     this.specRoot = specRoot;
     this.definition = buildCurrentFlowDefinition();
@@ -789,33 +752,31 @@ class CanonicalFlowVersionReader {
     const entries = [];
     let enumeratedEntries = 0;
     try {
-      await requireRealDirectory(directory, {
+      const authority = await requireRealDirectory(directory, {
         code: ERROR_CODES.SPEC_NOT_FOUND,
         jsonPath: "/condition/specId",
         message: "requested Spec was not found",
         inconsistentMessage: "canonical Spec directory is not a real directory",
       });
-      const directoryEntries = await fs.promises.opendir(directory);
-      for await (const entry of directoryEntries) {
+      authority.forEachEntry((entry) => {
         enumeratedEntries += 1;
         if (enumeratedEntries > FLOW_QUERY_LIMITS.MAX_AVAILABLE_FLOW_VERSIONS) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "available Version directory entries exceed the limit");
         }
-        if (!/^\d+$/.test(entry.name)) continue;
+        if (!/^\d+$/.test(entry.name)) return;
         if (!entry.isDirectory() || entry.isSymbolicLink()) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is not a directory");
         }
-        await requireRealDirectory(path.join(directory, entry.name), {
-          code: ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
-          message: "canonical Version directory could not be read",
-          inconsistentMessage: "canonical Version identity is not a real directory",
-        });
+        try { authority.descendant(path.join(directory, entry.name)); }
+        catch (cause) {
+          throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is not a real directory", { cause });
+        }
         try {
           entries.push(new CanonicalVersionDirectoryEntry(entry.name));
         } catch (error) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is invalid", { cause: error });
         }
-      }
+      });
     } catch (error) {
       if (error instanceof QueryError) throw error;
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "canonical Version directory could not be read", { cause: error });
@@ -920,9 +881,9 @@ class CanonicalFlowVersionReader {
     if (state.specId !== specId || spec.specId.toString() !== specId) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical identity does not match the selected Spec");
     const confirmedLedger = this.readConfirmedLedger(ledgerBytes, state.confirmationOrder);
     const activities = confirmedLedger.activities;
-    const attemptHistory = new CurrentFlowAttemptHistory();
+    let attemptHistory;
     try {
-      replayCanonicalState(state, activities, attemptHistory);
+      attemptHistory = replayCanonicalState(state, activities);
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical state and Activity ledger are inconsistent", { cause: error });
     }
@@ -973,7 +934,8 @@ class CanonicalFlowVersionReader {
       }
       const bytes = descriptor === ledgerDescriptor ? confirmedLedgerBytes : await inspectArtifact(descriptor);
       try {
-        const value = contract.contentContract.parse(bytes);
+        const processEvidence = await catalog.processStopEncodingSnapshot(descriptor.logicalKey, [bytes], inspectArtifact);
+        const value = contract.contentContract.parse(bytes, { processEvidence });
         revisions.set(descriptor.relativePath, Number.isSafeInteger(value?.schemaRevision) && value.schemaRevision > 0 ? value.schemaRevision : null);
       } catch (error) {
         throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Artifact content contract validation failed", { cause: error });
@@ -1384,6 +1346,7 @@ class QueryProjector {
     if (incomplete.length > 1) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Activity Attempt contains multiple incomplete claims");
     return new ActivityItem({
       activity: { id: activity.id, type: activity.type },
+      ...(activity.processEvent == null ? {} : { processEvent: new FlowProcessEvent(activity.processEvent).publicJSON() }),
       node: { id: activity.nodeId, key: activity.nodeKey },
       task: task === null ? null : { id: task.id, key: task.key },
       attempt: activity.attemptId === null ? null : { id: activity.attemptId, sequence: activity.sequence,
@@ -1437,6 +1400,7 @@ function serializeQueryResponse(response, { error = null, t = null } = {}) {
     const guidance = buildFlowStopGuidance({
       code: response.error.code,
       error,
+      directive: selectedRuntimeRecordMigrationPreview(error)?.data.directive ?? null,
       operation: "flow query",
       t,
     });
@@ -1521,12 +1485,12 @@ export async function bootstrapFlowQueryCli(argv = []) {
   return runFlowQueryCli(argv, { prepared });
 }
 
-function repositoryRoot() {
+export function flowQueryRoot() {
   return path.resolve(process.env[PRODUCT.env("WORK_ROOT")] ?? process.cwd());
 }
 
 async function queryConfiguration() {
-  const configPath = path.join(repositoryRoot(), ".sennel", "config.json");
+  const configPath = path.join(flowQueryRoot(), ".sennel", "config.json");
   let config;
   try { config = JSON.parse(await fs.promises.readFile(configPath, "utf8")); } catch (error) {
     throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "Flow configuration could not be read", { cause: error });
@@ -1570,7 +1534,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     request.validateCursor();
     const configuration = await queryConfiguration();
     language = configuration.language ?? language;
-    reader = new CanonicalFlowVersionReader({ repositoryRoot: repositoryRoot(), specRoot: configuration.specRoot });
+    reader = new CanonicalFlowVersionReader({ repositoryRoot: flowQueryRoot(), specRoot: configuration.specRoot });
     available = await reader.listAvailableVersions(request.specId);
     if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");

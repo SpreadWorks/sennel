@@ -1,0 +1,7 @@
+{
+  "producerCommit": "f2b17cd6c4c2bbb1696dd14620d20f29469c944e",
+  "producerPath": "src/flow/lib/current-flow-state.js",
+  "capture": "CanonicalFlowFixture.create().activate(\"branch\"), original CanonicalFlowManager Activity writer in isolated git archive",
+  "sha256": "0af8309678282b24d065718e59e36126b9990a772a8ed12795f49188bf163165",
+  "format": "Flow schemaRevision 4 Activities, before process event types were introduced"
+}

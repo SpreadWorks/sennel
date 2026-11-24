@@ -1,0 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import { ProcessExecutionRuntime } from "../src/lib/process-execution-runtime.js";
+import { executeManagedProcess } from "../src/lib/managed-process.js";
+const root = fs.mkdtempSync(path.resolve(".tmp/receipt-output/fixture-"));
+const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root });
+const result = await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('baseline receipt')"], { cwd: root, timeoutMs: 20000, graceMs: 100 }));
+const call = runtime.store.read().executions.at(-1).calls[0];
+await runtime.close();
+fs.copyFileSync(path.join(runtime.store.callDirectory(call.callId), "outcome.json"), path.resolve(".tmp/receipt-output/outcome.json"));
+fs.writeFileSync(path.resolve(".tmp/receipt-output/receipt.json"), JSON.stringify(result.processExecutionStopReceipt.toJSON(), null, 2)+"\n");
+console.log(JSON.stringify({ root, outcome: path.resolve(".tmp/receipt-output/outcome.json"), receipt: path.resolve(".tmp/receipt-output/receipt.json") }));

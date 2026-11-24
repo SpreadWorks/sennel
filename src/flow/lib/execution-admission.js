@@ -435,9 +435,11 @@ export const hostFilterStepExecutionContract = new StepExecutionContract({
 
 /** Pending adoption is bound to the saved generation; final receipt replay precedes this boundary. */
 export function acquirePendingExecutionContract({ flowManager, binding, generation = null }) {
-  const selectedGeneration = generation
-    ?? flowManager.draftStepExecutionState({ binding }).lifecycle?.executionGeneration ?? 0;
-  const contract = flowManager.readStoredExecutionContract({ binding, generation: selectedGeneration });
-  contract.assertCurrent(flowManager.canonicalState(binding.specId));
-  return contract;
+  return flowManager.readCanonicalTransitionView({ specId: binding.specId, read: (view) => {
+    const selectedGeneration = generation
+      ?? flowManager.draftStepExecutionState({ binding, view }).lifecycle?.executionGeneration ?? 0;
+    const contract = flowManager.readStoredExecutionContract({ binding, generation: selectedGeneration, view });
+    contract.assertCurrent(view.state);
+    return contract;
+  } });
 }

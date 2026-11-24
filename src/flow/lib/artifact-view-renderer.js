@@ -171,9 +171,9 @@ function knownLocation(value = {}) {
     const file = fields(candidate, ["file", "path", "source", "target"]);
     const line = Number.isSafeInteger(candidate.line) ? String(candidate.line) : null;
     const column = Number.isSafeInteger(candidate.column) ? String(candidate.column) : null;
-    return file.map((entry) => (
+    return [...file.map((entry) => (
       line === null ? entry : `${entry}:${line}${column === null ? "" : `:${column}`}`
-    ));
+    )), ...fields(candidate, ["locator"])];
   });
   return unique([...direct, ...positions]);
 }
@@ -184,7 +184,7 @@ export class ArtifactViewFindingDetail {
     if (finding === null || typeof finding !== "object" || Array.isArray(finding)) {
       throw new Error("artifact view original finding must be an object");
     }
-    this.issue = Object.freeze(unique(fields(finding, ["issue", "summary", "title", "message"])));
+    this.issue = Object.freeze(unique(fields(finding, ["issue", "summary", "title", "message", "observed"])));
     this.detail = Object.freeze(unique(fields(finding, ["detail", "details", "body", "description"])));
     this.requiredChange = Object.freeze(unique(fields(finding, ["requiredChange"])));
     this.rationale = Object.freeze(unique(fields(finding, ["rationale", "reason", "whyBlocking", "whyNonBlocking", "why_violates"])));

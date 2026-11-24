@@ -12,6 +12,9 @@ export class ManagedControlPolicy {
   }
   get attemptCount() { return this.backoff.attemptCount; }
   get budgetMs() { return this.backoff.totalMs; }
+  get responseDeadlinesMs() {
+    return Object.freeze(Array.from({ length: this.attemptCount }, (_, index) => this.responseDeadlineMs(index + 1)));
+  }
   responseDeadlineMs(ordinal) {
     let total = 0;
     for (let current = 1; current <= ordinal; current++) total += this.backoff.valueAt(current);

@@ -1,3 +1,4 @@
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import fs from "node:fs";
 import path from "node:path";
 import { captureRegularFile, RegularFileSnapshot } from "./regular-file-snapshot.js";
@@ -23,11 +24,15 @@ export class RuntimePackageSnapshot {
       if (this.#files.size !== delivery.resources.length) throw new Error("RUNTIME_UNPROVEN: duplicate child resource");
     } else {
       const names = ["package.json"];
-      const visit = (directory) => {
-        for (const entry of fs.readdirSync(path.join(this.root, directory), { withFileTypes: true })) {
+      const rootAuthority = new RealDirectoryAuthority(this.root);
+      const authorities = new Map([[this.root, rootAuthority]]);
+      const visit = (directory, parentAuthority = rootAuthority) => {
+        const authority = new RealDirectoryAuthority(path.join(this.root, directory), { parentAuthority });
+        authorities.set(authority.directory, authority);
+        for (const entry of authority.entries({ withFileTypes: true })) {
           if (["AGENTS.md", "CLAUDE.md"].includes(entry.name)) continue;
           const key = `${directory}/${entry.name}`;
-          if (entry.isDirectory()) visit(key);
+          if (entry.isDirectory()) visit(key, authority);
           else names.push(key);
         }
       };
@@ -35,6 +40,7 @@ export class RuntimePackageSnapshot {
       names.sort();
       this.#files = new Map(names.map((key) => [key, captureRegularFile(path.join(this.root, key), {
         label: `runtime package ${key}`, maxBytes: 16 * 1024 * 1024,
+        directoryAuthority: authorities.get(path.dirname(path.join(this.root, key))),
       })]));
     }
     this.identity = new RuntimePackageIdentity({

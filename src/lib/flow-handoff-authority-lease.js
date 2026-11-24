@@ -1,17 +1,12 @@
-import crypto from "node:crypto";
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import fs from "node:fs";
-import path from "node:path";
-import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import crypto from "node:crypto";
 import { PRODUCT } from "./product.js";
+import path from "node:path";
+import { FileLock } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 
 const LOCK_KIND = "flow-handoff-authority";
-const WAIT_INTERVAL_MS = 50;
-
-function digest(value) {
-  return crypto.createHash("sha256").update(String(value)).digest("hex");
-}
-
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${field} is required`);
@@ -24,7 +19,7 @@ function lockError(status, message, { lockPath, cause } = {}) {
   error.name = status === "timeout"
     ? "FlowHandoffAuthorityLeaseTimeoutError"
     : "FlowHandoffAuthorityLeaseError";
-  error.code = status === "live"
+  error.code = status === "busy"
     ? "FLOW_HANDOFF_AUTHORITY_BUSY"
     : status === "timeout"
       ? "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT"
@@ -43,30 +38,25 @@ export class FlowHandoffAuthorityLease {
   static pathFor({ mainRoot, executionRoot }) {
     const scope = executionRoot === mainRoot ? "repository" : "worktree";
     const scopeId = scope === "repository" ? "repository" : executionRoot;
-    return path.join(mainRoot, PRODUCT.managedPath(`.flow-handoff-${scope}-${digest(scopeId).slice(0, 24)}.lock`));
+    return RepositoryLockAuthority.pathFor(mainRoot, { namespace: "flow-handoff", identity: `${scope}:${scopeId}`, fileName: "handoff.lock" });
   }
 
   constructor({
     mainRoot,
     executionRoot,
-    waitPolicy = new FileLockWaitPolicy({ timeoutMs: Infinity, intervalMs: WAIT_INTERVAL_MS }),
+    waitPolicy,
   } = {}) {
     this.mainRoot = fs.realpathSync(path.resolve(requiredText(mainRoot, "Flow handoff authority mainRoot")));
     this.executionRoot = fs.realpathSync(path.resolve(requiredText(executionRoot, "Flow handoff authority executionRoot")));
-    if (!fs.statSync(this.mainRoot).isDirectory() || !fs.statSync(this.executionRoot).isDirectory()) {
-      throw new Error("Flow handoff authority roots must be real directories");
-    }
+    new RealDirectoryAuthority(this.mainRoot).assertStable();
+    new RealDirectoryAuthority(this.executionRoot).assertStable();
     this.scope = this.executionRoot === this.mainRoot ? "repository" : "worktree";
     this.scopeId = this.scope === "repository" ? "repository" : this.executionRoot;
-    const root = new RealDirectoryAuthority(this.mainRoot, { errorFactory: lockError });
-    const directory = new RealDirectoryAuthority(path.join(this.mainRoot, PRODUCT.managedDirName), {
-      create: true,
-      parentAuthority: root,
-      errorFactory: lockError,
-    });
     this.lock = new FileLock({
-      directoryAuthority: directory,
-      fileName: path.basename(FlowHandoffAuthorityLease.pathFor(this)),
+      location: new RepositoryLockAuthority(this.mainRoot, { errorFactory: lockError }).location({
+        namespace: "flow-handoff", identity: `${this.scope}:${this.scopeId}`, fileName: "handoff.lock",
+        legacyPaths: [path.join(this.mainRoot, PRODUCT.managedPath(`.flow-handoff-${this.scope}-${crypto.createHash("sha256").update(this.scopeId).digest("hex").slice(0, 24)}.lock`))],
+      }),
       kind: LOCK_KIND,
       authority: { scope: this.scope, scopeId: this.scopeId },
       errorFactory: lockError,

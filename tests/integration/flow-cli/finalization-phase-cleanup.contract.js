@@ -93,9 +93,9 @@ function issueEntries(flow) {
   return artifact === null ? [] : JSON.parse(artifact.bytes.toString("utf8")).entries;
 }
 
-function retainedRefs(flow) {
+function retainedRefs(flow, featureBranch = flow.state().execution.featureBranch) {
   return { main: flow.git(["rev-parse", "main"]),
-    feature: flow.git(["rev-parse", flow.state().execution.featureBranch]),
+    feature: flow.git(["rev-parse", featureBranch]),
     head: flow.git(["rev-parse", "HEAD"]),
     index: flow.git(["ls-files", "--stage"]),
     staged: flow.git(["diff", "--cached", "--binary"]),
@@ -277,17 +277,34 @@ export function registerFinalizationCleanupContracts(scenario, currentSeed) {
   test("F07 rescue dirtiness allowance accepts only its exact canonical audit and rejects independent or stale metadata", async (t) => {
     // Each authorization input has an independent clone of the legal producer
     // frontier. These are dirtiness decisions, not repeated phase matrices.
-    for (const condition of ["exact audit", "independent fact", "unrelated publication", "stale catalog", "invalid Flow metadata"]) {
+    for (const condition of ["exact audit", "independent fact", "unrelated publication", "stale catalog", "invalid Flow metadata",
+      "unregistered observation peer", "independently staged observation"]) {
       await t.test(condition, async (caseTest) => {
         const flow = await orphanAtCleanup(caseTest);
         const location = flow.manager.specLocation(flow.specId);
         assert.equal(flow.git(["status", "--porcelain"]), "",
           "the existing orphan producer checkpoint supplies the clean audit baseline");
+        const observationInput = ["unregistered observation peer", "independently staged observation"].includes(condition);
+        const previousSourcePaths = observationInput ? new Set(flow.manager.artifactCatalog(flow.specId).artifacts
+          .filter((entry) => entry.logicalKey === "execution.source.manifest").map((entry) => entry.relativePath)) : null;
         await FLOW_COMMANDS.run[cleanupStep].pre(flow.context());
         flow.reload();
         assertCleanupExecutionClaim(flow);
         assert.equal(flow.outbox(cleanupStep).status, "pending");
         flow.assertResults([cleanupStep], { terminal: false });
+        let sourceFile = null;
+        let sourceBytes = null;
+        let sourcePath = null;
+        let dirtyObservationPath = null;
+        let peerFile = null;
+        if (observationInput) {
+          const additions = flow.manager.artifactCatalog(flow.specId).artifacts
+            .filter((entry) => entry.logicalKey === "execution.source.manifest" && !previousSourcePaths.has(entry.relativePath));
+          assert.equal(additions.length, 1, "normal cleanup pre must register exactly one new source in this clone");
+          sourceFile = location.resolve(additions[0].relativePath);
+          sourceBytes = fs.readFileSync(sourceFile);
+          sourcePath = path.relative(flow.root, sourceFile).split(path.sep).join("/");
+        }
         const input = { mainRepoPath: flow.root, baseBranch: "main",
           baseline: flow.git(["rev-parse", "main"]), featureBranch: flow.state().execution.featureBranch,
           specId: flow.specId, allowFinalizeMetadata: true, allowedIssueLogId: "owned-conflict-audit" };
@@ -314,9 +331,36 @@ export function registerFinalizationCleanupContracts(scenario, currentSeed) {
             ] });
           }
           if (condition === "stale catalog") fs.appendFileSync(location.issueLogFile, "\n");
+          if (condition === "unregistered observation peer") {
+            peerFile = path.join(path.dirname(sourceFile), "unregistered-peer.json");
+            assert.equal(fs.existsSync(peerFile), false);
+            dirtyObservationPath = path.relative(flow.root, peerFile).split(path.sep).join("/");
+          }
+          if (condition === "independently staged observation") {
+            fs.writeFileSync(sourceFile, '{"independent":"staged source blob"}\n');
+            flow.git(["add", "--", sourcePath]);
+            fs.writeFileSync(sourceFile, sourceBytes);
+            dirtyObservationPath = sourcePath;
+            assert.match(flow.git(["diff", "--cached", "--", sourcePath]), /staged source blob/);
+          }
         }
+        if (observationInput) {
+          const observations = await flow.manager.readExecutionObservations({ specId: flow.specId });
+          assert.ok(observations.manifests.some((manifest) => manifest.id === JSON.parse(sourceBytes).id),
+            condition === "unregistered observation peer"
+              ? "the saved canonical source authenticates before introducing an unregistered peer"
+              : "the canonical source remains authenticated despite the independent Git input");
+          assert.deepEqual(fs.readFileSync(sourceFile), sourceBytes);
+        }
+        const observationRefs = observationInput ? retainedRefs(flow) : null;
+        const observationPersistence = observationInput ? new CanonicalPersistenceSnapshot(flow.manager, flow.specId,
+          [sourceFile, ...(peerFile === null ? [] : [peerFile])]) : null;
+        const indexPath = observationInput ? path.resolve(flow.root, flow.git(["rev-parse", "--git-path", "index"])) : null;
+        const rawIndex = observationInput ? fs.readFileSync(indexPath) : null;
         const bytes = Object.fromEntries([location.flowStateFile, location.activitiesFile, location.catalogFile,
           location.issueLogFile].filter((file) => file && fs.existsSync(file)).map((file) => [file, fs.readFileSync(file)]));
+        const peerBytes = condition === "unregistered observation peer" ? Buffer.from("{}\n") : null;
+        if (peerBytes !== null) fs.writeFileSync(peerFile, peerBytes);
         const result = runAutoRescue(input);
         if (condition === "exact audit") {
           assert.equal(result.ok, true, JSON.stringify(result));
@@ -326,8 +370,22 @@ export function registerFinalizationCleanupContracts(scenario, currentSeed) {
         } else {
           assert.equal(result.ok, false);
           assert.equal(result.code, "MAIN_REPO_DIRTY");
-          assert.ok(result.dirtyFiles.includes(["invalid Flow metadata", "unrelated publication"].includes(condition)
-            ? location.relativeFlowStateFile : location.relativeIssueLogFile), JSON.stringify(result));
+          if (observationInput) {
+            assert.ok(result.dirtyFiles.includes(dirtyObservationPath), JSON.stringify(result));
+            assert.deepEqual(fs.readFileSync(indexPath), rawIndex, "refusal must preserve the exact caller index bytes");
+            if (peerBytes !== null) {
+              assert.deepEqual(retainedRefs(flow, input.featureBranch), observationRefs,
+                "peer refusal must preserve refs, index entries, staged diff and worktrees without reading invalid canonical input");
+              observationPersistence.assertPhysicalUnchanged("unregistered observation peer refusal", new Map([[peerFile, peerBytes]]));
+            } else {
+              assert.deepEqual(retainedRefs(flow), observationRefs, "refusal must preserve refs and the independent staged diff");
+              observationPersistence.assertUnchanged(flow.manager, flow.specId, "independent observation input refusal");
+            }
+            assert.deepEqual(fs.readFileSync(sourceFile), sourceBytes);
+          } else {
+            assert.ok(result.dirtyFiles.includes(["invalid Flow metadata", "unrelated publication"].includes(condition)
+              ? location.relativeFlowStateFile : location.relativeIssueLogFile), JSON.stringify(result));
+          }
           assert.equal(flow.git(["rev-parse", "main"]), input.baseline);
           assert.equal(flow.git(["rev-parse", input.featureBranch]), feature);
           for (const [file, expected] of Object.entries(bytes)) assert.deepEqual(fs.readFileSync(file), expected);
@@ -516,6 +574,62 @@ export function registerFinalizationCleanupContracts(scenario, currentSeed) {
     assert.deepEqual(flow.report(cleanupStep), report);
     assert.equal(flow.state().lifecycle.state, "active");
     assert.equal(fs.existsSync(path.join(flow.root, POINTER_REL_PATH)), false);
+  });
+
+  test("F07 direct auto-rescue refuses an unreadable caller index without changing canonical evidence or refs", async (t) => {
+    const flow = await orphanAtCleanup(t);
+    const previousSources = new Set(flow.manager.artifactCatalog(flow.specId).artifacts
+      .filter((entry) => entry.logicalKey === "execution.source.manifest").map((entry) => entry.relativePath));
+    await FLOW_COMMANDS.run[cleanupStep].pre(flow.context());
+    flow.reload();
+    assertCleanupExecutionClaim(flow);
+    assert.equal(flow.outbox(cleanupStep).status, "pending");
+    flow.assertResults([cleanupStep], { terminal: false });
+    const location = flow.manager.specLocation(flow.specId);
+    const additions = flow.manager.artifactCatalog(flow.specId).artifacts
+      .filter((entry) => entry.logicalKey === "execution.source.manifest" && !previousSources.has(entry.relativePath));
+    assert.equal(additions.length, 1, "the registered cleanup pre must produce its permanent source normally");
+    const sourceFile = location.resolve(additions[0].relativePath);
+    const sourceBytes = fs.readFileSync(sourceFile);
+    const input = { mainRepoPath: flow.root, baseBranch: "main",
+      baseline: flow.git(["rev-parse", "main"]), featureBranch: flow.state().execution.featureBranch,
+      specId: flow.specId, allowFinalizeMetadata: true, allowedIssueLogId: "owned-conflict-audit" };
+    flow.manager.appendIssueLog({ specId: flow.specId,
+      entry: { issueLogId: input.allowedIssueLogId, reason: "Owned conflict audit." },
+      idempotencyKey: input.allowedIssueLogId });
+    const observations = await flow.manager.readExecutionObservations({ specId: flow.specId });
+    assert.ok(observations.manifests.some((manifest) => manifest.id === JSON.parse(sourceBytes).id));
+    const persisted = new CanonicalPersistenceSnapshot(flow.manager, flow.specId, [sourceFile]);
+    const report = flow.report(cleanupStep);
+    const refs = flow.git(["show-ref"]);
+    const head = flow.git(["symbolic-ref", "HEAD"]);
+    const worktrees = flow.git(["worktree", "list", "--porcelain"]);
+    const indexPath = path.resolve(flow.root, flow.git(["rev-parse", "--git-path", "index"]));
+    const originalIndex = fs.readFileSync(indexPath);
+    const restoreIndex = () => { if (fs.existsSync(indexPath)) fs.writeFileSync(indexPath, originalIndex); };
+    t.after(restoreIndex);
+    const malformedIndex = Buffer.from("an unreadable direct rescue caller index\n");
+    try {
+      fs.writeFileSync(indexPath, malformedIndex);
+      const result = runAutoRescue(input);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "MAIN_REPO_STATUS_FAILED", JSON.stringify(result));
+      assert.deepEqual(fs.readFileSync(indexPath), malformedIndex, "unknown status must preserve exact malformed index bytes");
+      assert.equal(flow.git(["show-ref"]), refs);
+      assert.equal(flow.git(["symbolic-ref", "HEAD"]), head);
+      assert.equal(flow.git(["worktree", "list", "--porcelain"]), worktrees);
+      persisted.assertUnchanged(flow.manager, flow.specId, "direct rescue unreadable-index refusal");
+      assert.deepEqual(fs.readFileSync(location.resolve(report.relativePath)), report.bytes);
+      assert.deepEqual(fs.readFileSync(sourceFile), sourceBytes);
+      assert.deepEqual(await flow.manager.readExecutionObservations({ specId: flow.specId }), observations);
+      assertCleanupExecutionClaim(flow);
+      assert.equal(flow.outbox(cleanupStep).status, "pending");
+      assert.equal(flow.state().lifecycle.state, "active");
+      assert.equal(fs.existsSync(path.join(flow.root, "rescued.txt")), false);
+      assert.equal(fs.existsSync(path.join(flow.root, POINTER_REL_PATH)), false);
+    } finally {
+      restoreIndex();
+    }
   });
 
   test("F07 unobservable Git status safely retains the branch, raw index and report", async (t) => {

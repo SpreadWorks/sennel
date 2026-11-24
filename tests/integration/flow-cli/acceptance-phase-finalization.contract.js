@@ -6,6 +6,7 @@ import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { after, describe, mock, test } from "node:test";
 import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunReportCommand from "../../../src/flow/lib/run-report.js";
@@ -15,7 +16,9 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FlowOutboxStore, finalizationOutboxIdentity } from "../../../src/flow/lib/flow-outbox.js";
 import { AcceptancePhaseScenario } from "../../support/acceptance-phase-scenario.js";
 import { assertAcceptanceFinalRegressionEvidence } from "../../support/assertions/acceptance-final-regression.js";
-import { shellPrintChildProcessRecord } from "../../support/infrastructure/child-process-record.js";
+import { childProcessRecord } from "../../support/infrastructure/child-process-record.js";
+import { ChildProcessExecutionRecordCodec } from "../../../src/flow/lib/test-regression.js";
+import { NodeScriptInvocation } from "../../../src/lib/command-invocation.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 
 function externalCalls(flow) {
@@ -129,6 +132,26 @@ for (const stale of [false, true]) {
   });
 }
 
+test("A04 registered Retro preview preserves canonical evidence through dispatcher post hooks", async (t) => {
+  const flow = await scenario(t);
+  await flow.advanceTo("retro");
+  flow.reload();
+  const execution = flow.commandArtifact("test.execute", "retro");
+  const review = flow.commandArtifact("test.result.review", "retro");
+  assert.equal(review.payload.testExecute.producerActivityId, execution.descriptor.activityId);
+  const before = new CanonicalPersistenceSnapshot(flow.manager, flow.specId);
+  const snapshot = flow.snapshot();
+  const calls = externalCalls(flow);
+  const project = new StoredFlowPersistenceSnapshot(flow.root);
+  const preview = await flow.runRegistered("retro", { dryRun: true });
+  assert.equal(preview.result, "dry-run", JSON.stringify(preview));
+  project.assertUnchanged();
+  before.assertUnchanged(flow.manager, flow.specId, "registered Retro preview");
+  assert.deepEqual(flow.reload().snapshot(), snapshot);
+  assert.deepEqual(externalCalls(flow), calls);
+  assert.equal(flow.manager.readProducerArtifact({ specId: flow.specId, nodeId: "retro", logicalKey: "retro", optional: true }), null);
+});
+
 test("A04 normal Retro source drift refreshes the actual test producer with a new Attempt and preserves old history", async (t) => {
   const flow = await scenario(t);
   await flow.advanceTo("retro");
@@ -161,22 +184,29 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
   const flow = await scenario(t);
   await flow.advanceTo("final-regression");
   flow.reload();
-  const script = path.join(flow.root, "project-tests", "regression.sh");
+  const script = path.join(flow.root, "project-tests", "regression.cjs");
   const executionsPath = path.join(flow.root, ".tmp", "failed-regression-executions.log");
   fs.mkdirSync(path.dirname(executionsPath), { recursive: true });
   const executions = () => fs.existsSync(executionsPath)
     ? fs.readFileSync(executionsPath, "utf8").trim().split("\n") : [];
-  fs.writeFileSync(script, ["printf '%s\\n' 'executed' >> .tmp/failed-regression-executions.log",
-    "printf '%s\\n' 'current behavior failed' >&2", shellPrintChildProcessRecord({
+  const record = new ChildProcessExecutionRecordCodec().encode(childProcessRecord({
     command: ["node", "--test", "project-tests/smoke.test.js"],
     stderr: "ERR_ASSERTION\nsrc/implementation.js: required behavior is missing\n",
-  }), "exit 1", ""].join("\n"));
+  }));
+  fs.writeFileSync(script, [
+    'const fs = require("node:fs");',
+    `fs.appendFileSync(${JSON.stringify(executionsPath)}, "executed\\n");`,
+    'process.stderr.write("current behavior failed\\n");',
+    `process.stderr.write(${JSON.stringify(record)} + "\\n");`,
+    "process.exitCode = 1;",
+    "",
+  ].join("\n"));
   const configPath = path.join(flow.root, ".sennel", "config.json");
   const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {
     lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" },
   };
   fs.writeFileSync(configPath, JSON.stringify({ ...config, test: { ...config.test,
-    command: "sh project-tests/regression.sh", timeout: 5 } }));
+    command: new NodeScriptInvocation({ script, cwd: flow.root }).toJSON(), timeout: 5 } }));
   const failed = await flow.runRegistered("final-regression");
   assert.equal(failed.result, "fail");
   flow.reload();
@@ -245,8 +275,12 @@ test("A07 unlinked report preview does not publish, claim an outbox or change th
   flow.reload();
   const before = flow.snapshot();
   const calls = externalCalls(flow);
+  const canonical = new CanonicalPersistenceSnapshot(flow.manager, flow.specId);
+  const project = new StoredFlowPersistenceSnapshot(flow.root);
   const preview = await flow.runRegistered("report", { dryRun: true });
   assert.equal(preview.result, "dry-run");
+  project.assertUnchanged();
+  canonical.assertUnchanged(flow.manager, flow.specId, "registered Report preview");
   assert.deepEqual(flow.reload().snapshot(), before);
   assert.deepEqual(externalCalls(flow), calls);
   assert.equal(flow.manager.readProducerArtifact({ specId: flow.specId, nodeId: "report", logicalKey: "report", optional: true }), null);

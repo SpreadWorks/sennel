@@ -228,7 +228,7 @@ describe("documentation AI command routes", () => {
     assert.equal(reports().length, 0);
     assert.equal(fs.readFileSync(path.join(root, "docs/overview.md"), "utf8"), source);
     assert.equal(fs.existsSync(path.join(root, ".tmp/forge-inputs")), false);
-    await run(DocsForgeCommand, ["--yes", "--prompt", "Improve prose", "--mode", "local", "--review-cmd", `node ${path.join(root, "review.cjs")}`]);
+    await run(DocsForgeCommand, ["--yes", "--prompt", "Improve prose", "--mode", "local", "--review-cmd", JSON.stringify({ kind: "node-script", script: path.join(root, "review.cjs"), args: [] })]);
     const actualText = agent.calls.filter((entry) => entry.options.commandId === "docs.text");
     assert.equal(actualText.length, 1);
     assert.equal(actualText[0].prompt, dryText[0].prompt, "dry-run and normal execution use exactly the same prepared source");
@@ -309,7 +309,7 @@ describe("documentation AI command routes", () => {
     fixture({ languages: ["en", "ja"] });
     writeFile(root, "docs/overview.md", "# Overview\n\nSource prose.\n");
     writeFile(root, "review.cjs", "process.exit(0);\n");
-    await run(DocsForgeCommand, ["--yes", "--prompt", "Improve prose", "--mode", "assist", "--review-cmd", `node ${path.join(root, "review.cjs")}`]);
+    await run(DocsForgeCommand, ["--yes", "--prompt", "Improve prose", "--mode", "assist", "--review-cmd", JSON.stringify({ kind: "node-script", script: path.join(root, "review.cjs"), args: [] })]);
     assert.ok(fs.existsSync(path.join(root, "README.md")), "internal README Command.run publishes its output");
     assert.ok(fs.existsSync(path.join(root, "docs/ja/overview.md")), "internal translation Command.run publishes its output");
     assert.equal(reports().length, 1);

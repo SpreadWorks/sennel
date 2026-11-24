@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { LegacyFlowActivityDocument } from "./legacy-flow-activity.js";
+import { PreviousFlowSchemaProjection } from "./flow-schema-migration.js";
 
 import { FlowArtifactCatalog, FlowVersionLocation } from "./flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "./flow-artifact-contract.js";
@@ -175,7 +176,7 @@ export class CanonicalGateDecisionMigrationPlan {
     const normalizedActivities = projectedActivities.map((entry) => new LegacyFlowActivityDocument(entry).toJSON());
     const newActivitiesBytes = Buffer.from(normalizedActivities.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
     for (const entry of normalizedActivities) FlowActivity.fromSerialized(entry);
-    new CurrentFlowState(projectedState, { definition: this.definition });
+    new CurrentFlowState(PreviousFlowSchemaProjection.project(projectedState), { definition: this.definition });
     return Object.freeze({
       state, catalog, flowBytes, activitiesBytes, catalogBytes,
       projectedFlowBytes: Buffer.from(`${JSON.stringify(projectedState, null, 2)}\n`),

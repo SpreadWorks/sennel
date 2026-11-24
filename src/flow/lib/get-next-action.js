@@ -1,3 +1,5 @@
+import { flowArtifactRoot } from "../../lib/flow-workspace.js";
+import { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";
 import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { readRuntimeResource } from "../../lib/runtime-package.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
@@ -36,6 +38,7 @@ import {
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
+  nonGateNonblockingEligibilityForDecision,
 } from "../definition.js";
 import { loadRules, filterRules, renderRuleBlock } from "../../lib/skill-rules.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -233,6 +236,7 @@ class FinalRegressionNextAction {
     this.decision = decision;
     this.userAction = userAction;
     this.directive = directive;
+    this.eligibility = decision === null ? null : nonGateNonblockingEligibilityForDecision(decision);
     Object.freeze(this);
   }
 }
@@ -415,7 +419,7 @@ function definitionOwnedGateDirective(selection, { state, binding }) {
       actionId: "REPAIR_PLAN_GATE_EVIDENCE",
       evidenceKind: "gate",
       phase,
-      nextAction: guardedCommand("sennel flow run repair-plan-gate", state, binding),
+      command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "repair-plan-gate" }), state, binding),
       instruction: "Apply the current Definition-selected, evidence-bound Gate repair.",
       reason: "The current repair receipt is bound to this Gate Attempt.",
     });
@@ -647,7 +651,7 @@ function retryRecoveryPlanFor({ ctx, state, descriptor, target }) {
     flowManager: ctx.flowManager,
     state: canonical,
     executionRoot: ctx.executionRoot || ctx.root,
-    artifactRoot: ctx.mainRoot || ctx.root,
+    artifactRoot: flowArtifactRoot(ctx),
   });
   return recoveryPlan;
 }
@@ -785,7 +789,7 @@ export function projectApprovalRequirements({
  * established field order; only the source of identity and lifecycle facts
  * changes from mutable state to the Version Store.
  */
-function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding, missingProducerArtifactRoute = null, selectedFinalRegressionAction = null, interruptedRuntimeLog = null) {
+function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding, missingProducerArtifactRoute = undefined, selectedFinalRegressionAction = null, interruptedRuntimeLog = null) {
   const target = new CanonicalNextActionTarget({ state: typedState, descriptor });
   const preparationDirective = target.scope === "flow" && prepareStepRegistration(target.stepId) !== null
     ? projectPrepareStepExecution({ ctx, stepId: target.stepId }) : null;
@@ -859,8 +863,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const gateSelection = specPostFailure === null
     ? definitionOwnedGateSelection(ctx, state, target) : null;
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
-  const definitionEligibility = acceptanceProjection !== null ? acceptanceProjection.eligibility
-    : specPostFailure === null ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
+  const definitionEligibility = selectedFinalRegressionAction !== null ? selectedFinalRegressionAction.eligibility
+    : acceptanceProjection !== null ? acceptanceProjection.eligibility
+      : specPostFailure === null ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
   const activationOffer = nonblockingActivationOfferForStrictStop({
     state,
     eligibility: definitionEligibility,
@@ -914,8 +919,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     binding,
     recoveryPlan,
   });
-  const missingRoute = missingProducerArtifactRoute
-    ?? missingProducerArtifactRouteFor({ ctx, typedState });
+  const missingRoute = missingProducerArtifactRoute === undefined
+    ? missingProducerArtifactRouteFor({ ctx, typedState }) : missingProducerArtifactRoute;
   const planGateRepair = null;
   const lifecycleDirective = selectedFinalRegressionAction?.directive ?? new NextActionDirectiveResolver({
     state,
@@ -1035,7 +1040,9 @@ export default class GetNextActionCommand extends FlowCommand {
       );
     }
     ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
-    return this.executeCanonical(ctx);
+    return withReadOnlyManagedProcessScope({
+      mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+    }, () => this.executeCanonical(ctx));
   }
 
   executeCanonical(ctx) {
@@ -1060,7 +1067,7 @@ export default class GetNextActionCommand extends FlowCommand {
       specId: ctx.flowState.specId,
     }));
     if (taskExecutionOverrun !== null) {
-      const result = buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null);
+      const result = buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding);
       return {
         ...result,
         definitionTransition: taskExecutionOverrun.toJSON(),

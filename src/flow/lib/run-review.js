@@ -20,6 +20,7 @@ import {
 
 import { PKG_DIR } from "../../lib/cli.js";
 import { runManagedCmdAsync } from "../../lib/process.js";
+import { withManagedProcessScope, withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";
 import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
 import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
@@ -60,6 +61,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "node:crypto";
 import { runGit } from "../../lib/git-helpers.js";
+import { GitRepositoryPolicy } from "../../lib/git-repository-environment.js";
 import { PRODUCT } from "../../lib/product.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import {
@@ -964,7 +966,7 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
       throw new Error("the Draft Review publication receipt does not own the current Attempt artifact");
     }
     observation = new CanonicalDraftReviewObservation({
-      payload: record.payload, state, route: draftReviewRouteForRetryPhase(phase),
+      payload: record.payload, state, route: draftReviewRouteForRetryPhase(phase), processEvidence: source.processEvidence,
     }).assertTarget(new ReviewWorkUnitTarget(execution.lifecycle.binding.target.toJSON()));
     if (observation.settlementPublication(record).digest
       !== publicationActivity.result.draftSettlementReceipt.publicationDigest) {
@@ -974,7 +976,7 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
     return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
   }
   readCanonicalReviewProcessStop({ flowManager: ctx.flowManager, state, activity: publicationActivity,
-    processStop: record.payload.processStop, executionRoot: ctx.executionRoot || ctx.root });
+    processStop: observation.processStop, executionRoot: ctx.executionRoot || ctx.root });
   return observation.commandResult(record);
 }
 
@@ -1030,7 +1032,7 @@ function taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit) {
   ));
 }
 
-function taskReviewPublicationRuntimeLocks(flowManager, specId, root = null) {
+export function taskReviewPublicationRuntimeLocks(flowManager, specId, root = null) {
   const location = flowManager.specLocation(specId);
   if (root !== null && fs.realpathSync(root) !== location.repositoryRoot) return [];
   return [
@@ -1200,7 +1202,7 @@ class TaskReviewPersistedCanonicalObservation {
   }
 }
 
-function newTaskReviewCanonicalObservationInput(observation) {
+export function newTaskReviewCanonicalObservationInput(observation) {
   if (!(observation instanceof SourceWorkerCanonicalObservationAdvance)) {
     throw new Error("Task Review canonical observation input requires a parent observation");
   }
@@ -1227,18 +1229,9 @@ class TaskReviewPersistedSourceSnapshot {
       throw new Error(`unsealed Task Review source checkpoint is unreadable: ${cause.message}`);
     }
     try {
-      this.snapshot = new CurrentTaskSourceSnapshot({ lineageSet, entries: document.entries });
+      this.snapshot = CurrentTaskSourceSnapshot.fromStored(document, { lineageSet });
     } catch (cause) {
       throw new Error(`unsealed Task Review source checkpoint cannot be restored against canonical lineage: ${cause.message}`);
-    }
-    if (
-      document.fingerprint !== this.snapshot.fingerprint
-      || document.runId !== this.snapshot.runId
-      || document.specId !== this.snapshot.specId
-      || document.taskId !== this.snapshot.taskId
-      || JSON.stringify(document.lineageFingerprints) !== JSON.stringify(this.snapshot.lineageFingerprints)
-    ) {
-      throw new Error("unsealed Task Review source checkpoint does not match canonical lineage");
     }
     this.workUnit = workUnit;
     Object.freeze(this);
@@ -1247,7 +1240,7 @@ class TaskReviewPersistedSourceSnapshot {
 
 /** Typed restoration of one retained, unsealed Task Review checkpoint. */
 class TaskReviewUnsealedSourceCheckpoint {
-  constructor({ workUnit, lineageSet, executionRoot } = {}) {
+  constructor({ workUnit, lineageSet, executionRoot, flowManager, specId } = {}) {
     const persisted = new TaskReviewPersistedSourceSnapshot({ workUnit, lineageSet, executionRoot });
     this.workUnit = persisted.workUnit;
     this.snapshot = persisted.snapshot;
@@ -1255,7 +1248,13 @@ class TaskReviewUnsealedSourceCheckpoint {
       workUnit,
       executionRoot,
       logicalKey: "task.source-effect-baseline",
+      runtimeLocks: taskReviewPublicationRuntimeLocks(flowManager, specId, executionRoot),
     }).baseline;
+    const observation = new TaskReviewPersistedCanonicalObservation({ workUnit, flowManager, specId }).observation;
+    this.canonicalObservationBoundary = new TaskReviewCanonicalObservationBoundary({
+      flowManager, specId, observationAdvance: observation,
+      canonicalSnapshot: observation.canonicalSnapshot,
+    });
     Object.freeze(this);
   }
 
@@ -1265,7 +1264,10 @@ class TaskReviewUnsealedSourceCheckpoint {
   }
 
   observedSourceEffect() {
-    const manifest = SourceMutationManifest.capture({ baseline: this.baseline });
+    // Without an authoritative stopped checkpoint, no replacement generation
+    // or unverified canonical advance can authorize deleting retained evidence.
+    const manifest = SourceMutationManifest.capture({ baseline: this.baseline, beforeWorker: true });
+    this.canonicalObservationBoundary.assertMetricSettlementOnly();
     return manifest.mutations.length > 0;
   }
 }
@@ -1476,11 +1478,11 @@ function taskReviewCanonicalVersionPrefix({ flowManager, state, executionRoot })
   return prefix;
 }
 
-function taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot } = {}) {
+function taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot, currentSnapshot } = {}) {
   const prefix = taskReviewCanonicalVersionPrefix({ flowManager, state, executionRoot });
   if (prefix === null) return new Set();
   const routeId = `review-impl-${taskId}`;
-  return new Set([
+  return authorization.snapshot.publicationPaths(currentSnapshot, [
     path.posix.join(prefix, FLOW_ARTIFACT_CONTRACTS.resolve("retry.recovery.receipt", {
       routeId, attemptId: authorization.currentAttempt.id,
     }).relativePath),
@@ -1542,8 +1544,9 @@ function assertTaskReviewUnsealedCleanupAuthorized({ recovered, state, flowManag
     readRetryBaseline(flowManager, state, retryEvidenceRouteForNode(state, state.attempt.nodeId));
     if (prefix !== null) unchangedPaths.add(path.posix.join(prefix, retryBaseline.relativePath));
   }
-  const unchangedSourceChanges = checkpoint.observed.allChangedPaths(fresh);
-  if (unchangedSourceChanges.length > 0 && unchangedSourceChanges.every((entry) => unchangedPaths.has(entry))) {
+  const unchangedSourceChanges = checkpoint.observed.observationChanges(fresh);
+  const unchangedPublicationPaths = checkpoint.observed.publicationPaths(fresh, unchangedPaths);
+  if (unchangedSourceChanges.length > 0 && unchangedSourceChanges.every((entry) => unchangedPublicationPaths.has(entry))) {
     return true;
   }
   const route = retryEvidenceRouteForNode(state, state.attempt.nodeId);
@@ -1554,10 +1557,10 @@ function assertTaskReviewUnsealedCleanupAuthorized({ recovered, state, flowManag
   const authorization = readTaskReviewRecoveryAuthorization({ flowManager, state, taskId, root: executionRoot });
   const parentPublicationChanges = authorization === null
     ? []
-    : authorization.snapshot.allChangedPaths(fresh);
+    : authorization.snapshot.observationChanges(fresh);
   const parentPublicationPaths = authorization === null
     ? new Set()
-    : taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot });
+    : taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot, currentSnapshot: fresh });
   const onlyVerifiedParentPublications = parentPublicationChanges.length > 0
     && parentPublicationChanges.every((entry) => parentPublicationPaths.has(entry));
   const currentTargetDigest = authorization === null ? null : new ReviewTargetAuthority({
@@ -1639,7 +1642,9 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
         cleanup.push(recovered);
         continue;
       }
-      checkpoint = new TaskReviewUnsealedSourceCheckpoint({ workUnit: recovered, lineageSet, executionRoot });
+      checkpoint = new TaskReviewUnsealedSourceCheckpoint({
+        workUnit: recovered, lineageSet, executionRoot, flowManager, specId: state.specId,
+      });
       current = workUnit.captureCurrentTaskSource();
     } catch (cause) {
       throw partialTaskReviewEffectFailure({
@@ -1775,8 +1780,14 @@ export class RunReviewCommand extends FlowCommand {
     }
 
     if (taskId !== null) {
-      try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state, taskId, root: executionRoot }); }
-      catch (error) { return Envelope.fail("run", "review", "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED", error.message); }
+      try {
+        await withReadOnlyManagedProcessScope({ mainRoot: ctx.mainRoot || ctx.root, executionRoot },
+          () => assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state, taskId, root: executionRoot }));
+      }
+      catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
+        return Envelope.fail("run", "review", "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED", error.message);
+      }
     }
     const treeSha = this.resolveTreeSha(ctx);
     const targetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
@@ -1894,12 +1905,14 @@ export class RunReviewCommand extends FlowCommand {
           // The parent will publish only this generation's contract with its claim.
           // Its exact producer and bytes remain checked by the canonical observation.
           const contractPaths = contractPath.startsWith("../") || path.posix.isAbsolute(contractPath) ? [] : [contractPath];
-          taskRecoveryBaseline = SourceMutationBaseline.capture({
+          taskRecoveryBaseline = await withManagedProcessScope({
+            standaloneRoot: executionRoot, executionRoot, readOnly: true,
+          }, () => SourceMutationBaseline.capture({
             root: executionRoot,
             attempt: taskReviewExecution.attempt,
             ignoredDirectories: [...taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent, flowTemporaryRoot(ctx)), ...contractPaths],
             runtimeLocks: taskReviewPublicationRuntimeLocks(ctx.flowManager, state.specId, executionRoot),
-          });
+          }));
           taskRecoveryBaselineInput = newTaskReviewBaselineInput({
             logicalKey: "task.source-effect-baseline",
             logicalPath: "task-source-effect-baseline.json",
@@ -2026,6 +2039,7 @@ export class RunReviewCommand extends FlowCommand {
         ? reviewProviderRequest.request.skipConfirm : ctx.skipConfirm) args.push("--skip-confirm");
       const env = {
         ...process.env,
+        ...new GitRepositoryPolicy({ repositoryRoot: executionRoot, readOnly: true }).environment({}),
         [PRODUCT.env("REVIEW_OUTPUT_DIR")]: surface.directory,
         [REVIEW_WORK_UNIT_MANIFEST_ENV]: surface.manifestPath,
         [PRODUCT.env("REVIEW_EXECUTION_CONTRACT_ID")]: workUnit.workUnit.executionContract.id,
@@ -2059,8 +2073,9 @@ export class RunReviewCommand extends FlowCommand {
       try {
         res = await runCmdWithRetry(
           async () => {
-            const child = new RuntimeChildExecution({ root: ctx.repositoryRoot || ctx.mainRoot || ctx.root, environment: env, temporaryRoot: flowTemporaryRoot(ctx) });
-            try { return await this.runCommand("node", [scriptPath, ...args], child.options({
+            return await RuntimeChildExecution.runAsync(scriptPath, args, {
+              repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+              env, temporaryRoot: flowTemporaryRoot(ctx),
               cwd: executionRoot,
               onProcessExecutionStop(receipt) {
                 processStop = new FlowProcessStopEvidence(receipt)
@@ -2072,8 +2087,7 @@ export class RunReviewCommand extends FlowCommand {
                 workUnitId: surface.manifestPath,
                 commandId: "flow.review",
               }),
-            })); }
-            finally { child.close(); }
+            }, this.runCommand);
           },
           {
             phase: persistedPhase,
@@ -2146,6 +2160,7 @@ export class RunReviewCommand extends FlowCommand {
     }
     let promotion;
     let taskSourceManifest = null;
+    let taskExecutionObservations = null;
     const taskSpecDigest = taskReviewSpecDigest(ctx.flowManager, state, taskId);
     const reviewFindingCycle = persistedPhase === IMPL_REVIEW_PHASE
       ? ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: ctx.flowManager.activityLedger(state.specId) }) : null;
@@ -2168,9 +2183,14 @@ export class RunReviewCommand extends FlowCommand {
         implementationReviewCycle,
       });
       if (taskId !== null) {
-        taskSourceManifest = ctx.flowManager.readCanonicalTransitionView({ specId: state.specId,
-          read: (view) => SourceMutationManifest.capture({ baseline: taskRecoveryBaseline,
-            executionObservations: new SourceExecutionObservationAppends(view, taskRecoveryBaseline.snapshot) }) });
+        taskSourceManifest = await withManagedProcessScope({
+          standaloneRoot: executionRoot, executionRoot, readOnly: true,
+        }, () => ctx.flowManager.readCanonicalTransitionView({ specId: state.specId,
+          read: (view) => {
+            taskExecutionObservations = new SourceExecutionObservationAppends(view, taskRecoveryBaseline.snapshot);
+            return SourceMutationManifest.capture({ baseline: taskRecoveryBaseline,
+              executionObservations: taskExecutionObservations });
+          } }));
         if (taskSourceManifest.mutations.length > 0) {
           throw new TaskReviewSourceEffectRejection(
             `Task Review must not modify source: ${taskSourceManifest.paths().join(", ")}`,
@@ -2219,6 +2239,7 @@ export class RunReviewCommand extends FlowCommand {
         specDigest: taskSpecDigest,
         baseline: taskRecoveryBaseline,
         manifest: taskSourceManifest,
+        executionObservations: taskExecutionObservations,
         canonicalObservation: taskCanonicalObservation,
       });
       promotion = new CanonicalReviewPromotion({
@@ -2315,7 +2336,7 @@ export class RunReviewCommand extends FlowCommand {
     if (stepFailureKind === "step-admission") {
       return Envelope.fail("run", "review",
         phase === "spec" ? "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED" : "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED",
-        error.message, { failureKind: "step-admission" });
+        error.message, { failureKind: "step-admission" }).attachStopGuidance({ error });
     }
     const classified = error?.reviewFailure instanceof ReviewFailure
       ? error.reviewFailure
@@ -2533,6 +2554,7 @@ export class RunReviewCommand extends FlowCommand {
     }
     const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
     if (admissionFailure !== null) return admissionFailure;
+    if (dryRun) return this.#executeCanonical(ctx, { phase, dryRun, executionRoot });
     const lease = new ReviewExecutionLease({
       mainRoot: ctx.mainRoot || executionRoot,
       runId: state.runId,

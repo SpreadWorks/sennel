@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { FinalizationPhaseScenario } from "../../support/finalization-phase-scenario.js";
+import { ProcessExecutionFinalizationBarrier } from "../../../src/lib/process-execution-finalization.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { artifactPublicationClaimForStep, finalizationCompletionPublicationClaim } from "../../../src/flow/lib/flow-artifact-authority.js";
 
@@ -50,6 +51,14 @@ test("Finalization completion rolls back both source confirmation and lifecycle 
       assert.equal(saved.receipt.settlementKind, "completion");
       const finalized = flow.manager.activityLedger(flow.specId).filter((entry) => entry.type === "flow_finalized");
       assert.equal(finalized.length, 1);
+      const barrier = ProcessExecutionFinalizationBarrier.fromStored(finalized[0].processFinalizationBarrier);
+      const state = flow.state();
+      assert.deepEqual(barrier.selection.toJSON(), {
+        flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId,
+      }, "the production completion must persist its exact fenced subject");
+      const processEvents = flow.manager.activityLedger(flow.specId).filter((entry) =>
+        entry.processEvent?.executionId === barrier.executionId).map((entry) => entry.processEvent);
+      assert.deepEqual(barrier.events.map((entry) => entry.eventId), processEvents.map((event) => event.eventId));
       const completed = flow.snapshot();
       flow.manager.applyActivity(finalized[0], { specId: flow.specId });
       assert.deepEqual(flow.reload().snapshot(), completed, "exact lifecycle replay is read-only");

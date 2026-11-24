@@ -164,7 +164,7 @@ function setupFixture(tmp) {
     docs: { languages: ["en"], defaultLanguage: "en" },
     flow: { merge: "squash" },
     test: {
-      command: "node --test tests/project.test.js",
+      command: { kind: "native", executable: "node", args: ["--test", "tests/project.test.js"] },
       testExecuteRegression: "targeted",
       timeout: 30,
     },

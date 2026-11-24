@@ -1,0 +1,29 @@
+{
+  "id": "6286de7c4fece8c2bc59795059dbdd7666977a79f96c74d821700a7337340c59",
+  "contract": {
+    "runId": "run-source-checkpoint-implement-direct",
+    "specId": "source-checkpoint-implement-direct",
+    "stepId": "implement",
+    "nodeId": "implement",
+    "taskId": null,
+    "attemptId": "attempt-implement-0c9ccd9e-59aa-4390-8139-e82aba89c1c3",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "2f93cdf427e2c9a72c7af5c0faad32d9521b26ff0f83ff8d644bb7e1d98b36b9",
+    "runtimeRevision": "017b187e7f82008ddaaff0bc3931a6146ffc716fa8674dff729900e344138cf4",
+    "promptDigest": "ec3ea2c22aca4ec6dcabd9add4b61a6ef8a96d55da62946c8e8860af77b7a9fd",
+    "schemaDigest": "d6d77d454fc2d1cef7bd59075c1437c97797248df13efd61579231838d652de6",
+    "budgetOwner": "76cf82f73c174b674a67258d6c05bc881448bff59c76cab0671c26d4d0d8b30c",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "spec.record",
+        "relativePath": "spec.json",
+        "hash": "c1cd8bbded961b1823e9cf51a2028c79e540f754583501956266081f41e6249a",
+        "size": 1009,
+        "activityId": "spec-approval-confirmed-0e783890-291b-4aee-b2b9-2d35520e156c"
+      }
+    ]
+  }
+}

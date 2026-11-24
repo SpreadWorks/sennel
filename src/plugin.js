@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import fs from "fs";
-import { repoRoot } from "./lib/cli.js";
+import path from "node:path";
+import { repoRoot, PKG_DIR } from "./lib/cli.js";
 import { EXIT_ERROR } from "./lib/constants.js";
-import { runCmd } from "./lib/process.js";
+import { RuntimeChildExecution } from "./lib/runtime-package.js";
 import { PRODUCT } from "./lib/product.js";
 import {
   addPluginRepo,
@@ -77,7 +78,7 @@ function upgradeSkip(reason) {
 }
 
 function runAutomaticUpgrade(root) {
-  const result = runCmd("sennel", ["upgrade"], {
+  const result = RuntimeChildExecution.runSync(path.join(PKG_DIR, PRODUCT.entrypointBasename), ["upgrade"], {
     cwd: root,
     env: {
       ...process.env,

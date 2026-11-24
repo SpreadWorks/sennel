@@ -2,12 +2,9 @@ import {
   ChildProcessExecutionRecordCodec,
   processResultFromSpawnSync,
 } from "../../../src/flow/lib/test-regression.js";
+import { shellQuote } from "./shell-argument.js";
 
 const CODEC = new ChildProcessExecutionRecordCodec();
-
-function shellQuote(value) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 export function childProcessRecord({
   command = ["node", "--test", "tests/unit/nested.test.js"],

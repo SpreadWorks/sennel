@@ -33,10 +33,10 @@ describe("metrics token — flow_finalized Activity as date axis", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("uses flow_finalized Activity timing as the date column, not file mtime", () => {
+  it("uses flow_finalized Activity timing as the date column, not file mtime", async () => {
     tmp = createTmpDir("sennel-metrics-finalized-at-");
     writeBaseConfig(tmp);
-    const flow = createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
+    const flow = await createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
     const finalization = finalizedActivity(flow);
     assert.ok(finalization?.timing?.finishedAt, "finalization must retain a timed Activity fact");
     utimesSync(flow.location.flowStateFile, new Date("2000-01-01T00:00:00.000Z"), new Date("2000-01-01T00:00:00.000Z"));
@@ -47,11 +47,11 @@ describe("metrics token — flow_finalized Activity as date axis", () => {
     assert.equal(row.date, finalization.timing.finishedAt.slice(0, 10));
   });
 
-  it("skips non-finalized V1 Flows and prints a durable-fact warning", () => {
+  it("skips non-finalized V1 Flows and prints a durable-fact warning", async () => {
     tmp = createTmpDir("sennel-metrics-finalized-at-missing-");
     writeBaseConfig(tmp);
-    createCanonicalTokenMetricsFlow(tmp, { specId: "001-alpha", finalized: false, agentMetrics: metric() });
-    const completed = createCanonicalTokenMetricsFlow(tmp, { specId: "002-beta", agentMetrics: metric() });
+    await createCanonicalTokenMetricsFlow(tmp, { specId: "001-alpha", finalized: false, agentMetrics: metric() });
+    const completed = await createCanonicalTokenMetricsFlow(tmp, { specId: "002-beta", agentMetrics: metric() });
 
     const res = runTokenCapture(tmp);
     assert.equal(res.status, 0, `expected exit 0, got ${res.status}. stderr=${res.stderr}`);
@@ -62,10 +62,10 @@ describe("metrics token — flow_finalized Activity as date axis", () => {
     assert.match(res.stderr, /flow_finalized Activity timing/i);
   });
 
-  it("invalidates a cache without the V1 input fingerprint and rebuilds", () => {
+  it("invalidates a cache without the V1 input fingerprint and rebuilds", async () => {
     tmp = createTmpDir("sennel-metrics-finalized-at-cache-");
     writeBaseConfig(tmp);
-    const flow = createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
+    const flow = await createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
     writeTokenCache(tmp, {
       generatedAt: "2020-01-01T00:00:00Z",
       rows: [{
@@ -90,10 +90,10 @@ describe("metrics token — flow_finalized Activity as date axis", () => {
     assert.equal(cache.rows[0].date, finalizedActivity(flow).timing.finishedAt.slice(0, 10));
   });
 
-  it("reuses the cache when the canonical input fingerprint matches", () => {
+  it("reuses the cache when the canonical input fingerprint matches", async () => {
     tmp = createTmpDir("sennel-metrics-finalized-at-cache-reuse-");
     writeBaseConfig(tmp);
-    createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
+    await createCanonicalTokenMetricsFlow(tmp, { agentMetrics: metric() });
     runTokenJson(tmp);
     const cache = readTokenCache(tmp);
     cache.rows[0].tokenInput = 42;

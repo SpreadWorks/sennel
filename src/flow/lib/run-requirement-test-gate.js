@@ -5,7 +5,11 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import { runCmdAsync, standaloneTestEnvironment } from "../../lib/process.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { flowTemporaryRoot } from "./flow-context.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 import { FlowCommand } from "./base-command.js";
@@ -125,19 +129,20 @@ export async function runRequirementTestGate({
   const materialized = temporaryPaths.create(
     temporaryRoot ?? temporaryPaths.runtime("requirement-test-gate"), "candidate-",
   );
+  let preserveCandidate = false;
   try {
     const testFiles = [];
     for (const source of sources.bundle.sources) {
       if (!TEST_FILE_RE.test(source.testPath)) continue;
       const target = path.join(materialized, source.testPath);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, sources.bytesByPath.get(source.testPath), { mode: 0o644 });
+      RealDirectoryAuthority.resolve(path.dirname(target), { create: true });
+      new AtomicFile(target).write(sources.bytesByPath.get(source.testPath));
       testFiles.push(target);
     }
     for (const support of sources.bundle.support) {
       const target = path.join(materialized, support.supportPath);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, sources.bytesByPath.get(support.supportPath), { mode: 0o644 });
+      RealDirectoryAuthority.resolve(path.dirname(target), { create: true });
+      new AtomicFile(target).write(sources.bytesByPath.get(support.supportPath));
     }
     const bootstrap = new SpecTestBootstrapValidator({
       payloadSpecDir: materialized,
@@ -163,7 +168,7 @@ export async function runRequirementTestGate({
     const assigned = [];
     const skipped = [];
     for (const file of testFiles) {
-      const source = fs.readFileSync(file, "utf8");
+      const source = captureRegularFile(file, { label: "requirement test source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
       const header = scanFileHeader(file);
       if (header.kind === "valid" && header.ids.includes(requirementId)) {
         assigned.push(...assignedNames(file, source, requirementId).map((testName) => ({ file, testName })));
@@ -203,10 +208,13 @@ export async function runRequirementTestGate({
       canonicalSpecRoot: versionLocation.resolve("artifacts"),
     });
     const relative = path.relative(repositoryRoot, target.file).split(path.sep).join("/");
-    const argv = execution.nodeArgv(["--test", `--test-name-pattern=^${target.testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, relative]);
+    // Named-test observations consume TAP, independent of Node's default reporter.
+    const argv = execution.nodeArgv(["--test", "--test-reporter=tap", `--test-name-pattern=^${target.testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, relative]);
     const environment = standaloneTestEnvironment();
     const processResult = await runCmdAsync(argv[0], argv.slice(1), {
       cwd: repositoryRoot,
+      repositoryRoot: temporaryRepositoryRoot,
+      readOnly: true,
       timeout: timeoutMs,
       maxBuffer: 20 * 1024 * 1024,
       env: { ...environment, ...execution.environment },
@@ -229,8 +237,11 @@ export async function runRequirementTestGate({
       command: argv.join(" "),
       process: observedProcess,
     };
+  } catch (error) {
+    preserveCandidate = error instanceof ProcessExecutionControlFailure;
+    throw error;
   } finally {
-    fs.rmSync(materialized, { recursive: true, force: true });
+    if (!preserveCandidate) temporaryPaths.cleanup(materialized);
   }
 }
 

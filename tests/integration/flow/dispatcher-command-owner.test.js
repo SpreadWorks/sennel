@@ -630,6 +630,7 @@ test("a successful dispatcher-owned repair that makes no durable progress stalls
         kind: "repair_evidence", terminal: false, requiresUserAction: false,
         actionId: "REPAIR_PLAN_GATE_EVIDENCE", evidenceKind: "gate", phase: "draft",
         instruction: "Repair the governed evidence.", reason: "fixture", nextAction: "sennel flow run repair-plan-gate",
+        command: { group: "run", subcommand: "repair-plan-gate", args: [] },
       },
     };
     let repairCalls = 0;

@@ -1,0 +1,77 @@
+{
+  "executionId": "fbecd985-9f74-46cd-8430-f6a3302558c8",
+  "callId": "e64d3572-2e55-4093-9fd7-b0d9d73d874c",
+  "ownerEpoch": 1,
+  "checkoutIdentity": {
+    "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/b900-execution-contract/.tmp/b900/receipt-baseline/.tmp/receipt-output/fixture-HbQRur",
+    "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/b900-execution-contract/.tmp/b900/receipt-baseline/.tmp/receipt-output/fixture-HbQRur",
+    "mainDevice": 2049,
+    "mainInode": 11481798,
+    "checkoutDevice": 2049,
+    "checkoutInode": 11481798
+  },
+  "binding": null,
+  "invocation": {
+    "kind": "provider",
+    "commandId": null,
+    "providerAttemptId": null,
+    "logicalInvocationId": null,
+    "providerAttemptContext": null,
+    "observationBinding": null,
+    "measurementId": null,
+    "promptProcessIdentity": null,
+    "command": {
+      "program": {
+        "value": null,
+        "reason": "absolute-path"
+      },
+      "argv": [
+        {
+          "position": 0,
+          "value": null,
+          "reason": "not-public"
+        },
+        {
+          "position": 1,
+          "value": null,
+          "reason": "not-public"
+        }
+      ],
+      "cwd": {
+        "value": "execution-root",
+        "reason": null
+      },
+      "complete": false
+    },
+    "timeoutMs": 20000,
+    "deadline": 1792418244252,
+    "reservedAt": "2026-10-19T13:57:04.282Z"
+  },
+  "launcherIdentity": {
+    "pid": 2485983,
+    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+    "startFingerprint": "85781373",
+    "ownerToken": "4073c9ab-e84e-46f6-b1a4-a5aa0ea94745"
+  },
+  "pgid": 2485983,
+  "members": [
+    {
+      "pid": 2485983,
+      "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+      "startFingerprint": "85781373",
+      "ownerToken": "4073c9ab-e84e-46f6-b1a4-a5aa0ea94745"
+    },
+    {
+      "pid": 2486028,
+      "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+      "startFingerprint": "85781594",
+      "ownerToken": "4073c9ab-e84e-46f6-b1a4-a5aa0ea94745"
+    }
+  ],
+  "stopEvidence": {
+    "status": "confirmed",
+    "reason": "process-tree-death-observed",
+    "unterminatedMembers": []
+  },
+  "outcomeDigest": "bb15a8e6982ea14f86dd4ff37246a4018331fc390500ddaea8f3a55b51c089f0"
+}

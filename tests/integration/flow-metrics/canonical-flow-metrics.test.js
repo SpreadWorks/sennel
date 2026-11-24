@@ -15,6 +15,7 @@ import {
 import { SpecReviewDelta, mergeSpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createCanonicalTokenMetricsFlow } from "../../support/builders/metrics-token.js";
 
 const roots = [];
 
@@ -24,12 +25,6 @@ function root() {
   return value;
 }
 
-function finalizeFixture(fixture, flowManager) {
-  const leafIds = fixture.leaves().map((step) => step.id);
-  for (const nodeId of leafIds) fixture.settle(nodeId);
-  flowManager.finalizeFlow(fixture.specId);
-}
-
 afterEach(() => {
   while (roots.length > 0) removeTmpDir(roots.pop());
 });
@@ -37,32 +32,14 @@ afterEach(() => {
 describe("CanonicalMetricsFlowIndex", () => {
   it("reads finalized V1 Flow observations and catalog inputs without a root-layout fallback", async () => {
     const repository = root();
-    const flowManager = makeFlowManager(repository);
-    const fixture = new CanonicalFlowFixture({
-      flowManager,
+    const { flowManager, flow: fixture } = await createCanonicalTokenMetricsFlow(repository, {
       specId: "001-canonical-metrics",
-      runId: "canonical-metrics-run",
       request: "Record canonical metrics.",
-      execution: { mode: "direct" },
-      specRecord: {
-        goal: "Read metrics from the V1 catalog.",
-        requirements: [],
-      },
-    }).create();
-    flowManager.incrementMetric("draft", "question", { specId: fixture.specId });
-    flowManager.accumulateAgentMetrics("draft", {
-      specId: fixture.specId,
-      provider: "test-provider",
-      profileKey: "test-profile",
-      usage: {
-        input_tokens: 11,
-        output_tokens: 7,
-        cache_read_tokens: 3,
-        cache_creation_tokens: 2,
-        cost_usd: 0.01,
-      },
+      goal: "Read metrics from the V1 catalog.",
+      draftQuestions: 1,
+      agentMetrics: [{ phase: "draft", provider: "test-provider", profileKey: "test-profile",
+        input: 11, output: 7, cacheRead: 3, cacheCreation: 2, cost: 0.01 }],
     });
-    finalizeFixture(fixture, flowManager);
 
     const index = await CanonicalMetricsFlowIndex.read({
       flowManager,

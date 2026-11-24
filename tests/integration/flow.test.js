@@ -3,14 +3,15 @@ import {
   makeFlowManager,
   makeLifecycleStepTransition,
   makeNormalStepTransition,
-  CanonicalFlowFixture,
   FlowAtStepFixture,
+  CanonicalFlowFixture,
 } from "../support/infrastructure/flow-setup.js";
 import assert from "node:assert/strict";
 import fs from "fs";
 import { dirname, join } from "path";
 import { execFileSync } from "child_process";
 import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
+import { fixtureRepository } from "../support/infrastructure/flow-dispatch-scenario.js";
 import { buildInitialSteps, FLOW_STEPS } from "../../src/lib/flow-helpers.js";
 import { flattenSteps, findStepById } from "../../src/flow/lib/step-tree.js";
 const FLOW_CMD = join(process.cwd(), "src/flow.js");
@@ -282,16 +283,24 @@ describe("flow-state steps and requirements", () => {
     assert.equal(prepareSpec.status, "pending", "pending transition does not trigger promotion");
   });
 
-  it("updateStepStatus does nothing when no pending steps remain (REQ-1 edge)", () => {
-    tmp = createTmpDir();
+  it("terminal Flow leaves cannot be confirmed again or promote another pending step", async () => {
+    tmp = fixtureRepository("flow-terminal-state-");
     const flowManager = makeFlowManager(tmp);
-    const fixture = new CanonicalFlowFixture({
+    const fixture = await new FlowAtStepFixture({
       flowManager,
       specId: "001-test",
       runId: "run-test",
-      execution: { mode: "direct" },
-    }).create().registerActive();
-    for (const step of fixture.leaves()) fixture.settle(step.id);
+      execution: { mode: "direct", baseBranch: "main" },
+      specRecord: { goal: "Keep a completed Flow terminal.",
+        requirements: [{ id: "R-terminal", desc: "A completed Flow cannot confirm a terminal leaf again.", testable: false }] },
+      targetStep: "finalize-cleanup",
+    }).createWithProducers({
+      implementationFiles: new Map([["R-terminal", ["terminal-behavior.js"]]]),
+      sourceMutations: new Map([["implement", () => {
+        fs.writeFileSync(join(tmp, "terminal-behavior.js"), "export const terminalBehavior = true;\n");
+      }]]),
+    });
+    fixture.flow.flow.settle("finalize-cleanup");
     const specId = fixture.state().specId;
     const fm = makeFlowManager(tmp);
     assert.equal(typeof fm.mutate, "undefined");

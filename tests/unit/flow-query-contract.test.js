@@ -229,8 +229,8 @@ function repairResponse() {
 }
 
 describe("Flow Query public response contract", () => {
-  it("publishes revision 3 while preserving request resource, conditions and page requirements", () => {
-    assert.equal(FLOW_QUERY_SCHEMA_REVISION, 3);
+  it("publishes revision 4 while preserving request resource, conditions and page requirements", () => {
+    assert.equal(FLOW_QUERY_SCHEMA_REVISION, 4);
     assert.deepEqual(validateFlowQueryRequest({ resource: "metadata", condition: { specId: "sample" } }), []);
     assert.deepEqual(validateFlowQueryRequest({ resource: "activities", condition: { specId: "sample" }, page: { limit: 100, after: null } }), []);
     assert.notEqual(validateFlowQueryRequest({ resource: "activities", condition: { specId: "sample" } }).length, 0);

@@ -10,7 +10,7 @@ import { WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/
 import { runCmd } from "../../../src/lib/process.js";
 import { CanonicalFlowFixture } from "../infrastructure/flow-setup.js";
 import { SeedWorkRoot, observeSeedTiming } from "../builders/seed-work-root.js";
-import { OfflineMigrationDirectorySnapshot } from "../../../src/lib/offline-migration-transaction.js";
+import { OfflineMigrationDirectorySnapshot } from "./migration-directory-snapshot.js";
 
 /** An immutable canonical frontier. Its owner chooses and produces that frontier;
  * this value owns only copied evidence, readback and teardown verification. */

@@ -9,19 +9,22 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import { copyFixture, runPipeline, removeTmpDir } from "./lib/pipeline.js";
+import { copyFixture, runPipeline } from "./lib/pipeline.js";
 import { getAcceptanceFixtureDir } from "./lib/targets.js";
 
 describe("acceptance report: pipeline traceability", { timeout: 300000 }, () => {
   let tmp;
+  let workRoot;
   afterEach(() => {
-    if (tmp) removeTmpDir(tmp);
+    workRoot?.cleanup();
+    workRoot = null;
     tmp = null;
   });
 
   it("runPipeline returns step timing for each pipeline step", async () => {
     const fixtureDir = getAcceptanceFixtureDir("base");
-    tmp = copyFixture(fixtureDir, { type: "base", agent: null });
+    workRoot = copyFixture(fixtureDir, { type: "base", agent: null });
+    tmp = workRoot.root;
 
     const result = await runPipeline(tmp);
 
@@ -48,16 +51,16 @@ describe("acceptance report: pipeline traceability", { timeout: 300000 }, () => 
 
   it("failed step records status as error", async () => {
     const fixtureDir = getAcceptanceFixtureDir("base");
-    const badTmp = copyFixture(fixtureDir, { type: "base", agent: null });
-
-    const outputDir = path.join(badTmp, ".sennel", "output");
-    fs.rmSync(outputDir, { recursive: true });
-    fs.writeFileSync(path.join(badTmp, ".sennel", "output"), "not-a-dir");
+    const badWorkRoot = copyFixture(fixtureDir, { type: "base", agent: null });
+    const badTmp = badWorkRoot.root;
 
     try {
+      const outputDir = path.join(badTmp, ".sennel", "output");
+      fs.rmSync(outputDir, { recursive: true });
+      fs.writeFileSync(path.join(badTmp, ".sennel", "output"), "not-a-dir");
       await assert.rejects(runPipeline(badTmp), (error) => error.stepResult?.status === "error");
     } finally {
-      removeTmpDir(badTmp);
+      badWorkRoot.cleanup();
     }
   });
 
@@ -65,14 +68,17 @@ describe("acceptance report: pipeline traceability", { timeout: 300000 }, () => 
 
 describe("acceptance report: JSON output", { timeout: 300000 }, () => {
   let tmp;
+  let workRoot;
   afterEach(() => {
-    if (tmp) removeTmpDir(tmp);
+    workRoot?.cleanup();
+    workRoot = null;
     tmp = null;
   });
 
   it("report JSON is written to .sennel/output/acceptance-report.json", async () => {
     const fixtureDir = getAcceptanceFixtureDir("base");
-    tmp = copyFixture(fixtureDir, { type: "base", agent: null });
+    workRoot = copyFixture(fixtureDir, { type: "base", agent: null });
+    tmp = workRoot.root;
 
     await runPipeline(tmp);
 

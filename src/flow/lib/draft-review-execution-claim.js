@@ -4,7 +4,7 @@ import { recoverStepSettlementReceipt } from "./definition-lifecycle-failure.js"
 /** Save one exact Review claim, recovering only its durable receipt. */
 export function claimDraftReviewExecution({ flowManager, binding, stepResult,
   settlement, executionBinding, executionClaim, executionContract }) {
-  const input = { binding, stepResult, settlement,
+  const input = { binding, stepResult, settlement, executionContract,
     executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(executionClaim) };
   try {
     return flowManager.claimDraftStepExecution({ binding, stepResult, settlement,

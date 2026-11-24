@@ -1,28 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { RepositoryLockAuthority } from "../../../src/lib/repository-control-lock.js";
+import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocation-workspace.js";
+import { LockOwnerSession, ProcessLock } from "../../../src/lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import path from "node:path";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import {
   RepositoryFlowOperationLock,
   RepositoryMaintenanceLock,
+  resolveRepositoryLockRoot,
 } from "../../../src/lib/repository-maintenance-lock.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
-
-function identitySource({ boot = "boot", start = "100", unknown = false } = {}) {
-  return new ProcessIdentitySource({
-    platform: "linux",
-    pid: process.pid,
-    readBootIdentity() {
-      if (unknown) throw Object.assign(new Error("unavailable"), { code: "EACCES" });
-      return boot;
-    },
-    readProcessStartFingerprint() {
-      if (unknown) throw Object.assign(new Error("unavailable"), { code: "EACCES" });
-      return start;
-    },
-  });
-}
 
 function lockSnapshot(lockPath) {
   const stat = fs.lstatSync(lockPath);
@@ -40,20 +29,104 @@ describe("repository maintenance lock", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
+  it("releases only its owned lock after the migration destination changes while preserving newly observed legacy evidence", () => {
+    tmp = createTmpDir("repository-maintenance-migration-generation-");
+    const canonical = path.join(tmp, ".sennel");
+    fs.mkdirSync(canonical);
+    const maintenance = new RepositoryMaintenanceLock({ mainRoot: tmp });
+    maintenance.acquire();
+    fs.renameSync(canonical, path.join(tmp, "retained-canonical"));
+    fs.mkdirSync(canonical);
+    const foreign = path.join(canonical, ".repository-maintenance.lock");
+    fs.writeFileSync(foreign, "unverified legacy owner\n");
+    const before = lockSnapshot(foreign);
+    maintenance.release();
+    assert.equal(fs.existsSync(RepositoryMaintenanceLock.pathFor(tmp)), false);
+    assertLockUnchanged(foreign, before, "releasing current authority");
+    assert.throws(() => new RepositoryMaintenanceLock({ mainRoot: tmp }).acquire(),
+      { code: "REPOSITORY_MAINTENANCE_LOCK_UNKNOWN" });
+    assertLockUnchanged(foreign, before, "refusing subsequent admission");
+  });
+
+  it("all scoped repository locks inspect without creating storage and acquire outside the migration destination", () => {
+    tmp = createTmpDir("repository-control-scope-");
+    const authority = new RepositoryLockAuthority(tmp);
+    const options = { namespace: "fixture-record", identity: "record identity", fileName: "writer.lock" };
+    const location = authority.location(options);
+    const lock = new ProcessLock({ location, kind: "fixture-record", authority: { record: "record identity" } });
+    assert.equal(lock.inspect(), null);
+    assert.deepEqual(fs.readdirSync(tmp), []);
+    assert.equal(new RepositoryLockAuthority(tmp).location(options).path, location.path);
+    assert.notEqual(authority.location({ ...options, identity: "other record" }).path, location.path);
+    lock.acquire();
+    assert.ok(location.path.startsWith(path.join(tmp, ".tmp", "runtime", "repository-control") + path.sep));
+    assert.equal(fs.existsSync(path.join(tmp, ".sennel")), false);
+    assert.equal(new ProcessLock({ location: new RepositoryLockAuthority(tmp).location(options),
+      kind: "fixture-record", authority: { record: "record identity" } }).inspect().owner.ownerToken, lock.ownerToken);
+    lock.release();
+    assert.equal(fs.existsSync(location.path), false);
+  });
+
+  it("retains the namespace ancestor identity between absent inspection and acquisition", () => {
+    tmp = createTmpDir("repository-control-ancestor-");
+    fs.mkdirSync(path.join(tmp, ".tmp"));
+    const location = new RepositoryLockAuthority(tmp).location({ namespace: "fixture-record", identity: "record", fileName: "writer.lock" });
+    const lock = new ProcessLock({ location, kind: "fixture-record", authority: {} });
+    assert.equal(lock.inspect(), null);
+    fs.renameSync(path.join(tmp, ".tmp"), path.join(tmp, "retained-original"));
+    fs.mkdirSync(path.join(tmp, ".tmp"));
+    assert.throws(() => lock.acquire(), { code: "REAL_DIRECTORY_AUTHORITY_AUTHORITY_INVALID" });
+    assert.deepEqual(fs.readdirSync(path.join(tmp, ".tmp")), []);
+  });
+
+  it("minted read-only lock storage preserves the checkout and rejects a replaced workspace grant", () => {
+    tmp = createTmpDir("repository-control-readonly-");
+    const workspace = ReadOnlyInvocationWorkspace.create();
+    try {
+      const storagePolicy = workspace.processRuntimeStorage();
+      const authority = new RepositoryLockAuthority(tmp, { storagePolicy });
+      const location = authority.location({ namespace: "fixture-record", identity: "record", fileName: "writer.lock" });
+      const before = fs.readdirSync(storagePolicy.directory).sort();
+      const lock = new ProcessLock({ location, kind: "fixture-record", authority: {} });
+      assert.equal(lock.inspect(), null);
+      assert.deepEqual(fs.readdirSync(storagePolicy.directory).sort(), before);
+      lock.acquire();
+      assert.ok(location.path.startsWith(storagePolicy.directory + path.sep));
+      assert.deepEqual(fs.readdirSync(tmp), []);
+      lock.release();
+      const marker = path.join(storagePolicy.directory, "storage-authority.json");
+      fs.writeFileSync(marker, "replaced grant");
+      assert.throws(() => lock.inspect(), { code: "READONLY_WORKSPACE_STORAGE_AUTHORITY_INVALID" });
+      assert.deepEqual(fs.readdirSync(tmp), []);
+    } finally { fs.rmSync(workspace.path, { recursive: true, force: true }); }
+  });
+
+  it("keeps a non-repository root inside an ancestor checkout isolated", () => {
+    tmp = createTmpDir("repository-root-isolation-");
+    assert.equal(resolveRepositoryLockRoot(tmp), path.resolve(tmp));
+    const lock = new RepositoryFlowOperationLock({ mainRoot: tmp });
+    assert.throws(() => lock.owner, { code: "REPOSITORY_LOCK_OWNERSHIP_CHANGED" });
+    lock.acquire();
+    const owner = lock.owner;
+    assert.ok(owner instanceof LockOwnerSession);
+    lock.release();
+    assert.throws(() => lock.owner, { code: "REPOSITORY_LOCK_OWNERSHIP_CHANGED" });
+  });
+
   it("serializes maintenance and flow activation across the common main authority", () => {
     tmp = createTmpDir("repository-maintenance-");
-    const maintenance = new RepositoryMaintenanceLock({ mainRoot: tmp, processIdentitySource: identitySource() });
+    const maintenance = new RepositoryMaintenanceLock({ mainRoot: tmp });
     maintenance.acquire();
     assert.throws(
-      () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() }).acquire(),
+      () => new RepositoryFlowOperationLock({ mainRoot: tmp }).acquire(),
       (error) => error.code === "REPOSITORY_MAINTENANCE_BUSY",
     );
     maintenance.release();
 
-    const flow = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() });
+    const flow = new RepositoryFlowOperationLock({ mainRoot: tmp });
     flow.acquire();
     assert.throws(
-      () => new RepositoryMaintenanceLock({ mainRoot: tmp, processIdentitySource: identitySource() }).acquire(),
+      () => new RepositoryMaintenanceLock({ mainRoot: tmp }).acquire(),
       (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY",
     );
     flow.release();
@@ -61,38 +134,37 @@ describe("repository maintenance lock", () => {
 
   it("shares a flow-operation lock only with an explicitly supplied owner token", () => {
     tmp = createTmpDir("repository-flow-reentrant-");
-    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() });
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp });
     const ownerToken = outer.acquire();
     const nested = new RepositoryFlowOperationLock({
       mainRoot: tmp,
       operationOwnerToken: ownerToken,
-      processIdentitySource: identitySource(),
     });
 
     assert.equal(nested.acquire(), ownerToken);
+    assert.ok(outer.owner instanceof LockOwnerSession);
+    assert.deepEqual(nested.owner.toJSON(), outer.owner.toJSON());
     nested.release();
-    assert.equal(fs.existsSync(path.join(tmp, ".sennel", ".repository-flow-operation.lock")), true);
+    assert.equal(fs.existsSync(path.join(tmp, ".tmp", "runtime", "repository-control", ".repository-flow-operation.lock")), true);
 
     outer.release();
-    assert.equal(fs.existsSync(path.join(tmp, ".sennel", ".repository-flow-operation.lock")), false);
+    assert.equal(fs.existsSync(path.join(tmp, ".tmp", "runtime", "repository-control", ".repository-flow-operation.lock")), false);
   });
 
   it("rejects implicit same-process borrowing and a different supplied owner token", () => {
     tmp = createTmpDir("repository-flow-explicit-owner-");
-    const source = identitySource();
-    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source });
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp });
     outer.acquire();
     try {
       assert.throws(
-        () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source }).acquire(),
+        () => new RepositoryFlowOperationLock({ mainRoot: tmp }).acquire(),
         (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY",
       );
       assert.throws(
         () => new RepositoryFlowOperationLock({
           mainRoot: tmp,
           operationOwnerToken: "22222222-2222-4222-8222-222222222222",
-          processIdentitySource: source,
-        }).acquire(),
+            }).acquire(),
         (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY",
       );
     } finally {
@@ -100,60 +172,22 @@ describe("repository maintenance lock", () => {
     }
   });
 
-  it("assesses the canonical owner before rejecting supplied operation tokens", () => {
-    tmp = createTmpDir("repository-flow-owner-assessment-");
-    const ownerSource = identitySource();
-    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: ownerSource });
+  it("requires both a supplied token and a locally held physical owner for borrowing", () => {
+    tmp = createTmpDir("repository-flow-unregistered-");
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp });
     const ownerToken = outer.acquire();
-    const lockPath = path.join(tmp, ".sennel", ".repository-flow-operation.lock");
-    const before = lockSnapshot(lockPath);
-    const differentToken = "22222222-2222-4222-8222-222222222222";
-
-    try {
-      const cases = [
-        ["without a token", null, identitySource(), "REPOSITORY_FLOW_OPERATION_BUSY", "live"],
-        ["without a token against an unknown owner", null, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
-        ["with the matching live token", ownerToken, identitySource(), null, null],
-        ["with a different live token", differentToken, identitySource(), "REPOSITORY_FLOW_OPERATION_BUSY", "live"],
-        ["with the matching unknown token", ownerToken, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
-        ["with a different unknown token", differentToken, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
-        ["with the matching stale token", ownerToken, identitySource({ boot: "other-boot" }), "REPOSITORY_FLOW_OPERATION_LOCK_STALE", "stale"],
-        ["with a different stale token", differentToken, identitySource({ boot: "other-boot" }), "REPOSITORY_FLOW_OPERATION_LOCK_STALE", "stale"],
-      ];
-
-      for (const [label, operationOwnerToken, processIdentitySource, code, lockStatus] of cases) {
-        const candidate = new RepositoryFlowOperationLock({
-          mainRoot: tmp,
-          operationOwnerToken,
-          processIdentitySource,
-        });
-        if (code === null) {
-          assert.equal(candidate.acquire(), ownerToken, label);
-          assert.equal(candidate.assertOwned(), ownerToken, `${label} retains canonical ownership`);
-          candidate.release();
-        } else {
-          assert.throws(
-            () => candidate.acquire(),
-            (error) => error.code === code
-              && error.lockStatus === lockStatus
-              && error.lockPath === lockPath
-              && error.owner?.processIdentity?.ownerToken === ownerToken
-              && Object.hasOwn(error, "cause")
-              && error.cause === undefined,
-            label,
-          );
-        }
-        assertLockUnchanged(lockPath, before, label);
-      }
-    } finally {
-      outer.release();
-    }
+    const record = fs.readFileSync(outer.lockPath);
+    outer.release();
+    fs.writeFileSync(outer.lockPath, record);
+    const before = lockSnapshot(outer.lockPath);
+    assert.throws(() => new RepositoryFlowOperationLock({ mainRoot: tmp, operationOwnerToken: ownerToken }).acquire(),
+      (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY");
+    assertLockUnchanged(outer.lockPath, before, "unregistered owner");
   });
 
   it("rejects a supplied owner token after its canonical lock was released", () => {
     tmp = createTmpDir("repository-flow-released-owner-");
-    const source = identitySource();
-    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source });
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp });
     const ownerToken = outer.acquire();
     outer.release();
 
@@ -161,88 +195,105 @@ describe("repository maintenance lock", () => {
       () => new RepositoryFlowOperationLock({
         mainRoot: tmp,
         operationOwnerToken: ownerToken,
-        processIdentitySource: source,
-      }).acquire(),
+        }).acquire(),
       (error) => error.code === "REPOSITORY_LOCK_OWNERSHIP_CHANGED",
     );
   });
 
-  it("reports structured diagnostics for a foreign live flow-operation owner", () => {
-    tmp = createTmpDir("repository-flow-foreign-diagnostics-");
-    const lockPath = path.join(tmp, ".sennel", ".repository-flow-operation.lock");
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    fs.writeFileSync(lockPath, `${JSON.stringify({
-      version: 1,
-      kind: "repository-flow-operation",
-      mainRoot: fs.realpathSync(tmp),
-      processIdentity: {
-        pid: process.pid,
-        bootIdentity: "boot",
-        startFingerprint: "100",
-        ownerToken: "11111111-1111-4111-8111-111111111111",
-      },
-    })}\n`);
-
-    assert.throws(
-      () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() }).acquire(),
-      (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY"
-        && error.contention?.owner?.ownerToken === "11111111-1111-4111-8111-111111111111"
-        && error.contention?.requester?.pid === process.pid
-        && error.contention?.operation === "repository-flow-operation"
-        && error.contention?.boundary === "acquire",
-    );
+  it("reports token/session contention without a PID or process-liveness claim", () => {
+    tmp = createTmpDir("repository-flow-diagnostics-");
+    const holder = new RepositoryFlowOperationLock({ mainRoot: tmp });
+    const token = holder.acquire();
+    try {
+      assert.throws(() => new RepositoryFlowOperationLock({ mainRoot: tmp }).acquire(), (error) => {
+        assert.equal(error.code, "REPOSITORY_FLOW_OPERATION_BUSY");
+        assert.equal(error.contention.owner.ownerToken, token);
+        assert.equal(error.contention.owner.ownerSession, error.contention.requester.ownerSession);
+        assert.equal(Object.hasOwn(error.contention.owner, "pid"), false);
+        return true;
+      });
+    } finally { holder.release(); }
   });
 
-  it("fails closed for malformed, stale, and unknown maintenance owners", () => {
-    tmp = createTmpDir("repository-maintenance-owner-");
+  it("inspect creates no namespace and locks outside the migration destination", () => {
+    tmp = createTmpDir("repository-lock-inspect-");
+    const flow = new RepositoryFlowOperationLock({ mainRoot: tmp });
+    assert.equal(flow.inspectConflict(), null);
+    assert.deepEqual(fs.readdirSync(tmp), []);
+    flow.acquire();
+    assert.equal(fs.existsSync(path.join(tmp, ".sennel")), false);
+    assert.equal(fs.existsSync(flow.lockPath), true);
+    flow.release();
+  });
+
+  it("preserves malformed and retired PID owner records", () => {
+    tmp = createTmpDir("repository-maintenance-legacy-");
     const lockPath = RepositoryMaintenanceLock.pathFor(tmp);
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    const cases = [
-      ["malformed", "{broken\n", identitySource(), "REPOSITORY_MAINTENANCE_LOCK_CORRUPT"],
-      ["stale", JSON.stringify({
-        version: 1,
-        kind: "repository-maintenance",
-        mainRoot: fs.realpathSync(tmp),
-        processIdentity: {
-          pid: process.pid,
-          bootIdentity: "old-boot",
-          startFingerprint: "100",
-          ownerToken: "11111111-1111-4111-8111-111111111111",
-        },
-      }), identitySource(), "REPOSITORY_MAINTENANCE_LOCK_STALE"],
-      ["unknown", JSON.stringify({
-        version: 1,
-        kind: "repository-maintenance",
-        mainRoot: fs.realpathSync(tmp),
-        processIdentity: {
-          pid: process.pid,
-          bootIdentity: "boot",
-          startFingerprint: "100",
-          ownerToken: "11111111-1111-4111-8111-111111111111",
-        },
-      }), identitySource({ unknown: true }), "REPOSITORY_MAINTENANCE_LOCK_UNKNOWN"],
-    ];
-
-    for (const [label, content, source, code] of cases) {
-      fs.writeFileSync(lockPath, content);
-      assert.throws(
-        () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source }).acquire(),
-        (error) => error.code === code,
-        label,
-      );
-      assert.equal(fs.readFileSync(lockPath, "utf8"), content, label);
-      fs.unlinkSync(lockPath);
+    for (const [bytes, status] of [["{broken", "corrupt"], [JSON.stringify({ version: 1, processIdentity: { pid: process.pid } }), "unknown"]]) {
+      fs.writeFileSync(lockPath, bytes);
+      const before = lockSnapshot(lockPath);
+      assert.throws(() => new RepositoryFlowOperationLock({ mainRoot: tmp }).acquire(), (error) => error.lockStatus === status);
+      assertLockUnchanged(lockPath, before, status);
     }
   });
 
-  it("rejects symlink, non-directory, and replaced .sennel authorities without external writes", () => {
+  it("does not bypass an old namespace owner after selecting a new lock location", () => {
+    tmp = createTmpDir("repository-lock-old-location-");
+    const directory = path.join(tmp, ".sennel");
+    fs.mkdirSync(directory);
+    const legacy = new ProcessLock({ directoryAuthority: new RealDirectoryAuthority(directory),
+      fileName: ".repository-maintenance.lock", kind: "old-location-owner", authority: {} });
+    const contender = new RepositoryMaintenanceLock({ mainRoot: tmp });
+    legacy.acquire();
+    const before = lockSnapshot(legacy.lockPath);
+    try {
+      assert.throws(() => contender.acquire(), (error) => error.lockStatus === "unknown"
+        && error.reason === "legacy-owner-format");
+      assertLockUnchanged(legacy.lockPath, before, "old namespace refusal");
+      assert.equal(fs.existsSync(path.join(tmp, ".tmp")), false);
+    } finally { legacy.release(); }
+    contender.acquire();
+    contender.release();
+  });
+
+  it("inspects old lock-only directories without accepting initialization residue or changing bytes", () => {
+    tmp = createTmpDir("repository-lock-old-directory-");
+    const directory = path.join(tmp, ".sennel", "review-execution-locks");
+    fs.mkdirSync(directory, { recursive: true });
+    const location = new RepositoryLockAuthority(tmp).location({ namespace: "review-execution",
+      identity: "leases", fileName: "test.lock", legacyDirectories: [directory] });
+    assert.equal(location.resolve(), null, "an empty old lock directory carries no exclusion");
+    const residue = path.join(directory, ".owner-initializing");
+    fs.writeFileSync(residue, "partial owner");
+    const before = lockSnapshot(residue);
+    assert.throws(() => location.resolve(), (error) => error.lockStatus === "unknown"
+      && error.reason === "legacy-owner-format");
+    assertLockUnchanged(residue, before, "initialization refusal");
+    assert.equal(fs.existsSync(path.join(tmp, ".tmp")), false);
+  });
+
+  it("refuses the old hardlink publication staging name when its visible lock was never created", () => {
+    tmp = createTmpDir("repository-lock-old-publication-");
+    const directory = path.join(tmp, ".sennel");
+    fs.mkdirSync(directory);
+    const residue = path.join(directory, "..repository-maintenance.lock.3536a3cf-054c-44fa-a932-ce08d12a4312.owner.tmp");
+    fs.writeFileSync(residue, "unfinished owner publication");
+    const before = lockSnapshot(residue);
+    assert.throws(() => new RepositoryMaintenanceLock({ mainRoot: tmp }).acquire(),
+      (error) => error.lockStatus === "unknown" && error.lockReason === "legacy-owner-format");
+    assertLockUnchanged(residue, before, "old publication staging refusal");
+    assert.equal(fs.existsSync(path.join(tmp, ".tmp")), false);
+  });
+
+  it("rejects symlink, non-directory, and replaced temporary authorities without external writes", () => {
     for (const Lock of [RepositoryMaintenanceLock, RepositoryFlowOperationLock]) {
       const external = createTmpDir("repository-lock-external-");
       const sentinel = path.join(external, "sentinel");
       fs.writeFileSync(sentinel, "unchanged");
       try {
         const symlinkRoot = createTmpDir("repository-lock-symlink-");
-        fs.symlinkSync(external, path.join(symlinkRoot, ".sennel"), "dir");
+        fs.symlinkSync(external, path.join(symlinkRoot, ".tmp"), "dir");
         assert.throws(
           () => new Lock({ mainRoot: symlinkRoot }).acquire(),
           (error) => error.code === "REPOSITORY_LOCK_AUTHORITY_INVALID",
@@ -251,19 +302,19 @@ describe("repository maintenance lock", () => {
         removeTmpDir(symlinkRoot);
 
         const fileRoot = createTmpDir("repository-lock-file-");
-        fs.writeFileSync(path.join(fileRoot, ".sennel"), "not-a-directory");
+        fs.writeFileSync(path.join(fileRoot, ".tmp"), "not-a-directory");
         assert.throws(
           () => new Lock({ mainRoot: fileRoot }).acquire(),
           (error) => error.code === "REPOSITORY_LOCK_AUTHORITY_INVALID",
         );
-        assert.equal(fs.readFileSync(path.join(fileRoot, ".sennel"), "utf8"), "not-a-directory");
+        assert.equal(fs.readFileSync(path.join(fileRoot, ".tmp"), "utf8"), "not-a-directory");
         removeTmpDir(fileRoot);
 
         const replacementRoot = createTmpDir("repository-lock-replaced-");
-        fs.mkdirSync(path.join(replacementRoot, ".sennel"));
+        fs.mkdirSync(path.join(replacementRoot, ".tmp"));
         const lock = new Lock({ mainRoot: replacementRoot });
-        fs.renameSync(path.join(replacementRoot, ".sennel"), path.join(replacementRoot, ".sennel-original"));
-        fs.symlinkSync(external, path.join(replacementRoot, ".sennel"), "dir");
+        fs.renameSync(path.join(replacementRoot, ".tmp"), path.join(replacementRoot, ".tmp-original"));
+        fs.symlinkSync(external, path.join(replacementRoot, ".tmp"), "dir");
         assert.throws(
           () => lock.acquire(),
           (error) => error.code === "REPOSITORY_LOCK_AUTHORITY_INVALID",
@@ -276,60 +327,14 @@ describe("repository maintenance lock", () => {
     }
   });
 
-  it("reclaims only a proven-stale flow-operation owner and preserves all rejected owners", () => {
-    tmp = createTmpDir("repository-flow-operation-stale-");
-    const lockPath = path.join(tmp, ".sennel", ".repository-flow-operation.lock");
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    const owner = (overrides = {}) => ({
-      version: 1,
-      kind: "repository-flow-operation",
-      mainRoot: fs.realpathSync(tmp),
-      processIdentity: {
-        pid: process.pid,
-        bootIdentity: "boot",
-        startFingerprint: "100",
-        ownerToken: "11111111-1111-4111-8111-111111111111",
-      },
-      ...overrides,
-    });
-
-    fs.writeFileSync(lockPath, `${JSON.stringify(owner({
-      processIdentity: { ...owner().processIdentity, bootIdentity: "old-boot" },
-    }))}\n`);
-    const reclaimed = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() });
-    assert.notEqual(reclaimed.acquire(), owner().processIdentity.ownerToken);
-    reclaimed.release();
-    assert.equal(fs.existsSync(lockPath), false);
-
-    const rejected = [
-      ["live", owner(), identitySource(), "REPOSITORY_FLOW_OPERATION_BUSY"],
-      ["unknown", owner(), identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN"],
-      ["corrupt", { broken: true }, identitySource(), "REPOSITORY_FLOW_OPERATION_LOCK_CORRUPT"],
-      ["foreign-authority", owner({ mainRoot: path.join(tmp, "foreign") }), identitySource(), "REPOSITORY_FLOW_OPERATION_LOCK_CORRUPT"],
-    ];
-    for (const [label, value, source, code] of rejected) {
-      const bytes = `${JSON.stringify(value)}\n`;
-      fs.writeFileSync(lockPath, bytes);
-      assert.throws(
-        () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source }).acquire(),
-        (error) => error.code === code,
-        label,
-      );
-      assert.equal(fs.readFileSync(lockPath, "utf8"), bytes, label);
-      fs.unlinkSync(lockPath);
-    }
-  });
-
   it("preserves acquire conflict and cleanup failures in causal order", () => {
     tmp = createTmpDir("repository-maintenance-acquire-cleanup-");
     const flow = new RepositoryFlowOperationLock({
       mainRoot: tmp,
-      processIdentitySource: identitySource(),
     });
     flow.acquire();
     const maintenance = new RepositoryMaintenanceLock({
       mainRoot: tmp,
-      processIdentitySource: identitySource(),
     });
     const originalRelease = maintenance.lock.release;
     maintenance.lock.release = () => {
@@ -355,7 +360,6 @@ describe("repository maintenance lock", () => {
     tmp = createTmpDir("repository-flow-acquire-cleanup-");
     const flow = new RepositoryFlowOperationLock({
       mainRoot: tmp,
-      processIdentitySource: identitySource(),
     });
     const conflict = Object.assign(new Error("maintenance appeared after acquire"), {
       code: "REPOSITORY_MAINTENANCE_BUSY",

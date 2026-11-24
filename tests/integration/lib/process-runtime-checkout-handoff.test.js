@@ -1,10 +1,12 @@
+import { testTemporaryRoot } from "../../test-environment.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { ProcessExecutionRuntime, ProcessExecutionOwnershipReservation, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionOwnershipReservation, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess, verifyManagedProcessStopped } from "../../../src/lib/managed-process.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture, terminateFixtureCoordinator } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 function fixture(t) {
   const mainRoot = createTmpDir("runtime-handoff-", { parent: path.resolve(".tmp/c2f6/runtime-handoff-fixtures") });
@@ -14,7 +16,15 @@ function fixture(t) {
     try {
       for (const entry of owned) if (!entry.runtime.closed && !entry.unproven) await entry.runtime.close();
       for (const reservation of reservations) reservation.release();
-    } finally { removeTmpDir(mainRoot); }
+    } finally {
+      for (const entry of owned) if (entry.unproven) {
+        // Keep the unknown execution's exclusion and evidence after every
+        // assertion. Fixture-owned termination proves only this control exit.
+        testTemporaryRoot().retainOnUnconfirmedExecution();
+        await terminateFixtureCoordinator(entry.runtime);
+      }
+      removeQuiescentRuntimeFixture(options);
+    }
   });
   const options = { mainRoot, executionRoot: checkout, runId: "handoff-run", specId: "handoff-spec" };
   return { mainRoot, checkout, options, reservations,
@@ -38,7 +48,7 @@ test("a sealed original checkout retains its live reservation while the main che
   assert.equal(reservation.executionId, original.executionId); assert.equal(reservation.released, false);
   const sealed = original.inspect(); assert.equal(sealed.slot, null); assert.equal(sealed.executions[0].status, "closed");
   assert.equal(sealed.executions[0].calls[0].receipt.callId, result.processExecutionStopReceipt.callId);
-  assert.equal(sealed.executions[0].calls[0].receipt.stopEvidence.status, "confirmed");
+  assert.equal(new ProcessExecutionStopReceipt(sealed.executions[0].calls[0].receipt).stopEvidence.status, "confirmed");
   assert.equal(verifyManagedProcessStopped(before.calls[0]), true);
   await assert.rejects(original.reserveCall(), { code: "PROCESS_EXECUTION_REGISTRATION_CLOSED" });
   await original.close(); assert.equal(reservation.released, false);
@@ -56,7 +66,8 @@ test("main-authority reservation release remains valid after the proven original
   const value = fixture(t), original = await value.acquire(); await provider(original, "before-delete", value.checkout);
   const reservation = await original.sealForCheckoutHandoff(); value.reservations.push(reservation);
   const lockPath = original.store.ownerLock.lockPath;
-  assert.equal(lockPath.startsWith(path.join(value.mainRoot, ".sennel", "process-runtime") + path.sep), true);
+  assert.equal(lockPath, original.store.lockAuthority.location({ namespace: "process-runtime",
+    identity: value.checkout, fileName: "owner.lock" }).path);
   const main = await value.acquire({ executionRoot: value.mainRoot });
   fs.rmSync(value.checkout, { recursive: true }); assert.equal(fs.existsSync(value.checkout), false);
   assert.equal(fs.existsSync(lockPath), true);

@@ -217,7 +217,7 @@ describe("Spec Gate repair restart boundaries", () => {
       { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
       assert.equal(latestRepairBudget({ ...budgetInput, flowManager: restarted }).budget.providerCallCount, 16);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   for (const [archive, specId] of [
@@ -259,7 +259,7 @@ describe("Spec Gate repair restart boundaries", () => {
         attemptId: value.flowManager.canonicalState(value.specId).attempt.id,
         baseRevision: selected.baseRevision, consumerNodeId: "spec-gate-repair" })
         .budget.providerCallCount, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   for (const maxStalledDispatches of [1, 3]) {
@@ -331,7 +331,7 @@ describe("Spec Gate repair restart boundaries", () => {
           attemptId: repairAttemptId,
           baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 5);
         assert.equal(durableSnapshot(value.flowManager, value.specId).spec, initialSpec);
-      } finally { removeTmpDir(value.root); }
+      } finally { value.cleanup(); }
     });
   }
 
@@ -404,7 +404,7 @@ describe("Spec Gate repair restart boundaries", () => {
         attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" });
       assert.equal(budget.providerCallCount, 2);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("replays a published intermediate response when its transient handoff is lost", async () => {
@@ -466,7 +466,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
         attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 2);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   for (const [name, invalidate, expectedCode = "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH"] of [
@@ -522,7 +522,7 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.equal(providerCalls, 0);
         assert.deepEqual(durableSnapshot(restarted, value.specId), before);
         assert.equal(artifactCount(before, "spec.gate.repair.progress"), 1);
-      } finally { removeTmpDir(value.root); }
+      } finally { value.cleanup(); }
     });
   }
 
@@ -640,7 +640,7 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.equal(finalBudget.synthesisCallCount, saved.budget.synthesisCallCount);
         assert.equal(finalBudget.aggregateCharacters, saved.callCost.characters + publication.responseCost.characters);
         assert.equal(finalBudget.aggregateItemCount, saved.callCost.items + publication.responseCost.items);
-      } finally { operationMock.mock.restore(); removeTmpDir(value.root); }
+      } finally { operationMock.mock.restore(); value.cleanup(); }
     });
   }
 
@@ -680,7 +680,7 @@ describe("Spec Gate repair restart boundaries", () => {
         attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount,
       before.providerCallCount);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("finishes partial transient cleanup from a canonical completion receipt", async () => {
@@ -705,7 +705,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.deepEqual(durableSnapshot(value.ctx.flowManager, value.specId), before);
       const next = nextRequest(value, "after-partial-cleanup");
       assert.notEqual(next.requestDigest, request.requestDigest);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("refuses an unsealed claimed response after restart without changing canonical progress", async () => {
@@ -749,7 +749,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(result.nextAction.directive.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
       assert.equal(workerCalls, 0);
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("retains a claimed repair when its saved action is missing after restart", async () => {
@@ -779,7 +779,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
         attemptId: before.state.attempt.id, baseRevision: context.baseRevision,
         consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("refuses a sealed response without its durable claim", async () => {
@@ -816,7 +816,7 @@ describe("Spec Gate repair restart boundaries", () => {
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /exact durable worker claim/);
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
-    } finally { interruptedClaim.mock.restore(); removeTmpDir(value.root); }
+    } finally { interruptedClaim.mock.restore(); value.cleanup(); }
   });
 
   it("refuses a changed sealed response without publishing its proposal", async () => {
@@ -837,7 +837,7 @@ describe("Spec Gate repair restart boundaries", () => {
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /handoff|payload|sealed/i);
       assert.deepEqual(durableSnapshot(value.flowManager, value.specId), before);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("rejects a direct same-generation settlement without a completion receipt", async () => {
@@ -882,7 +882,7 @@ describe("Spec Gate repair restart boundaries", () => {
           bytes: Buffer.from(JSON.stringify(malformed)) }],
       }), /completion must publish one exact generation receipt/);
       assert.deepEqual(durableSnapshot(value.flowManager, value.specId), before);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("rejects a changed publication on exact completion replay", async () => {
@@ -934,7 +934,7 @@ describe("Spec Gate repair restart boundaries", () => {
           mediaType: "application/json", bytes: marker.bytes }],
       }), /completion must publish one exact generation receipt/);
       assert.deepEqual(durableSnapshot(manager, value.specId), before);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("continues multiple atomic repair units through a reloaded dispatcher", async () => {
@@ -1010,7 +1010,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(JSON.parse(audit.bytes.toString("utf8")).acceptedGroups.length, 2);
       assert.equal(artifactCount(durableSnapshot(restarted, value.specId), "spec.snapshot"),
         artifactCount(initial, "spec.snapshot") + 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("preserves the complete oversized selected unit across sealed restart and one atomic repair", async () => {
@@ -1052,7 +1052,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assertOneTerminalPublication(restarted, value.specId, original);
       assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId, attemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("publishes an additional read and a user decision without minting edit authority", async () => {
@@ -1099,7 +1099,7 @@ describe("Spec Gate repair restart boundaries", () => {
         flowState: restarted.loadReadOnly(value.specId), flowResolutionError: null });
       assert.equal(next.directive.kind, "execute_step");
       assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   for (const mode of ["context", "draft-return", "repair"]) {
@@ -1199,7 +1199,7 @@ describe("Spec Gate repair restart boundaries", () => {
           assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
           assert.equal(after.spec, before.spec);
         } else assertOneTerminalPublication(restarted, value.specId, before);
-      } finally { removeTmpDir(value.root); }
+      } finally { value.cleanup(); }
     });
   }
 
@@ -1258,6 +1258,6 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.equal(savedBudget.providerCallCount, 1);
       }
       assertOneTerminalPublication(restarted, value.specId, before);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 });

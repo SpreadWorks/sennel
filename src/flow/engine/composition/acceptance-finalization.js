@@ -46,6 +46,11 @@ export function prepareReportExecution({ flowManager, state, binding = null }) {
 export function prepareFinalRegressionPublication(input) {
   const flowManager = input.flowManager ?? input.ctx?.flowManager;
   const binding = bindingFor(input, "final-regression");
+  binding.assertCurrent();
+  const location = flowManager.specLocation(binding.specId);
+  const changedFileSnapshotDigest = captureFinalRegressionChangedSnapshotDigest({
+    repositoryRoot: location.repositoryRoot, specId: binding.specId, runId: binding.runId,
+    root: flowManager.executionRoot(), relativeSpecFile: location.relativeSpecFile });
   const publication = flowManager.prepareAcceptanceCommandPublication({ binding, commandResult: input.commandResult,
     acceptedFailure: input.commandResult.failedRecorded === true });
   const snapshot = new TestChainTransitionSnapshot(publication.settlementAttempt === null ? publication : { ...publication,
@@ -54,10 +59,7 @@ export function prepareFinalRegressionPublication(input) {
   const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "final.regression", bytes: publication.readCatalogedArtifact(descriptor) });
   const facts = finalRegressionFactsFromSnapshot({ snapshot,
     current: { artifact: history.current.payload, descriptor, relativePath: descriptor.relativePath },
-    changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
-      repositoryRoot: flowManager.specLocation(binding.specId).repositoryRoot,
-      specId: binding.specId, runId: snapshot.state.runId,
-      root: flowManager.executionRoot(), relativeSpecFile: flowManager.specLocation(binding.specId).relativeSpecFile }) });
+    changedFileSnapshotDigest: () => changedFileSnapshotDigest });
   if (!facts.stepFacts.changedFileSnapshot.current) throw new StepAdmissionRefusal("Final regression source changed before publication");
   return new AcceptanceFinalizationPreparation({ binding: publication.resultBinding ?? binding, observed: new FinalRegressionInput({ evidence: FinalRegressionResultEvidence.fromTransitionFacts(facts) }),
     commandResult: input.commandResult, acceptancePublication: publication });

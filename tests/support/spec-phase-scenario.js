@@ -14,9 +14,11 @@ import { dispatch as dispatchRegisteredCommand } from "../../src/lib/dispatcher.
 import { flowCommands } from "../../src/lib/command-registry.js";
 import { buildFlowCommandHookContext } from "../../src/flow/lib/flow-context.js";
 import { ProcessExecutionRuntime } from "../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionBinding, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../src/lib/process-execution-values.js";
 import { currentRuntimePackage, listRuntimeResources, readRuntimeResource } from "../../src/lib/runtime-package.js";
 import { readFlowProcessStops } from "../../src/flow/lib/process-runtime-admission.js";
 import { FlowExecutionContract } from "../../src/flow/lib/flow-execution-contract.js";
+import { FlowProcessExecutionBinding } from "../../src/flow/lib/flow-process-execution-binding.js";
 import { workerProcessStopIdentity } from "../../src/flow/lib/process-runtime-evidence.js";
 import { FlowTargetBinding } from "../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
@@ -42,6 +44,8 @@ import {
   CanonicalFlowFixture, canonicalDraftDocument,
 } from "./infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "./builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "./infrastructure/runtime-fixture-cleanup.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
 import {
@@ -174,6 +178,7 @@ class PriorSpecWorkerRuntime {
     // dispatcher. Both snapshots otherwise execute the same production code.
     fs.appendFileSync(path.join(this.root, "src/lib/runtime-package.js"), "\n// Prior Spec worker runtime fixture.\n");
     fs.cpSync(path.join(sourceRoot, "tests/support"), path.join(this.root, "tests/support"), { recursive: true });
+    fs.cpSync(path.join(sourceRoot, "tests/runner"), path.join(this.root, "tests/runner"), { recursive: true });
     for (const name of ["test-environment.js", "test-temporary-root.js"]) {
       fs.copyFileSync(path.join(sourceRoot, "tests", name), path.join(this.root, "tests", name));
     }
@@ -182,14 +187,16 @@ class PriorSpecWorkerRuntime {
   async load() {
     const load = (relative) => import(pathToFileURL(path.join(this.root, relative)).href);
     await load("src/sennel.js");
-    const [runtime, manager, container, dispatch, review, handoff] = await Promise.all([
+    const [runtime, manager, container, dispatch, review, handoff, processExecution] = await Promise.all([
       load("src/lib/runtime-package.js"), load("src/lib/flow-manager.js"), load("src/lib/container.js"),
       load("tests/support/infrastructure/flow-dispatch-scenario.js"),
       load("tests/support/infrastructure/review-process-fake.js"), load("src/flow/lib/worker-artifact-handoff.js"),
+      load("src/lib/process-execution-runtime.js"),
     ]);
     this.revision = runtime.currentRuntimePackage().revision;
     assert.notEqual(this.revision, currentRuntimePackage().revision);
     this.FlowManager = manager.FlowManager;
+    this.ProcessExecutionRuntime = processExecution.ProcessExecutionRuntime;
     this.container = container.container;
     this.dispatchFlowCommand = dispatch.dispatchFlowCommand;
     this.dispatchContainer = dispatch.dispatchContainer;
@@ -220,8 +227,8 @@ export class SpecPhaseScenario {
     largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false,
     interruptTriage = false, migrateRuntime = false } = {},
     { seed = null, strictSeed = false } = {}) {
-    const root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-phase-case-" }).root
-      : fixtureRepository("spec-artifact-scenario-");
+    const seedClone = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-phase-case-" }) : null;
+    const root = seedClone?.root ?? fixtureRepository("spec-artifact-scenario-");
     let retainRoot = false;
     let gateAgentLookup = null;
     let reviewProcess = null;
@@ -260,6 +267,7 @@ export class SpecPhaseScenario {
       const sealFailures = [];
       let interruptedRequest = null;
       let interruptedRequestPath = null;
+      let interruptedArchivePath = null;
       let interruptedPayload = null;
       let interruptionDelivered = false;
       let recoveredTriageConsumed = false;
@@ -395,6 +403,9 @@ export class SpecPhaseScenario {
           if (interruptTriage && request.stepId === "spec-triage" && interruptedRequest === null) {
             interruptedRequest = request;
             interruptedRequestPath = requestPath;
+            const runtime = priorRuntime?.ProcessExecutionRuntime.current() ?? ProcessExecutionRuntime.current();
+            assert.ok(runtime, "triage provider must run inside the registered process runtime scope");
+            interruptedArchivePath = path.join(runtime.root.store.archivesAuthority.directory, `${runtime.root.executionId}.json`);
             interruptedPayload = fs.readFileSync(requestPayloadPath(request, "review.delta.json"));
             return JSON.stringify({ interruptedBeforeSeal: true });
           }
@@ -750,6 +761,7 @@ export class SpecPhaseScenario {
         assert.equal(interruptionDelivered, true, JSON.stringify(interrupted));
         assert.ok(interruptedRequest, "the registered triage provider must create its canonical claim");
         const sourceContract = FlowExecutionContract.fromJSON(interruptedRequest.executionContract);
+        const sourceBinding = FlowProcessExecutionBinding.forContract(sourceContract);
         assert.equal(sourceContract.runtimeRevision, priorRuntime?.revision ?? currentRuntimePackage().revision);
         const sourceRequestDigest = crypto.createHash("sha256")
           .update(workerArtifactStableStringify(interruptedRequest)).digest("hex");
@@ -760,19 +772,21 @@ export class SpecPhaseScenario {
         assert.equal(inventory.slot, null);
         assert.ok(inventory.executions.every((execution) => execution.status === "closed"));
         const stoppedExecution = inventory.executions.find((execution) => execution.calls.some((call) =>
-          call.binding?.executionContractId === sourceContract.id));
+          new ProcessExecutionBinding(call.binding).includes(sourceBinding)));
         assert.ok(stoppedExecution, "the unsealed triage must have a real managed physical call");
-        const call = stoppedExecution.calls.find((entry) => entry.binding.executionContractId === sourceContract.id);
+        const call = stoppedExecution.calls.find((entry) => new ProcessExecutionBinding(entry.binding).includes(sourceBinding));
         assert.equal(call.permit.callId, call.callId);
-        assert.equal(call.receipt.stopEvidence.status, "confirmed");
-        const runtimeNamespace = fs.readdirSync(path.join(root, ".sennel", "process-runtime"));
-        assert.equal(runtimeNamespace.length, 1);
-        const archive = JSON.parse(fs.readFileSync(path.join(root, ".sennel", "process-runtime",
-          runtimeNamespace[0], "archives", `${stoppedExecution.executionId}.json`), "utf8"));
-        assert.deepEqual(archive.payload.execution.calls.find((entry) => entry.callId === call.callId).receipt, call.receipt);
+        assert.equal(new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status, "confirmed");
+        assert.equal(path.basename(interruptedArchivePath), `${stoppedExecution.executionId}.json`);
+        assert.equal(fs.existsSync(interruptedArchivePath), true, "the stopped execution must have transferred to its archive");
+        const archive = JSON.parse(fs.readFileSync(interruptedArchivePath, "utf8"));
+        assert.equal(archive.payload.execution.executionId, stoppedExecution.executionId);
+        const archived = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root })
+          .executions.find((execution) => execution.executionId === stoppedExecution.executionId);
+        assert.deepEqual(archived.calls.find((entry) => entry.callId === call.callId).receipt, call.receipt);
         assert.equal(ProcessExecutionRuntime.current(), null);
         const stops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
-          .filter((evidence) => evidence.receipt.binding.value.executionContractId === sourceContract.id);
+          .filter((evidence) => evidence.receipt.binding.includes(sourceBinding));
         assert.equal(stops.length, 1);
         stops[0].assertContract(sourceContract, workerProcessStopIdentity({ ...interruptedRequest,
           executionContract: sourceContract, requestDigest: sourceRequestDigest }));
@@ -836,6 +850,7 @@ export class SpecPhaseScenario {
             .flatMap((execution) => execution.calls).filter((call) => call.binding?.executionContractId === frontier.recovery.targetContractId).length }));
         assert.ok(replacement, JSON.stringify(result));
         const targetContract = FlowExecutionContract.fromJSON(replacement.executionContract);
+        const targetBinding = FlowProcessExecutionBinding.forContract(targetContract);
         assert.equal(targetContract.id, frontier.recovery.targetContractId);
         assert.equal(targetContract.runtimeRevision, currentRuntimePackage().revision);
         assert.equal(targetContract.attemptId, sourceContract.attemptId);
@@ -845,7 +860,7 @@ export class SpecPhaseScenario {
         assert.deepEqual(targetContract.executionLimit, sourceContract.executionLimit);
         assert.notEqual(replacement.dispatchInvocationId, interruptedRequest.dispatchInvocationId);
         const replacementStops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
-          .filter((evidence) => evidence.receipt.binding.value.executionContractId === targetContract.id);
+          .filter((evidence) => evidence.receipt.binding.includes(targetBinding));
         assert.equal(replacementStops.length, 1);
         assert.notEqual(replacementStops[0].receipt.callId, call.callId);
         replacementStops[0].assertContract(targetContract, workerProcessStopIdentity({ ...replacement,
@@ -1215,11 +1230,37 @@ export class SpecPhaseScenario {
         parameters: { revision: approvedReview.review.identity.revision.toString() }, consumerNodeId: "approval" });
       assert.equal(approvedSnapshot.descriptor.hash, plan.specRevision.digest);
       assert.equal(approvedSnapshot.bytes.length, plan.specRevision.byteLength);
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      const boundaryFailures = error?.cause instanceof AggregateError ? error.cause.errors
+        : error instanceof AggregateError ? error.errors : [];
+      for (const [index, failure] of [error, ...boundaryFailures].entries()) {
+        console.error(JSON.stringify({ specPhaseBoundaryFailure: {
+          boundaryFailureIndex: index === 0 ? null : index - 1,
+          name: typeof failure?.name === "string" ? failure.name.slice(0, 80) : null,
+          code: typeof failure?.code === "string" ? failure.code.slice(0, 160) : null,
+          messageHead: typeof failure?.message === "string" ? failure.message.slice(0, 512) : null,
+          frames: typeof failure?.stack === "string" ? failure.stack.split("\n").slice(1, 7).map((line) => line.slice(0, 512)) : [],
+        } }));
+        if (!(failure instanceof ProcessExecutionControlFailure)) continue;
+        console.error(JSON.stringify({ specPhaseProcessFailure: {
+          boundaryFailureIndex: index === 0 ? null : index - 1,
+          code: failure.code, executionId: failure.executionId, callId: failure.callId,
+          primaryCauseCode: failure.primaryCause.code,
+          communication: failure.communication?.toJSON() ?? null,
+        } }));
+      }
+      throw error;
     } finally {
       reviewProcess?.mock.restore();
       gateAgentLookup?.mock.restore();
       priorRuntime?.remove();
-      if (!retainRoot) removeTmpDir(root);
+      if (!retainRoot) {
+        removeQuiescentRuntimeFixture({ mainRoot: root, cleanup: () => {
+          if (seedClone) seedClone.cleanup();
+          else removeTmpDir(root);
+        } });
+      }
     }
   }
 }

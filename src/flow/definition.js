@@ -1,3 +1,4 @@
+import { ImplReviewRejectionMeaning } from "./lib/impl-review-values.js";
 import { FlowExecutionCommand } from "./lib/flow-execution-command.js";
 import { ArtifactWorkerRecoverySelection } from "./lib/artifact-worker-recovery-selection.js";
 import { SpecGateRepairRecoveryEvidence } from "./lib/spec-gate-repair-recovery.js";
@@ -3509,6 +3510,14 @@ export function resolveReviewTransition({
   // resolveRequirementTestLifecycle(). The generic flow-review policy must
   // not expose the retired whole-flow test repair route.
   if (phase === "test") return null;
+  const maxAttempts = resolveMaxAttempts({ scope: facts.scope, stepId, context: flowState }) ?? 1;
+  // A fresh transport Attempt cannot erase already completed semantic Reviews.
+  // No current source means there is no authority to publish a handoff for it.
+  if (phase === "impl" && facts.scope === "flow" && facts.attemptCount >= maxAttempts
+    && facts.verdict !== "REJECTED" && !["PASS", "ADVISORY"].includes(facts.verdict)) {
+    return new DefinitionReviewDisposition({ operation: "blocked", phase,
+      attempts: facts.attemptCount, maxAttempts });
+  }
   if (flowState?.policy?.nonblocking?.enabled === true) return null;
   if (facts.toolingOutcome) {
     return new DefinitionReviewDisposition({ operation: "external-blocked", phase });
@@ -3520,29 +3529,22 @@ export function resolveReviewTransition({
   // review connector. The flow-scoped review recovery policy has no Task
   // compatibility route.
   if (facts.scope === "task") return null;
-  const maxAttempts = resolveMaxAttempts({ scope: facts.scope, stepId, context: flowState }) ?? 1;
-  const attempts = facts.scope === "task"
-    ? facts.attemptCount
-    : countReviewAttempts(flowState?.metrics, phase);
-  if (!Number.isSafeInteger(attempts) || attempts < 0) {
-    throw new Error("review transition facts have no usable attempt count");
-  }
-  if (attempts < maxAttempts) {
-    return new DefinitionReviewDisposition({ operation: "retry", phase });
-  }
-  if (facts.deferralEvidence.available) {
-    return new DefinitionReviewDisposition({
-      operation: "defer",
-      phase,
-      attempts,
-      maxAttempts,
-      sourceFingerprints: facts.deferralEvidence.sourceFingerprints,
-    });
-  }
-  if (attempts >= maxAttempts) {
-    return new DefinitionReviewDisposition({ operation: "blocked", phase, attempts, maxAttempts });
-  }
-  return null;
+  const attempts = facts.attemptCount ?? countReviewAttempts(flowState?.metrics, phase);
+  return resolveRejectedFlowReviewDisposition({ phase, attempts, maxAttempts,
+    deferralEvidence: facts.deferralEvidence });
+}
+
+/** Definition maps the shared semantic observation to its one continuation policy. */
+function resolveRejectedFlowReviewDisposition({ phase, attempts, maxAttempts, deferralEvidence }) {
+  const meaning = new ImplReviewRejectionMeaning({ attempts, maximum: maxAttempts,
+    deferrable: deferralEvidence.available });
+  if (meaning.value === "rejected") return new DefinitionReviewDisposition({ operation: "retry", phase });
+  if (meaning.value === "deferrable") return new DefinitionReviewDisposition({
+    operation: "defer", phase, attempts: meaning.attempts, maxAttempts: meaning.maximum,
+    sourceFingerprints: deferralEvidence.sourceFingerprints,
+  });
+  return new DefinitionReviewDisposition({ operation: "blocked", phase,
+    attempts: meaning.attempts, maxAttempts: meaning.maximum });
 }
 
 const CONDITIONAL_WORKER_SETTLEMENT_TOKEN = Symbol("definition-conditional-worker-settlement");
@@ -4160,8 +4162,15 @@ export class TestChainApplication extends ImplementationStepApplication {
   toJSON() { return { decision: this.decision.toJSON(), ...(this.eligibility === null ? {} : { eligibility: this.eligibility.toJSON() }) }; }
 }
 export class ImplReviewApplication extends ImplementationStepApplication {
-  constructor(token, lifecycle) { super(token); if (!(lifecycle instanceof DefinitionLifecyclePlan)) throw new TypeError("Review application requires its selected lifecycle"); this.lifecycle = lifecycle; Object.freeze(this); }
-  toJSON() { return { lifecycle: this.lifecycle.toJSON() }; }
+  constructor(token, result) {
+    super(token);
+    if (!(result instanceof ImplementationResults.ImplReviewDeferredResult)
+      && !(result instanceof ImplementationResults.ImplReviewExhaustedResult)) throw new TypeError("Review application requires its selected semantic-limit Result");
+    this.operation = result instanceof ImplementationResults.ImplReviewDeferredResult ? "defer" : "blocked";
+    this.resolution = result.deferral ?? result.exhaustion;
+    Object.freeze(this);
+  }
+  toJSON() { return { operation: this.operation, resolution: this.resolution.toJSON() }; }
 }
 export class ImplementationExecutionSettlement extends StepSettlement {
   constructor(token, result, application = null) { super(token, result, "execution"); if (application !== null && !(application instanceof ImplementationStepApplication)) throw new TypeError("Implementation execution requires a selected application"); this.application = application; Object.freeze(this); }
@@ -6118,7 +6127,7 @@ export function buildCurrentFlowDefinition() {
     semanticRetryLimit: node.resolveMaxAttempts({ autoApprove: false }) - 1,
     unexecutedCompletionAuthorities: scope === "flow" && IMPL_REVIEW_UNEXECUTED_COMPLETION_LEAF_IDS.has(node.id)
       ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "impl-review",
-        resultKinds: ["impl-review-passed", "impl-review-advisory", "impl-review-tooling"] })]
+        resultKinds: ["impl-review-passed", "impl-review-advisory", "impl-review-tooling", "impl-review-deferred"] })]
       : scope === "flow" && node.id === "acceptance-decision"
         ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "acceptance-review", resultKinds: ["acceptance-review-passed"] })] : [],
     routeSkipAuthorities: scope === "flow" && node.id === "impl-repair"
@@ -6828,6 +6837,14 @@ function selectedTestReviewRejectionApplication(result) {
 }
 
 /** Select Flow policy from its persisted concrete implementation Result only. */
+function implementationReviewGateEffects(frontier, triageReason, repairReason) {
+  return new StepRouteEffects({ unexecutedStepCompletions: [
+    ...(["pending", "invalidated"].includes(frontier.triageStatus) ? [new UnexecutedStepCompletion({
+      stepId: "impl-triage", attemptSequence: frontier.triageAttemptSequence, reason: triageReason })] : []),
+    ...(["pending", "invalidated"].includes(frontier.repairStatus) ? [new UnexecutedStepCompletion({
+      stepId: "impl-repair", attemptSequence: frontier.repairAttemptSequence, reason: repairReason })] : []),
+  ] });
+}
 export function settleImplStepResult(stepId, result) {
   requireImplementationStepResult(stepId, result, "flow");
   if (result instanceof ImplementationResults.TestEvidenceRejectedResult && result.evidence.acceptedDecision !== null) {
@@ -6866,30 +6883,24 @@ export function settleImplStepResult(stepId, result) {
   if (result instanceof ImplementationResults.ImplReviewExecutionRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
   if (result instanceof ImplementationResults.ImplReviewToolingResult) {
     if (result.evidence.acceptedDecision === null) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
-    const frontier = result.evidence.frontier;
-    return implementationConnection(result, "impl-gate", { effects: new StepRouteEffects({
-      unexecutedStepCompletions: [
-        ...(["pending", "invalidated"].includes(frontier.triageStatus) ? [new UnexecutedStepCompletion({
-          stepId: "impl-triage", attemptSequence: frontier.triageAttemptSequence,
-          reason: "The explicit accepted tooling risk contains no semantic findings to triage." })] : []),
-        ...(["pending", "invalidated"].includes(frontier.repairStatus) ? [new UnexecutedStepCompletion({
-          stepId: "impl-repair", attemptSequence: frontier.repairAttemptSequence,
-          reason: "The explicit accepted tooling risk contains no selected finding repair." })] : []),
-      ],
-    }) });
+    return implementationConnection(result, "impl-gate", { effects: implementationReviewGateEffects(result.evidence.frontier,
+      "The explicit accepted tooling risk contains no semantic findings to triage.",
+      "The explicit accepted tooling risk contains no selected finding repair.") });
   }
+  if (result instanceof ImplementationResults.ImplReviewExhaustedResult) return new ImplementationAwaitDecision(
+    STEP_SETTLEMENT_TOKEN, result, new ImplReviewApplication(STEP_SETTLEMENT_TOKEN, result));
   if (result instanceof ImplementationResults.ImplReviewPassedResult
-    || result instanceof ImplementationResults.ImplReviewAdvisoryResult) return implementationConnection(result, "impl-gate", {
-      effects: new StepRouteEffects({ unexecutedStepCompletions: [
-        ...( ["pending", "invalidated"].includes(result.evidence.frontier.triageStatus)
-          ? [new UnexecutedStepCompletion({ stepId: "impl-triage",
-            attemptSequence: result.evidence.frontier.triageAttemptSequence,
-            reason: "The accepted implementation Review requires no finding triage." })] : []),
-        ...( ["pending", "invalidated"].includes(result.evidence.frontier.repairStatus)
-          ? [new UnexecutedStepCompletion({ stepId: "impl-repair",
-            attemptSequence: result.evidence.frontier.repairAttemptSequence,
-            reason: "The accepted implementation Review requires no finding repair." })] : []),
-      ] }) });
+    || result instanceof ImplementationResults.ImplReviewAdvisoryResult
+    || result instanceof ImplementationResults.ImplReviewDeferredResult) {
+    const deferred = result instanceof ImplementationResults.ImplReviewDeferredResult;
+    return implementationConnection(result, "impl-gate", {
+      application: deferred ? new ImplReviewApplication(STEP_SETTLEMENT_TOKEN, result) : null,
+      effects: implementationReviewGateEffects(result.evidence.frontier,
+        deferred ? "The exhausted semantic findings are retained for Acceptance without further triage."
+          : "The accepted implementation Review requires no finding triage.",
+        deferred ? "The exhausted semantic findings are retained for Acceptance without further repair."
+          : "The accepted implementation Review requires no finding repair.") });
+  }
   if (result instanceof ImplementationResults.ImplReviewRejectedResult) return implementationConnection(result, "impl-triage", {
       effects: new StepRouteEffects({ resetStepIds: collectFlowLeafIds().slice(collectFlowLeafIds().indexOf("impl-triage")) }) });
   if (stepId === "impl-gate") return selectedImplementationGateSettlement(result);

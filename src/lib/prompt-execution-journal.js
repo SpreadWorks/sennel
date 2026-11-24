@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { ProcessExecutionStopReceipt, ProcessExecutionControlFailure, ProcessExecutionRecoveryCall,
-  ProcessExecutionNonExecutionEvidence, executionValueDigest as processEvidenceDigest } from "./process-execution-values.js";
+  ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryEvidenceSummary } from "./process-execution-values.js";
 import { FlowExecutionObservationBinding } from "./flow-execution-observation.js";
 import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
 
@@ -132,7 +132,7 @@ export class PromptProviderProcessIdentity {
   }
 }
 
-/** Durable OS observation; never a response, failure, or claim settlement. */
+/** Durable registered-child exit observation; never a response or claim settlement. */
 export class PromptProcessStopObservation {
   constructor({ identity, receipt }) {
     this.identity = identity instanceof PromptProviderProcessIdentity ? identity : PromptProviderProcessIdentity.fromJSON(identity);
@@ -140,8 +140,7 @@ export class PromptProcessStopObservation {
     const invocation = this.receipt.invocation;
     const context = invocation?.providerAttemptContext;
     const binding = this.receipt.binding.toJSON();
-    if (this.receipt.launcherIdentity === null || this.receipt.pgid === null
-      || !isDeepStrictEqual(invocation?.promptProcessIdentity, this.identity.toJSON())
+    if (!isDeepStrictEqual(invocation?.promptProcessIdentity?.toJSON(), this.identity.toJSON())
       || invocation.providerAttemptId !== this.identity.providerAttemptId || invocation.logicalInvocationId !== this.identity.logicalInvocationId
       || context?.attemptId !== this.identity.providerAttemptId || context?.logicalInvocationId !== this.identity.logicalInvocationId
       || context?.attempt !== this.identity.attempt || context?.maxAttempts !== this.identity.maxAttempts
@@ -168,9 +167,9 @@ export class PromptExecutionReservationContinuation {
     this.executionContractId = text(executionContractId, "Prompt reservation execution contract");
     const identity = PromptProviderProcessIdentity.fromJSON(previousClaim.processIdentity);
     identity.assertClaim(previousClaim);
-    const { id, digest, ...summary } = physicalEvidence;
-    if (id !== digest || digest !== processEvidenceDigest(summary)
-      || summary.binding?.executionContractId !== executionContractId) throw new TypeError("Prompt reservation proof differs from its canonical execution");
+    const summaryValue = ProcessExecutionRecoveryEvidenceSummary.fromSaved(physicalEvidence);
+    const summary = summaryValue.toJSON();
+    if (summary.binding?.executionContractId !== executionContractId) throw new TypeError("Prompt reservation proof differs from its canonical execution");
     const restored = calls.map((call) => new ProcessExecutionRecoveryCall(call));
     if (!isDeepStrictEqual(restored.map((call) => call.toJSON()), summary.calls)
       || !isDeepStrictEqual(summary.invocation, { providerAttemptId: identity.providerAttemptId, logicalInvocationId: identity.logicalInvocationId })
@@ -183,7 +182,7 @@ export class PromptExecutionReservationContinuation {
       const absence = ProcessExecutionNonExecutionEvidence.fromStored(summary.nonExecution);
       if (!isDeepStrictEqual(absence.invocation.toJSON(), summary.invocation)
         || !isDeepStrictEqual(absence.binding.toJSON(), summary.binding)
-        || !isDeepStrictEqual(absence.checkoutIdentity.toJSON(), summary.checkoutIdentity)
+        || !absence.checkoutIdentity.matches(summaryValue.checkoutIdentity)
         || absence.inventoryDigest !== summary.inventoryDigest || absence.ownerEpoch !== summary.ownerEpoch) {
         throw new TypeError("Prompt reservation non-execution proof differs from its inventory");
       }
@@ -213,7 +212,7 @@ export class PromptExecutionReservationContinuation {
   }
   get pending() { return this.consumedClaim === null; }
   get id() {
-    const { consumedClaim, ...identity } = this.toJSON();
+    const { consumedClaim, ...identity } = this.toEvidenceJSON();
     return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   }
   consume(claim) {
@@ -229,6 +228,18 @@ export class PromptExecutionReservationContinuation {
   toJSON() { return { authorizationId: this.authorizationId, executionContractId: this.executionContractId,
     previousClaim: this.previousClaim, physicalEvidence: this.physicalEvidence, calls: this.calls,
     consumedClaim: this.consumedClaim, history: this.history }; }
+  toEvidenceJSON() {
+    const value = this.toJSON();
+    const summary = ProcessExecutionRecoveryEvidenceSummary.fromSaved(value.physicalEvidence);
+    return { ...value, physicalEvidence: { ...value.physicalEvidence, ...summary.toEvidenceJSON() },
+      calls: value.calls.map(call => new ProcessExecutionRecoveryCall(call).toEvidenceStored()),
+      history: value.history.map(entry => {
+        const projected = new PromptExecutionReservationContinuation({ authorizationId: this.authorizationId,
+          executionContractId: this.executionContractId, ...entry }).toEvidenceJSON();
+        const { authorizationId, executionContractId, history, ...retained } = projected;
+        return retained;
+      }) };
+  }
   static fromJSON(value) {
     const restored = new this(value);
     if (!isDeepStrictEqual(restored.toJSON(), value)) throw new TypeError("Prompt reservation continuation has unknown fields");
@@ -395,6 +406,15 @@ export class PromptExecutionJournalSnapshot {
   }
 
   toJSON() { return { scope: this.scope.toJSON(), plan: this.plan.toJSON(), budget: this.budget, groups: this.groups, batches: this.batches }; }
+  toEvidenceJSON() { return PromptExecutionJournalSnapshot.evidenceValue(this.toJSON()); }
+  static evidenceValue(value) {
+    return { ...value, batches: value.batches.map(batch => ({ ...batch,
+      ...(batch.processStops === undefined ? {} : { processStops: batch.processStops.map(stop => ({ ...stop,
+        receipt: new ProcessExecutionStopReceipt(stop.receipt).toEvidenceJSON() })) }),
+      ...(batch.reservationContinuation === undefined ? {} : { reservationContinuation:
+        PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation).toEvidenceJSON() }),
+    })) };
+  }
 
   static fromJSON(value) {
     fields(value, ["scope", "plan", "budget", "groups", "batches"], "Prompt execution snapshot");
@@ -413,6 +433,7 @@ export class PromptExecutionJournalRecord {
   }
 
   toJSON() { return { scope: this.scope.toJSON(), event: this.event, snapshot: this.snapshot.toJSON() }; }
+  toEvidenceJSON() { return { scope: this.scope.toJSON(), event: this.event, snapshot: this.snapshot.toEvidenceJSON() }; }
 }
 
 /** Save-only port. The Store owns admission, atomic persistence and ACK readback. */

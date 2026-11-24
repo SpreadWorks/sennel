@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { container, initContainer } from "../../../../src/lib/container.js";
+import { container, registerPresetBaseDependencies } from "../../../../src/lib/container.js";
 import registerDocsSource from "../../../../src/data/docs.js";
 import { parseBlocks } from "../../../../src/docs/lib/directive-parser.js";
 import { mergeResolved } from "../../../../src/docs/lib/template-merger.js";
@@ -11,7 +11,7 @@ import { mergeResolved } from "../../../../src/docs/lib/template-merger.js";
 const NAV_FIXTURE_CHAPTERS = ["overview.md", "design.md", "dev.md"];
 
 function setupDocsSource(t, chapters) {
-  initContainer();
+  registerPresetBaseDependencies();
   const DocsSource = registerDocsSource(container);
   const ds = new DocsSource();
   const tmpDir = createTestDirectory("nav-test-");

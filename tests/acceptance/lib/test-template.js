@@ -6,11 +6,11 @@
  * Collects pipeline, directive, and quality data into a report JSON.
  */
 
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { copyFixture, runPipeline, removeTmpDir } from "./pipeline.js";
+import { copyFixture, runPipeline } from "./pipeline.js";
 import {
   assertStructure,
   detectUnfilledDirectives,
@@ -59,9 +59,16 @@ export function acceptanceTest(presetName, opts) {
 
   describe(`acceptance: ${presetName}`, { timeout: 600000 }, () => {
     let tmp;
+    let workRoot;
+    after(() => {
+      workRoot?.cleanup();
+      workRoot = null;
+      tmp = null;
+    });
 
     it("pipeline completes and passes all checks", async () => {
-      tmp = copyFixture(fixtureDir, acceptanceFixtureConfigOverrides(configOverrides));
+      workRoot = copyFixture(fixtureDir, acceptanceFixtureConfigOverrides(configOverrides));
+      tmp = workRoot.root;
 
       const { ctx, steps } = await runPipeline(tmp, { agent });
 
@@ -102,11 +109,5 @@ export function acceptanceTest(presetName, opts) {
 
     });
 
-    it("cleanup", () => {
-      if (tmp) {
-        removeTmpDir(tmp);
-        tmp = null;
-      }
-    });
   });
 }

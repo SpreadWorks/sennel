@@ -1,11 +1,13 @@
-import { execFileSync } from "child_process";
+import { execFileSync } from "node:child_process";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 
-function git(cwd, args, opts = {}) {
-  return execFileSync("git", args, {
-    cwd,
+function git(cwd, args) {
+  const invocation = new NativeExecutableInvocation({ executable: "git", args, cwd,
+    stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync(invocation.executable, invocation.args, {
+    ...invocation.processOptions(),
+    shell: false,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    ...opts,
   });
 }
 

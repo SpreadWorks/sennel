@@ -4,7 +4,10 @@ import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
 import { parseArgs, repoRoot, sourceRoot, isInsideWorktree, getMainRepoPath } from "../../../src/lib/cli.js";
+import { runBootstrapGitProbe } from "../../../src/lib/bootstrap-process.js";
+import { resolveWorktreeLocalCli } from "../../../src/lib/worktree-cli-execution.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 
 describe("parseArgs", () => {
   it("parses flags", () => {
@@ -109,6 +112,102 @@ describe("repoRoot", () => {
     const result = repoRoot();
     assert.equal(typeof result, "string");
     assert.ok(result.length > 0);
+  });
+
+  it("falls back to the current directory when the Git probe cannot start", (t) => {
+    const tmp = createTmpDir("repo-root-git-unavailable-");
+    const previousCwd = process.cwd();
+    const previousWorkRoot = process.env.SENNEL_WORK_ROOT;
+    const previousPath = process.env.PATH;
+    const previousPathAlias = process.platform === "win32" ? undefined : process.env.Path;
+    t.after(() => {
+      process.chdir(previousCwd);
+      if (previousWorkRoot === undefined) delete process.env.SENNEL_WORK_ROOT;
+      else process.env.SENNEL_WORK_ROOT = previousWorkRoot;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (process.platform !== "win32") {
+        if (previousPathAlias === undefined) delete process.env.Path;
+        else process.env.Path = previousPathAlias;
+      }
+      removeTmpDir(tmp);
+    });
+    delete process.env.SENNEL_WORK_ROOT;
+    process.env.PATH = "";
+    if (process.platform !== "win32") delete process.env.Path;
+    process.chdir(tmp);
+
+    const probe = runBootstrapGitProbe("repository-root");
+    assert.equal(probe.ok, false);
+    assert.equal(probe.errorCode, "ENOENT");
+    assert.equal(repoRoot(), tmp);
+  });
+});
+
+describe("bootstrap Git probes", () => {
+  it("discovers a nested repository from a subdirectory despite inherited Git location overrides", (t) => {
+    const tmp = createTmpDir("bootstrap-nested-git-");
+    t.after(() => removeTmpDir(tmp));
+    const outer = path.join(tmp, "outer");
+    const nested = path.join(outer, "nested");
+    const cwd = path.join(nested, "packages", "app");
+    fs.mkdirSync(cwd, { recursive: true });
+    initGitRepo(outer);
+    initGitRepo(nested);
+
+    const previous = new Map(["GIT_DIR", "GIT_CEILING_DIRECTORIES"].map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+    process.env.GIT_DIR = path.join(outer, ".git");
+    process.env.GIT_CEILING_DIRECTORIES = nested;
+
+    const result = runBootstrapGitProbe("repository-root", { cwd });
+    assert.equal(result.ok, true, result.stderr);
+    assert.equal(path.resolve(result.stdout.trim()), nested);
+  });
+
+  it("keeps common-directory discovery inside an already selected non-Git boundary", (t) => {
+    const tmp = createTmpDir("bootstrap-common-boundary-");
+    t.after(() => removeTmpDir(tmp));
+    const repository = path.join(tmp, "repository");
+    const selected = path.join(repository, "project", "checkout");
+    fs.mkdirSync(selected, { recursive: true });
+    initGitRepo(repository);
+
+    const result = runBootstrapGitProbe("common-directory", { cwd: selected });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 128);
+  });
+});
+
+describe("worktree CLI selection from nested directories", () => {
+  it("selects the real worktree CLI when invoked below its repository root", (t) => {
+    const root = createTmpDir("nested-worktree-cli-");
+    t.after(() => removeTmpDir(root));
+    const sourceDirectory = path.join(root, "src");
+    fs.mkdirSync(sourceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "@fixture/sennel", type: "module" }));
+    fs.writeFileSync(path.join(sourceDirectory, "sennel.js"), "process.exit(0);\n");
+    initGitRepo(root);
+    commitAll(root, "worktree CLI fixture");
+
+    const worktreeRoot = path.join(root, "feature-worktree");
+    execFileSync("git", ["-C", root, "worktree", "add", worktreeRoot, "-b", "feature"], { stdio: "ignore" });
+    const nestedCwd = path.join(worktreeRoot, "packages", "app");
+    fs.mkdirSync(nestedCwd, { recursive: true });
+
+    const target = resolveWorktreeLocalCli({
+      executionPath: path.join(root, "src", "sennel.js"),
+      cwd: nestedCwd,
+    });
+
+    assert.ok(target, "the matching local CLI must be selected from a nested worktree directory");
+    assert.equal(target.worktreeRoot, fs.realpathSync(worktreeRoot));
+    assert.equal(target.localCliPath, path.join(worktreeRoot, "src", "sennel.js"));
   });
 });
 

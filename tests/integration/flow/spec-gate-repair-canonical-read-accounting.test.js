@@ -46,7 +46,7 @@ test("a refused canonical read retains its consumed bytes through one coherent v
     const stat = fstat.call(this, ...args);
     if (consumed && !refused) {
       refused = true;
-      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: stat.ino + 1 });
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: stat.ino + 1n });
     }
     return stat;
   };
